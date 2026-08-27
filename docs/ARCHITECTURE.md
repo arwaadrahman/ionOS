@@ -29,13 +29,26 @@ separately labels proposed implementation choices.
 | Future search      | Local text search, then evaluated local retrieval           |
 | Future graphics    | One justified Three.js/R3F or suitable custom Core renderer |
 
-## Current boundary
+## Phase 0C production runtime
 
-Phase 0B may implement the local development foundation: npm workspace,
-Tauri/React shell, loopback-only FastAPI service, SQLite migration mechanism,
-settings, logging, quality tooling, and synthetic fixtures. Production Python
-sidecar lifecycle, process supervision, local-process authentication, and any
-network boundary beyond loopback remain deferred.
+The packaged macOS prototype uses a PyInstaller one-file Python sidecar owned
+by the Rust/Tauri backend. Renderer code invokes narrow Ion-owned commands
+only. Rust generates a per-launch session credential, supplies it over the
+sidecar's private stdin bootstrap channel, and makes authenticated HTTP calls
+to the service's self-owned `127.0.0.1:0` socket. Production FastAPI does not
+enable CORS and the renderer receives neither port nor credential.
+
+The sidecar lifecycle is one child only: bounded readiness, exit observation,
+graceful shutdown, then forced fallback. SQLite, settings, and logs remain
+outside the application bundle in Application Support. See ADRs 0008 and 0009.
+
+## Development boundary
+
+Phase 0B retains its local development foundation: npm workspace, Tauri/React
+shell, direct loopback-only FastAPI service, SQLite migration mechanism,
+settings, logging, quality tooling, and synthetic fixtures. Production
+packaging, supervision, and authentication are intentionally a separate
+runtime mode.
 
 ## TBD
 

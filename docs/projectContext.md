@@ -10,10 +10,10 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 0 — Repository + Engineering Foundation
-- **Milestone:** Phase 0B — executable engineering foundation
-- **In scope:** Tauri/React engineering shell, loopback-only FastAPI service,
-  SQLite migration foundation, settings, logging, linting/formatting, tests,
-  and synthetic fixtures.
+- **Milestone:** Phase 0C — production local runtime and security prototype
+- **In scope:** Phase 0B foundation plus packaged Python sidecar lifecycle,
+  Rust-owned authenticated loopback communication, and ARM64 local `.app`
+  proof.
 - **Out of scope:** Phase 1 behavior; integrations; AI; mobile; remote/LAN
   access; production service supervision; a production Ion Core; CI,
   deployment, and personal data.
@@ -25,8 +25,8 @@ actions as authoritative.
   development.
 - SQLite with SQLAlchemy 2 Core and Alembic; Markdown remains the future owner
   for durable prose knowledge.
-- Production Python sidecar lifecycle, local-process authentication, and
-  supervision remain deferred.
+- Production sidecar lifecycle and per-launch local-process authentication are
+  governed by ADRs 0008 and 0009. Signing/notarization remain deferred.
 
 ## Durable ownership boundaries
 

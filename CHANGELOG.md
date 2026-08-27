@@ -10,3 +10,5 @@ All notable repository changes are documented here.
   bootstrap.
 - Phase 0B executable engineering foundation, including accepted local-only
   trust-boundary, toolchain, service-boundary, and SQLite migration decisions.
+- Phase 0C production local-runtime and local-process-authentication prototype
+  decisions.

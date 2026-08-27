@@ -59,6 +59,7 @@ node_modules/
 coverage/
 dist/
 build/
+apps/desktop/src-tauri/binaries/
 target/
 __pycache__/
 *.py[cod]

@@ -20,9 +20,12 @@
 - Mobile support, synchronization, remote access, and cloud relays are
   deferred pending a dedicated mobile/security architecture review.
 
-Phase 0B does not implement authentication, secret scanning, encryption,
-credential storage, API authentication, integration security, or remote API
-access.
+Phase 0C adds only production local-process authentication: Rust creates a
+per-launch 256-bit secret from the OS RNG and owns it in memory. The packaged
+Python sidecar receives it only through bounded stdin bootstrap, requires it on
+every endpoint with constant-time comparison, and binds its retained socket to
+`127.0.0.1:0`. The renderer receives neither secret nor port, and production
+does not enable CORS. No persistent credential store is introduced.
 
 ## Phase 0B local development details
 

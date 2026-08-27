@@ -9,3 +9,13 @@ test("reports a reachable loopback service", async () => {
 
   expect(await screen.findByText("Local service: ready")).toBeInTheDocument();
 });
+
+test("reports an unavailable development service without exposing diagnostics", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+  render(<App />);
+
+  expect(
+    await screen.findByText("Local service: unavailable"),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("offline")).not.toBeInTheDocument();
+});

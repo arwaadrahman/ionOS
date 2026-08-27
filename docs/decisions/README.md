@@ -26,10 +26,10 @@ remain proposed until intentionally accepted.
 - [0005 Phase 0B toolchain baseline](0005-phase-0b-toolchain-baseline.md)
 - [0006 local API service boundary](0006-local-api-service-boundary.md)
 - [0007 SQLite access and migrations](0007-sqlite-access-and-migrations.md)
+- [0008 Production service lifecycle](0008-production-service-lifecycle.md)
+- [0009 Local-process authentication](0009-local-process-authentication.md)
 
 ## Decision Backlog
 
 - License selection and CI strategy.
-- Production Python sidecar lifecycle, port allocation, local-process
-  authentication, crash recovery, and supervision.
 - Relationship provenance/promotion rules and the future Ion Core spike plan.
