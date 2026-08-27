@@ -1,0 +1,59 @@
+# Operating system and editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Bootstrap-only local inputs
+.bootstrap-sources/
+
+# Environment files and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+credentials/
+secrets/
+
+# Local data, vaults, and runtime state
+data/
+vault/
+user-data/
+runtime/
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+logs/
+*.log
+
+# Dependency, cache, and build output
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+.cache/
+coverage/
+dist/
+build/
+target/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.tox/
