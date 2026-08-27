@@ -1,0 +1,14 @@
+{
+  "fixture_version": 1,
+  "synthetic": true,
+  "records": [
+    {
+      "id": "synthetic-course-001",
+      "label": "Demo Nebula Studies"
+    },
+    {
+      "id": "synthetic-task-001",
+      "label": "Calibrate imaginary star map"
+    }
+  ]
+}

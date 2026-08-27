@@ -1,5 +1,16 @@
 # Operating system and editor noise
 .DS_Store
+node_modules/
+dist/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/api/.venv/
+*.sqlite3
+*.sqlite
+*.db
+*.log
+__pycache__/
+.pytest_cache/
 Thumbs.db
 .vscode/
 .idea/

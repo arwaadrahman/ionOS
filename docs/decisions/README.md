@@ -22,14 +22,14 @@ remain proposed until intentionally accepted.
 - [0001 Local-first data ownership](0001-local-first-data-ownership.md)
 - [0002 Public repository data safety](0002-public-repository-data-safety.md)
 - [0003 Phase 0 scope boundaries](0003-phase-0-scope-boundaries.md)
+- [0004 macOS-local trust boundary](0004-macos-local-trust-boundary.md)
+- [0005 Phase 0B toolchain baseline](0005-phase-0b-toolchain-baseline.md)
+- [0006 local API service boundary](0006-local-api-service-boundary.md)
+- [0007 SQLite access and migrations](0007-sqlite-access-and-migrations.md)
 
 ## Decision Backlog
 
-- JavaScript package/workspace strategy.
-- Python environment and dependency tooling.
-- ORM versus direct SQLite access; migration tooling.
-- Tauri ↔ Python service lifecycle and production packaging/supervision.
-- Logging and settings/configuration implementation.
-- Testing, linting, and formatting stack specifics.
 - License selection and CI strategy.
+- Production Python sidecar lifecycle, port allocation, local-process
+  authentication, crash recovery, and supervision.
 - Relationship provenance/promotion rules and the future Ion Core spike plan.

@@ -1,0 +1,58 @@
+:root {
+  color: #f4f2f7;
+  background: #0a0a0c;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+.engineering-shell {
+  box-sizing: border-box;
+  display: grid;
+  align-content: center;
+  min-height: 100vh;
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 3rem;
+}
+
+.eyebrow {
+  color: var(--ion-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 6vw, 4rem);
+}
+.summary {
+  color: #a5a1ad;
+  font-size: 1.1rem;
+}
+
+.service-status {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 1rem;
+  color: #a5a1ad;
+}
+
+.status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: #7c7784;
+}
+.service-status--ready .status-dot {
+  background: #8b5cf6;
+}
+.service-status--unavailable .status-dot {
+  background: #b8b2c2;
+}

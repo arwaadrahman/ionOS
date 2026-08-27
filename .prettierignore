@@ -1,0 +1,4 @@
+docs/
+package-lock.json
+apps/desktop/src-tauri/target
+apps/api/.venv

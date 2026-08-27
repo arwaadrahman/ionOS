@@ -1,0 +1,42 @@
+{
+  "name": "ion-os",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "apps/desktop",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11"
+  },
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names api,desktop --prefix-colors cyan,magenta \"npm run dev:api\" \"npm run dev:desktop\"",
+    "dev:api": "uv --directory apps/api run python -m ion_api",
+    "dev:desktop": "npm --workspace @ion/desktop run tauri:dev",
+    "lint": "npm run lint:ts && npm run lint:py && npm run lint:rust",
+    "lint:ts": "npm run lint --workspaces --if-present",
+    "lint:py": "uv --directory apps/api run ruff check .",
+    "lint:rust": "cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings",
+    "format": "npm run format:ts && npm run format:py && npm run format:rust",
+    "format:ts": "prettier --write .",
+    "format:py": "uv --directory apps/api run ruff format .",
+    "format:rust": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "format:check": "npm run format:check:ts && npm run format:check:py && npm run format:check:rust",
+    "format:check:ts": "prettier --check .",
+    "format:check:py": "uv --directory apps/api run ruff format --check .",
+    "format:check:rust": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
+    "test": "npm run test:ts && npm run test:py && npm run test:rust",
+    "test:ts": "npm run test --workspaces --if-present",
+    "test:py": "uv --directory apps/api run pytest",
+    "test:rust": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "validate": "npm run lint && npm run format:check && npm run test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "prettier": "^3.6.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

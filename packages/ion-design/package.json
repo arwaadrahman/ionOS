@@ -1,0 +1,9 @@
+{
+  "name": "@ion/design",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/tokens.ts"
+  }
+}
