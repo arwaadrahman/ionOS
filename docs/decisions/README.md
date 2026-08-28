@@ -28,6 +28,8 @@ remain proposed until intentionally accepted.
 - [0007 SQLite access and migrations](0007-sqlite-access-and-migrations.md)
 - [0008 Production service lifecycle](0008-production-service-lifecycle.md)
 - [0009 Local-process authentication](0009-local-process-authentication.md)
+- [0010 Phase 1 organizer domain](0010-phase-1-organizer-domain.md)
+- [0011 Audit, Trash, and recovery foundation](0011-audit-trash-and-recovery-foundation.md)
 
 ## Decision Backlog
 

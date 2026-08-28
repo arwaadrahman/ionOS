@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tomllib
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,11 @@ DEFAULT_ALLOWED_ORIGINS = (
 )
 
 
+class RuntimeMode(StrEnum):
+    DEVELOPMENT = "development"
+    PRODUCTION = "production"
+
+
 class Settings(BaseModel):
     """Validated settings sourced from code defaults, TOML, then safe overrides."""
 
@@ -24,6 +30,7 @@ class Settings(BaseModel):
     api_host: str = "127.0.0.1"
     api_port: int = DEFAULT_API_PORT
     allowed_origins: tuple[str, ...] = DEFAULT_ALLOWED_ORIGINS
+    runtime_mode: RuntimeMode = RuntimeMode.DEVELOPMENT
 
     @field_validator("api_host")
     @classmethod
@@ -41,7 +48,12 @@ class Settings(BaseModel):
 
     @property
     def database_path(self) -> Path:
-        return self.data_dir / "ion-development.sqlite3"
+        filename = (
+            "ion.sqlite3"
+            if self.runtime_mode is RuntimeMode.PRODUCTION
+            else "ion-development.sqlite3"
+        )
+        return self.data_dir / filename
 
     @property
     def log_path(self) -> Path:
@@ -61,7 +73,7 @@ def read_user_config(data_dir: Path) -> dict[str, Any]:
     return parsed.get("ion", {})
 
 
-def load_settings() -> Settings:
+def load_settings(runtime_mode: RuntimeMode = RuntimeMode.DEVELOPMENT) -> Settings:
     """Load optional non-secret TOML and narrowly scoped development overrides.
 
     `ION_DATA_DIR` and `ION_API_PORT` exist for tests and local development.
@@ -69,7 +81,11 @@ def load_settings() -> Settings:
     """
 
     data_dir = Path(os.environ.get("ION_DATA_DIR", default_data_dir())).expanduser()
-    values: dict[str, Any] = {"data_dir": data_dir, **read_user_config(data_dir)}
+    values: dict[str, Any] = {
+        "data_dir": data_dir,
+        **read_user_config(data_dir),
+        "runtime_mode": runtime_mode,
+    }
     if port := os.environ.get("ION_API_PORT"):
         values["api_port"] = int(port)
     return Settings.model_validate(values)

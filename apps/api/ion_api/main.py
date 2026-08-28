@@ -8,8 +8,12 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from ion_api.db import create_database_engine
 from ion_api.logging import configure_logging
+from ion_api.migrations import upgrade_to_head
 from ion_api.settings import Settings, load_settings
+from ion_api.task_routes import task_router
+from ion_api.tasks import TaskService
 
 SESSION_HEADER = "X-Ion-Session"
 
@@ -46,6 +50,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    app.include_router(
+        task_router(TaskService(create_database_engine(active_settings.database_path)))
+    )
     return app
 
 
@@ -69,6 +76,9 @@ def create_production_app(settings: Settings, session_token: str) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    app.include_router(
+        task_router(TaskService(create_database_engine(settings.database_path)))
+    )
     return app
 
 
@@ -77,6 +87,7 @@ app = create_app()
 
 def run() -> None:
     settings = load_settings()
+    upgrade_to_head(settings.database_path)
     uvicorn.run(create_app(settings), host=settings.api_host, port=settings.api_port)
 
 

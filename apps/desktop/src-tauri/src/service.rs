@@ -7,7 +7,7 @@ use std::{
 };
 
 use getrandom::fill;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
@@ -19,6 +19,67 @@ const READINESS_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROTOCOL_BYTES: usize = 4096;
 const SESSION_HEADER: &str = "X-Ion-Session";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TaskDeadline {
+    pub kind: String,
+    pub date: Option<String>,
+    pub at: Option<String>,
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CreateTaskInput {
+    pub title: String,
+    pub details: Option<String>,
+    pub importance: Option<String>,
+    pub estimated_minutes: Option<i64>,
+    pub progress_percent: Option<i64>,
+    pub deadline: TaskDeadline,
+    pub project_id: Option<String>,
+    pub goal_id: Option<String>,
+    pub completion_evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UpdateTaskInput {
+    pub expected_revision: i64,
+    pub title: Option<String>,
+    pub details: Option<String>,
+    pub importance: Option<String>,
+    pub estimated_minutes: Option<i64>,
+    pub progress_percent: Option<i64>,
+    pub deadline: Option<TaskDeadline>,
+    pub project_id: Option<String>,
+    pub goal_id: Option<String>,
+    pub completion_evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RevisionInput {
+    pub expected_revision: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Task {
+    pub id: String,
+    pub title: String,
+    pub details: Option<String>,
+    pub state: String,
+    pub source_kind: String,
+    pub importance: Option<String>,
+    pub estimated_minutes: Option<i64>,
+    pub progress_percent: Option<i64>,
+    pub deadline: TaskDeadline,
+    pub project_id: Option<String>,
+    pub goal_id: Option<String>,
+    pub completion_evidence: Option<String>,
+    pub completed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub revision: i64,
+    pub trashed_at: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ServiceStatus {
@@ -270,6 +331,144 @@ pub async fn service_health(
     };
     authenticate_health(port, &token).await?;
     Ok(state.status())
+}
+
+fn development_port() -> Result<u16, String> {
+    std::env::var("ION_API_PORT")
+        .unwrap_or_else(|_| "8765".into())
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port > 0)
+        .ok_or_else(|| "unavailable".into())
+}
+
+fn task_target(state: &ServiceState) -> Result<(String, Option<String>), String> {
+    if cfg!(debug_assertions) {
+        return Ok((format!("http://127.0.0.1:{}", development_port()?), None));
+    }
+    let process = state.process.lock().map_err(|_| "unavailable")?;
+    process
+        .as_ref()
+        .map(|process| {
+            (
+                format!("http://127.0.0.1:{}", process.port),
+                Some(process.token.clone()),
+            )
+        })
+        .ok_or_else(|| "unavailable".into())
+}
+
+async fn task_request<T: Serialize, R: for<'de> Deserialize<'de>>(
+    state: &ServiceState,
+    method: reqwest::Method,
+    route: &str,
+    body: Option<&T>,
+) -> Result<R, String> {
+    let (origin, token) = task_target(state)?;
+    let mut request = reqwest::Client::new().request(method, format!("{origin}{route}"));
+    if let Some(token) = token {
+        request = request.header(SESSION_HEADER, token);
+    }
+    if let Some(body) = body {
+        request = request
+            .header("content-type", "application/json")
+            .body(serde_json::to_vec(body).map_err(|_| "validation")?);
+    }
+    let response = request.send().await.map_err(|_| "unavailable")?;
+    match response.status().as_u16() {
+        200 | 201 => serde_json::from_str::<R>(&response.text().await.map_err(|_| "unavailable")?)
+            .map_err(|_| "unavailable".into()),
+        404 => Err("not_found".into()),
+        409 => Err("conflict".into()),
+        422 => Err("validation".into()),
+        _ => Err("unavailable".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn list_tasks(state: tauri::State<'_, ServiceState>) -> Result<Vec<Task>, String> {
+    task_request::<(), Vec<Task>>(&state, reqwest::Method::GET, "/v1/tasks", None).await
+}
+
+#[tauri::command]
+pub async fn list_trashed_tasks(
+    state: tauri::State<'_, ServiceState>,
+) -> Result<Vec<Task>, String> {
+    task_request::<(), Vec<Task>>(&state, reqwest::Method::GET, "/v1/tasks/trash", None).await
+}
+
+#[tauri::command]
+pub async fn create_task(
+    state: tauri::State<'_, ServiceState>,
+    input: CreateTaskInput,
+) -> Result<Task, String> {
+    task_request(&state, reqwest::Method::POST, "/v1/tasks", Some(&input)).await
+}
+
+#[tauri::command]
+pub async fn update_task(
+    state: tauri::State<'_, ServiceState>,
+    task_id: String,
+    input: UpdateTaskInput,
+) -> Result<Task, String> {
+    task_request(
+        &state,
+        reqwest::Method::PATCH,
+        &format!("/v1/tasks/{task_id}"),
+        Some(&input),
+    )
+    .await
+}
+
+async fn task_revision_action(
+    state: tauri::State<'_, ServiceState>,
+    task_id: String,
+    input: RevisionInput,
+    action: &str,
+) -> Result<Task, String> {
+    task_request(
+        &state,
+        reqwest::Method::POST,
+        &format!("/v1/tasks/{task_id}/{action}"),
+        Some(&input),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn complete_task(
+    state: tauri::State<'_, ServiceState>,
+    task_id: String,
+    input: RevisionInput,
+) -> Result<Task, String> {
+    task_revision_action(state, task_id, input, "complete").await
+}
+
+#[tauri::command]
+pub async fn reopen_task(
+    state: tauri::State<'_, ServiceState>,
+    task_id: String,
+    input: RevisionInput,
+) -> Result<Task, String> {
+    task_revision_action(state, task_id, input, "reopen").await
+}
+
+#[tauri::command]
+pub async fn trash_task(
+    state: tauri::State<'_, ServiceState>,
+    task_id: String,
+    input: RevisionInput,
+) -> Result<Task, String> {
+    task_revision_action(state, task_id, input, "trash").await
+}
+
+#[tauri::command]
+pub async fn restore_task(
+    state: tauri::State<'_, ServiceState>,
+    task_id: String,
+    input: RevisionInput,
+) -> Result<Task, String> {
+    task_revision_action(state, task_id, input, "restore").await
 }
 
 #[cfg(test)]

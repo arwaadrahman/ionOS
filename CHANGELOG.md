@@ -12,3 +12,4 @@ All notable repository changes are documented here.
   trust-boundary, toolchain, service-boundary, and SQLite migration decisions.
 - Phase 0C production local-runtime and local-process-authentication prototype
   decisions.
+- Phase 1A organizer-domain, audit/Trash foundation, and Task vertical slice.

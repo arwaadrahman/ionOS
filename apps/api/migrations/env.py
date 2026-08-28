@@ -6,14 +6,18 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from ion_api.db import database_url
+from ion_api.schema import metadata
 from ion_api.settings import load_settings
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", database_url(load_settings().database_path))
-target_metadata = None
+if not config.attributes.get("ion_explicit_database_url"):
+    config.set_main_option(
+        "sqlalchemy.url", database_url(load_settings().database_path)
+    )
+target_metadata = metadata
 
 
 def run_migrations_offline() -> None:

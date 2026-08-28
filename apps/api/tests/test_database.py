@@ -16,4 +16,20 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
             "SELECT version_num FROM alembic_version"
         ).fetchone()
 
-    assert version == ("0001_baseline",)
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+
+    assert version == ("0002_organizer_foundation",)
+    assert {
+        "areas",
+        "goals",
+        "milestones",
+        "projects",
+        "project_milestones",
+        "tasks",
+        "audit_events",
+    } <= tables

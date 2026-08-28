@@ -9,14 +9,12 @@ actions as authoritative.
 
 ## Current development state
 
-- **Phase:** Phase 0 — Repository + Engineering Foundation
-- **Milestone:** Phase 0C — production local runtime and security prototype
-- **In scope:** Phase 0B foundation plus packaged Python sidecar lifecycle,
-  Rust-owned authenticated loopback communication, and ARM64 local `.app`
-  proof.
-- **Out of scope:** Phase 1 behavior; integrations; AI; mobile; remote/LAN
-  access; production service supervision; a production Ion Core; CI,
-  deployment, and personal data.
+- **Phase:** Phase 1 — Ion Core Personal Organizer
+- **Milestone:** Phase 1A — Core Organizer Domain & First Vertical Slice
+- **In scope:** canonical organizer schema, local Task vertical slice,
+  transactional audit metadata, soft Trash, and the inherited secure runtime.
+- **Out of scope:** integrations, AI, scheduling, Calendar, full Home/Today,
+  search UI, mobile, remote/LAN access, and a production Ion Core.
 
 ## Proposed stack baseline — subject to prototyping
 
@@ -69,7 +67,7 @@ performance-conscious.
 - [Task router](agent/taskRouter.md)
 - [Approved Ion reference snapshot](references/approvedReferences.md)
 - [Decision index](decisions/README.md)
-- [Active phase](phases/PHASE_0A.md)
+- [Active phase](phases/PHASE_1A.md)
 
 The approved-reference snapshot derives from `projectReference.md` version
 **1.1.0** (updated 2026-08-27). Project-local decisions override it.

@@ -50,6 +50,15 @@ settings, logging, quality tooling, and synthetic fixtures. Production
 packaging, supervision, and authentication are intentionally a separate
 runtime mode.
 
+## Phase 1A organizer path
+
+Product operations use fixed Ion-owned Tauri commands in development and
+production. Rust owns the authenticated production request and a validated
+development loopback target; renderer code receives product DTOs only. The
+Python service owns UUID generation, SQLAlchemy Core transactions, Alembic
+migration-before-readiness, and SQLite canonical state. The production
+database is `ion.sqlite3`; development uses `ion-development.sqlite3`.
+
 ## TBD
 
 See ADRs [0004](decisions/0004-macos-local-trust-boundary.md),

@@ -6,20 +6,19 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 
 ## Status
 
-Current phase: **Phase 0 — Repository + Engineering Foundation**
-Current milestone: **Phase 0C — Production Local Runtime & Security Prototype**
+Current phase: **Phase 1 — Ion Core Personal Organizer**
+Current milestone: **Phase 1A — Core Organizer Domain & First Vertical Slice**
 
-Phase 0B established a minimal local engineering foundation: React + TypeScript
-in Tauri, a loopback-only Python/FastAPI service, SQLite migration
-infrastructure, settings, logging, tests, and synthetic fixtures. It contains
-no Phase 1 product behavior, integrations, AI, cloud services, or mobile code.
+Phase 0 established the secure local runtime. Phase 1A adds the first canonical
+organizer schema and a minimal Task vertical slice while retaining the same
+Rust-owned authenticated production service boundary.
 
 ## Start here
 
 - [Agent guide](AGENTS.md)
 - [Project context](docs/projectContext.md)
 - [Master Specification](docs/PRODUCT_SPEC.md)
-- [Phase 0B](docs/phases/PHASE_0B.md)
+- [Phase 1A](docs/phases/PHASE_1A.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decision index](docs/decisions/README.md)
 

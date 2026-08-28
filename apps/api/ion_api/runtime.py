@@ -12,7 +12,8 @@ from typing import BinaryIO
 import uvicorn
 
 from ion_api.main import create_production_app
-from ion_api.settings import load_settings
+from ion_api.migrations import upgrade_to_head
+from ion_api.settings import RuntimeMode, load_settings
 
 MAX_CONTROL_MESSAGE_BYTES = 4096
 READY_PREFIX = b"ION_RUNTIME_READY "
@@ -100,10 +101,12 @@ def run_production(stream: BinaryIO | None = None) -> None:
 
     control_stream = stream or sys.stdin.buffer
     bootstrap = read_bootstrap(control_stream)
+    settings = load_settings(RuntimeMode.PRODUCTION)
+    upgrade_to_head(settings.database_path)
     listener = production_socket()
     port = listener.getsockname()[1]
     config = uvicorn.Config(
-        create_production_app(load_settings(), bootstrap.session_token),
+        create_production_app(settings, bootstrap.session_token),
         access_log=False,
         log_config=None,
     )

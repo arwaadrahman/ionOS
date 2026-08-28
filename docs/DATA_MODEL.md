@@ -2,7 +2,8 @@
 
 ## Status
 
-**Baseline.** Schema design is deferred.
+**Phase 1A foundation.** The initial organizer schema is implemented through
+SQLAlchemy Core and Alembic migration `0002_organizer_foundation`.
 
 - Use one canonical record with multiple contextual views; do not duplicate an
   object merely because multiple areas display it.
@@ -14,8 +15,12 @@
   provenance and promotion rules require a later decision before implementation.
 - Search indexes, embeddings, graph projections, summaries, and caches are
   derived and rebuildable, not canonical truth.
-- Repository fixtures will be synthetic only. No Phase 1 entity tables or
-  complete database schema are created in Phase 0A.
+- Organizer IDs are lowercase UUIDv4 text; canonical timestamps are UTC RFC
+ 3339 text. Canonical records carry revision counters and soft Trash state.
+- Phase 1A creates Areas, Goals, Goal Milestones, Projects, Project
+  Milestones, Tasks, and append-only audit metadata only. Today persistence,
+  generic relationships, Calendar, search indexes, integrations, and AI data
+  remain deferred.
 
 See [Architecture](ARCHITECTURE.md) and ADR
 [0001](decisions/0001-local-first-data-ownership.md).

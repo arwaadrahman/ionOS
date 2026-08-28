@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ionTokens } from "@ion/design";
+import { TaskWorkspace } from "./TaskWorkspace";
+import { Task, taskClient } from "./tasks";
 
 type HealthState = "checking" | "ready" | "unavailable";
 
@@ -8,23 +10,32 @@ const apiOrigin = __ION_API_ORIGIN__;
 
 type ServiceStatus = { state: HealthState };
 
-export function App() {
+type AppProps = { development?: boolean };
+
+export function App({ development = import.meta.env.DEV }: AppProps = {}) {
   const [health, setHealth] = useState<HealthState>("checking");
+  const [tasks, setTasks] = useState<Task[]>([]);
 
   useEffect(() => {
     const controller = new AbortController();
 
     async function checkService(): Promise<void> {
       try {
-        if (!import.meta.env.DEV) {
+        if (!development) {
           const status = await invoke<ServiceStatus>("service_health");
-          setHealth(status.state);
+          if (status.state === "ready") {
+            setTasks(await taskClient.list());
+            setHealth("ready");
+          } else setHealth(status.state);
           return;
         }
         const response = await fetch(`${apiOrigin}/health`, {
           signal: controller.signal,
         });
-        setHealth(response.ok ? "ready" : "unavailable");
+        if (response.ok) {
+          setTasks(await taskClient.list());
+          setHealth("ready");
+        } else setHealth("unavailable");
       } catch {
         if (!controller.signal.aborted) {
           setHealth("unavailable");
@@ -34,14 +45,15 @@ export function App() {
 
     void checkService();
     return () => controller.abort();
-  }, []);
+  }, [development]);
 
+  if (health === "ready") return <TaskWorkspace initialTasks={tasks} />;
   return (
     <main className="engineering-shell">
       <p className="eyebrow">ION OS · PHASE 0C</p>
-      <h1>Engineering foundation</h1>
+      <h1>Local service unavailable</h1>
       <p className="summary">
-        Local desktop shell. Product behavior is intentionally deferred.
+        Tasks will be available when Ion's local service is ready.
       </p>
       <div className={`service-status service-status--${health}`}>
         <span aria-hidden="true" className="status-dot" />

@@ -4,7 +4,7 @@ a = Analysis(
     ["../ion_api/__main__.py"],
     pathex=[".."],
     binaries=[],
-    datas=[],
+    datas=[("../alembic.ini", "."), ("../migrations", "migrations")],
     hiddenimports=[],
 )
 pyz = PYZ(a.pure)

@@ -1,0 +1,7 @@
+{
+  "fixture_version": 1,
+  "synthetic": true,
+  "tasks": [
+    { "id": "synthetic-task-001", "title": "Calibrate imaginary star map" }
+  ]
+}
