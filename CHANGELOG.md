@@ -17,3 +17,6 @@ All notable repository changes are documented here.
   foundation, fixed authenticated desktop commands, and milestone-local UI for
   Areas, Goals, Projects, ordered Milestones, and explicit Task links, including
   safe partial Goal updates and confirmed Goal Save feedback.
+- Phase 1C canonical Today planning, deterministic deadline/attention
+  projections, local-date rollover, fixed authenticated Today commands, and a
+  truthful pre-Calendar execution workspace.

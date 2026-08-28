@@ -58,6 +58,137 @@ select:focus-visible {
   min-height: 100vh;
 }
 
+.today-workspace {
+  max-width: 94rem;
+}
+
+.today-header {
+  display: flex;
+  gap: 2rem;
+  align-items: end;
+  justify-content: space-between;
+}
+
+.today-add {
+  display: flex;
+  gap: 0.6rem;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.today-add label {
+  display: grid;
+  gap: 0.3rem;
+  color: #a5a1ad;
+  font-size: 0.8rem;
+}
+
+.today-split {
+  display: grid;
+  grid-template-columns: minmax(30rem, 1.65fr) minmax(20rem, 0.8fr);
+  min-height: 38rem;
+  margin-top: 1rem;
+  overflow: hidden;
+  border: 1px solid #29262f;
+  border-radius: 0.8rem;
+  background: #101014;
+}
+
+.today-execution,
+.schedule-context {
+  padding: 1.25rem;
+}
+
+.schedule-context {
+  border-left: 1px solid #29262f;
+  background: #0d0d11;
+}
+
+.schedule-context > section {
+  margin: 2rem 0;
+}
+
+.today-group {
+  padding: 1.15rem 0;
+  border-bottom: 1px solid #29262f;
+}
+
+.today-group:first-child {
+  padding-top: 0;
+}
+
+.today-group h2,
+.schedule-context h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+}
+
+.today-group .section-heading {
+  align-items: baseline;
+}
+
+.today-group .section-heading > span,
+.today-empty {
+  margin: 0.25rem 0;
+  color: #8f8998;
+  font-size: 0.82rem;
+}
+
+.today-list,
+.deadline-markers {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.today-list > li,
+.deadline-markers > li {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  border: 1px solid #29262f;
+  border-radius: 0.55rem;
+  background: #121217;
+}
+
+.today-list.compact > li {
+  padding: 0.55rem 0.7rem;
+}
+
+.today-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.deadline-group {
+  margin-top: 1rem;
+}
+
+.deadline-group h3,
+.schedule-context h3 {
+  margin: 0 0 0.55rem;
+  color: #a5a1ad;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.deadline-markers li {
+  display: grid;
+}
+
+.deadline-markers span {
+  color: #a5a1ad;
+  font-size: 0.82rem;
+}
+
 .workspace-switcher {
   position: sticky;
   z-index: 2;
@@ -288,12 +419,20 @@ h2 {
 
 @media (max-width: 760px) {
   .split-workspace,
+  .today-split,
   .entity-form {
     grid-template-columns: 1fr;
   }
   .navigator {
     border-right: 0;
     border-bottom: 1px solid #29262f;
+  }
+  .schedule-context {
+    border-top: 1px solid #29262f;
+    border-left: 0;
+  }
+  .today-header {
+    display: grid;
   }
   .summary-grid {
     grid-template-columns: 1fr;

@@ -42,6 +42,36 @@ const task = {
   revision: 1,
   trashed_at: null,
 };
+const today = {
+  planning_date: "2030-01-01",
+  timezone: "UTC",
+  generated_at: "2030-01-01T00:00:00Z",
+  plan: {
+    priorities: [
+      {
+        task,
+        goal: null,
+        project: null,
+        plan: {
+          id: "88888888-8888-4888-8888-888888888888",
+          task_id: task.id,
+          planning_date: "2030-01-01",
+          role: "priority",
+          position: 0,
+          created_at: "2030-01-01T00:00:00Z",
+          updated_at: "2030-01-01T00:00:00Z",
+          revision: 1,
+        },
+      },
+    ],
+    planned: [],
+    backups: [],
+  },
+  deadlines: { overdue: [], due_today: [], approaching: [] },
+  needs_attention: [],
+  unfinished_from_yesterday: [],
+  completed_today: [],
+};
 
 function mockStartup(overrides: Record<string, unknown> = {}) {
   vi.mocked(invoke).mockImplementation(async (command) => {
@@ -51,6 +81,7 @@ function mockStartup(overrides: Record<string, unknown> = {}) {
     if (command === "list_areas") return [];
     if (command === "list_goals") return [];
     if (command === "list_projects") return [];
+    if (command === "get_today") return today;
     throw new Error(`Unexpected command: ${command}`);
   });
 }
@@ -60,12 +91,16 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-test("shows the three milestone-local workspaces through narrow commands", async () => {
+test("shows Today first and the milestone-local workspaces through narrow commands", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
   mockStartup();
   render(<App />);
   expect(
-    await screen.findByRole("heading", { name: "Areas & Goals" }),
+    await screen.findByRole("heading", { name: "Today" }),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Areas & Goals" }));
+  expect(
+    screen.getByRole("heading", { name: "Areas & Goals" }),
   ).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
   expect(screen.getByRole("heading", { name: "Tasks" })).toBeInTheDocument();
@@ -104,6 +139,10 @@ test("hydrates all persisted organizer data before mounting any workspace", asyn
     resolveProjects([]);
     await projectResponse;
   });
+  expect(
+    await screen.findByText("Persisted synthetic Task"),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Areas & Goals" }));
   expect(await screen.findAllByText("Persisted synthetic Area")).toHaveLength(
     2,
   );

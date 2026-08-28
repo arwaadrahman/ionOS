@@ -31,6 +31,7 @@ remain proposed until intentionally accepted.
 - [0010 Phase 1 organizer domain](0010-phase-1-organizer-domain.md)
 - [0011 Audit, Trash, and recovery foundation](0011-audit-trash-and-recovery-foundation.md)
 - [0012 Organizer lifecycle and containment](0012-organizer-lifecycle-and-containment.md)
+- [0013 Today planning and pre-Calendar boundary](0013-today-planning-and-pre-calendar-boundary.md)
 
 ## Decision Backlog
 

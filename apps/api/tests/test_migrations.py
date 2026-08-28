@@ -108,7 +108,7 @@ def test_milestone_ordering_migration_is_reversible_and_deterministic(tmp_path):
         assert goal_positions == [("m-a", 0), ("m-b", 1), ("m-c", 2)]
         assert project_positions == [("pm-a", 0), ("pm-b", 1)]
         assert second_project_positions == [("pm-c", 0)]
-        assert revision == ("0003_milestone_ordering",)
+        assert revision == ("0004_today_planning",)
 
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
@@ -141,3 +141,72 @@ def test_milestone_ordering_migration_is_reversible_and_deterministic(tmp_path):
         ).fetchall()
 
     assert positions_after_reupgrade == [("m-a", 0), ("m-b", 1), ("m-c", 2)]
+
+
+def test_today_planning_migration_preserves_0003_data_and_enforces_contract(tmp_path):
+    database_path = tmp_path / "today-migration.sqlite3"
+    config = migration_config(database_path)
+    command.upgrade(config, "0003_milestone_ordering")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute(
+            "INSERT INTO tasks "
+            "(id, created_at, updated_at, revision, title, state, source_kind, "
+            "deadline_kind) VALUES "
+            "('task-a', '2030-01-01T00:00:00Z', '2030-01-01T00:00:00Z', "
+            "1, 'Synthetic Task', 'open', 'human', 'none')"
+        )
+        connection.execute(
+            "INSERT INTO tasks "
+            "(id, created_at, updated_at, revision, title, state, source_kind, "
+            "deadline_kind) VALUES "
+            "('task-b', '2030-01-01T00:00:00Z', '2030-01-01T00:00:00Z', "
+            "1, 'Second Synthetic Task', 'open', 'human', 'none')"
+        )
+
+    command.upgrade(config, "head")
+    base = (
+        "INSERT INTO task_day_plans "
+        "(id, task_id, planning_date, role, position, created_at, updated_at, "
+        "revision) "
+        "VALUES (?, ?, ?, ?, ?, '2030-01-01T00:00:00Z', "
+        "'2030-01-01T00:00:00Z', ?)"
+    )
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        for values in (
+            ("plan-a", "task-a", "2030-01-01", "priority", 0, 1),
+            ("plan-b", "task-a", "2030-01-02", "planned", 0, 1),
+            ("plan-c", "task-a", "2030-01-03", "backup", 0, 1),
+        ):
+            connection.execute(base, values)
+        for values in (
+            ("bad-role", "task-a", "2030-01-04", "later", 0, 1),
+            ("bad-date", "task-a", "20300104", "planned", 0, 1),
+            ("bad-position", "task-a", "2030-01-04", "planned", -1, 1),
+            ("bad-revision", "task-a", "2030-01-04", "planned", 0, 0),
+            ("duplicate-task-date", "task-a", "2030-01-01", "backup", 1, 1),
+            ("duplicate-position", "task-b", "2030-01-01", "priority", 0, 1),
+            ("missing-task", "missing", "2030-01-05", "planned", 0, 1),
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(base, values)
+        revision = connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone()
+        task_count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()
+    assert revision == ("0004_today_planning",)
+    assert task_count == (2,)
+
+    command.downgrade(config, "0003_milestone_ordering")
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM tasks").fetchone() == (2,)
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'task_day_plans'"
+        ).fetchone() == (0,)
+    command.upgrade(config, "head")
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone() == ("0004_today_planning",)

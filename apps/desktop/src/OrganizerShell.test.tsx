@@ -12,6 +12,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { OrganizerShell } from "./OrganizerShell";
 import { Area, Goal, GoalDetail, Project } from "./organizer";
 import { StartupData } from "./startup";
+import { TodayOutput } from "./today";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const time = "2030-01-01T00:00:00Z";
@@ -65,11 +66,26 @@ const detail: GoalDetail = {
   direct_tasks: [],
   project_tasks: [],
 };
+const today: TodayOutput = {
+  planning_date: "2030-01-01",
+  timezone: "UTC",
+  generated_at: time,
+  plan: { priorities: [], planned: [], backups: [] },
+  deadlines: { overdue: [], due_today: [], approaching: [] },
+  needs_attention: [],
+  unfinished_from_yesterday: [],
+  completed_today: [],
+};
 const data: StartupData = {
   areas: [area],
   goals: [goal],
   projects: [project],
   tasks: [],
+  today,
+  todayContext: {
+    planning_date: today.planning_date,
+    timezone: today.timezone,
+  },
 };
 
 beforeEach(() => {
@@ -88,6 +104,7 @@ test("keeps an active Goal visible with archived-parent context", async () => {
       initialData={{ ...data, areas: [{ ...area, archived_at: time }] }}
     />,
   );
+  fireEvent.click(screen.getByRole("button", { name: "Areas & Goals" }));
   expect(await screen.findByText("Archived parent")).toBeInTheDocument();
   expect(
     screen.getByText("Parent Area is archived. Existing context is retained."),
@@ -146,6 +163,7 @@ test("renders direct blocker counts and retains the canonical Area on failed Tra
     throw new Error(`Unexpected command: ${command}`);
   });
   render(<OrganizerShell initialData={{ ...data, goals: [], projects: [] }} />);
+  fireEvent.click(screen.getByRole("button", { name: "Areas & Goals" }));
   fireEvent.click(screen.getByRole("button", { name: "Move Area to Trash" }));
   expect(
     await screen.findByText("Cannot move this record to Trash yet."),
@@ -168,6 +186,7 @@ test("creates a contextual Goal Task without inferring a Project", async () => {
     throw new Error(`Unexpected command: ${command}`);
   });
   render(<OrganizerShell initialData={data} />);
+  fireEvent.click(screen.getByRole("button", { name: "Areas & Goals" }));
   fireEvent.change(
     await screen.findByRole("textbox", { name: "New Goal Task" }),
     {
@@ -193,9 +212,11 @@ test("refreshes a revision conflict while preserving the owner's Area draft", as
     if (command === "list_tasks" || command === "list_projects") return [];
     if (command === "list_areas") return [area];
     if (command === "list_goals") return [];
+    if (command === "get_today") return today;
     throw new Error(`Unexpected command: ${command}`);
   });
   render(<OrganizerShell initialData={{ ...data, goals: [], projects: [] }} />);
+  fireEvent.click(screen.getByRole("button", { name: "Areas & Goals" }));
   const input = screen.getByRole("textbox", { name: "Name" });
   fireEvent.change(input, { target: { value: "Owner draft" } });
   fireEvent.click(screen.getByRole("button", { name: "Save Area" }));
@@ -224,6 +245,7 @@ test("shows pending and confirmed feedback for one successful Goal save", async 
     throw new Error(`Unexpected command: ${command}`);
   });
   render(<OrganizerShell initialData={data} />);
+  fireEvent.click(screen.getByRole("button", { name: "Areas & Goals" }));
 
   const title = await screen.findByRole("textbox", { name: "Title" });
   fireEvent.change(title, { target: { value: "Edited Goal" } });
@@ -258,6 +280,7 @@ test("shows a genuine Goal validation failure without false success", async () =
     throw new Error(`Unexpected command: ${command}`);
   });
   render(<OrganizerShell initialData={data} />);
+  fireEvent.click(screen.getByRole("button", { name: "Areas & Goals" }));
 
   fireEvent.change(await screen.findByRole("textbox", { name: "Title" }), {
     target: { value: "Rejected Goal" },

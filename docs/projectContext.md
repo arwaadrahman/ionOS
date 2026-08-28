@@ -10,13 +10,14 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 1 — Ion Core Personal Organizer
-- **Milestone:** Phase 1B — Areas, Goals, Projects & Milestones
-- **In scope:** ordered Goal/Project Milestones, deterministic organizer
-  services, direct relationship editing and Trash blockers, derived organizer
-  projections, local Task links, fixed authenticated desktop commands,
-  milestone-local organizer workspaces, and the inherited secure runtime.
-- **Out of scope:** integrations, AI, scheduling, Calendar, full Home/Today,
-  search UI, mobile, remote/LAN access, and a production Ion Core.
+- **Milestone:** Phase 1C — Today
+- **In scope:** persistent human Today intent, priority/planned/backup ordering,
+  deterministic deadline and attention projections, yesterday suggestions,
+  completed work, local-date rollover, truthful pre-Calendar context, fixed
+  authenticated desktop commands, and the inherited organizer/runtime.
+- **Out of scope:** integrations, AI, scheduling, Calendar/free-busy,
+  FocusSession, DailyReview, WeeklyPlan, Home, search UI, mobile, remote/LAN
+  access, and a production Ion Core.
 
 ## Proposed stack baseline — subject to prototyping
 
@@ -69,7 +70,7 @@ performance-conscious.
 - [Task router](agent/taskRouter.md)
 - [Approved Ion reference snapshot](references/approvedReferences.md)
 - [Decision index](decisions/README.md)
-- [Active phase](phases/PHASE_1B.md)
+- [Active phase](phases/PHASE_1C.md)
 
 The approved-reference snapshot derives from `projectReference.md` version
 **1.1.0** (updated 2026-08-27). Project-local decisions override it.

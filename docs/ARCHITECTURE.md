@@ -67,6 +67,24 @@ entity services, optimistic concurrency, direct Trash blockers, transactional
 audit metadata, and derived organizer projections. Archive never cascades and
 no generic lifecycle, relationship, proxy, or command framework is introduced.
 
+## Phase 1C Today path
+
+Phase 1C adds one canonical `task_day_plans` relation and a deterministic Today
+projection. Python validates the Mac local civil date against the supplied IANA
+timezone, owns revision-aware planning transactions, and derives deadline,
+attention, yesterday, and completion sections from canonical Tasks. Planning
+does not mutate Task lifecycle and does not create scheduled time.
+
+React hydrates Today with the other canonical startup records before mounting
+the workspace. It recomputes local date/timezone at the next local midnight and
+on focus or return to visibility. Rust exposes only fixed Today commands over
+the inherited authenticated request primitive. The renderer still receives no
+service origin, port, session credential, or generic HTTP capability.
+
+The right pane is an explicit pre-Calendar boundary: it may render canonical
+deadline markers but cannot render a timeline, appointments, occupied/free
+time, or FocusSession state.
+
 ## TBD
 
 See ADRs [0004](decisions/0004-macos-local-trust-boundary.md),

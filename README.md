@@ -7,19 +7,21 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 ## Status
 
 Current phase: **Phase 1 — Ion Core Personal Organizer**
-Current milestone: **Phase 1B — Areas, Goals, Projects & Milestones**
+Current milestone: **Phase 1C — Today**
 
 Phase 0 established the secure local runtime. Phase 1A added the canonical
 organizer schema and Task vertical slice. Phase 1B makes Areas, Goals, Projects,
-Milestones, and Task relationships useful while retaining the same Rust-owned
-authenticated production service boundary.
+Milestones, and Task relationships useful. Phase 1C adds persistent human Today
+planning, deterministic attention/deadline context, and a truthful pre-Calendar
+split workspace while retaining the same Rust-owned authenticated production
+service boundary.
 
 ## Start here
 
 - [Agent guide](AGENTS.md)
 - [Project context](docs/projectContext.md)
 - [Master Specification](docs/PRODUCT_SPEC.md)
-- [Phase 1B](docs/phases/PHASE_1B.md)
+- [Phase 1C](docs/phases/PHASE_1C.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decision index](docs/decisions/README.md)
 

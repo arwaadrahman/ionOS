@@ -18,6 +18,8 @@ from ion_api.organizer_routes import organizer_router
 from ion_api.settings import Settings, load_settings
 from ion_api.task_routes import task_router
 from ion_api.tasks import TaskService
+from ion_api.today import TodayService
+from ion_api.today_routes import today_router
 
 SESSION_HEADER = "X-Ion-Session"
 
@@ -68,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = create_database_engine(active_settings.database_path)
     app.include_router(task_router(TaskService(engine)))
     app.include_router(organizer_router(OrganizerService(engine)))
+    app.include_router(today_router(TodayService(engine)))
     return app
 
 
@@ -92,6 +95,7 @@ def create_production_app(settings: Settings, session_token: str) -> FastAPI:
     engine = create_database_engine(settings.database_path)
     app.include_router(task_router(TaskService(engine)))
     app.include_router(organizer_router(OrganizerService(engine)))
+    app.include_router(today_router(TodayService(engine)))
     return app
 
 

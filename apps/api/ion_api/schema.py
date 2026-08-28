@@ -203,3 +203,39 @@ audit_events = Table(
         name="audit_authority_valid",
     ),
 )
+
+task_day_plans = Table(
+    "task_day_plans",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column(
+        "task_id",
+        String(36),
+        ForeignKey("tasks.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("planning_date", String, nullable=False),
+    Column("role", String, nullable=False),
+    Column("position", Integer, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("revision", Integer, nullable=False, server_default="1"),
+    CheckConstraint(
+        "length(planning_date) = 10 AND "
+        "planning_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'",
+        name="task_day_plan_date_shape_valid",
+    ),
+    CheckConstraint(
+        "role IN ('priority', 'planned', 'backup')",
+        name="task_day_plan_role_valid",
+    ),
+    CheckConstraint("position >= 0", name="task_day_plan_position_nonnegative"),
+    CheckConstraint("revision >= 1", name="task_day_plan_revision_positive"),
+    UniqueConstraint("task_id", "planning_date", name="uq_task_day_plans_task_date"),
+    UniqueConstraint(
+        "planning_date",
+        "role",
+        "position",
+        name="uq_task_day_plans_date_role_position",
+    ),
+)

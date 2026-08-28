@@ -1,5 +1,6 @@
 mod organizer;
 mod service;
+mod today;
 
 pub fn run() {
     let app = tauri::Builder::default()
@@ -58,6 +59,11 @@ pub fn run() {
             organizer::trash_project_milestone,
             organizer::restore_project_milestone,
             organizer::list_project_milestones,
+            today::get_today,
+            today::add_task_to_today,
+            today::remove_task_from_today,
+            today::set_today_role,
+            today::reorder_today_tasks,
         ])
         .setup(|app| {
             if !cfg!(debug_assertions) {

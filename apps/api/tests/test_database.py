@@ -23,7 +23,7 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
             )
         }
 
-    assert version == ("0003_milestone_ordering",)
+    assert version == ("0004_today_planning",)
     assert {
         "areas",
         "goals",
@@ -32,6 +32,7 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
         "project_milestones",
         "tasks",
         "audit_events",
+        "task_day_plans",
     } <= tables
 
     with sqlite3.connect(database_path) as connection:
