@@ -7,10 +7,11 @@ from uuid import uuid4
 
 from sqlalchemy import Engine, Select, insert, select, update
 
-from ion_api.schema import audit_events, tasks
+from ion_api.schema import audit_events, goals, projects, tasks
 from ion_api.task_contracts import (
     CreateTaskInput,
     DeadlineInput,
+    SetTaskRelationshipsInput,
     TaskOutput,
     UpdateTaskInput,
 )
@@ -21,6 +22,10 @@ class TaskNotFoundError(LookupError):
 
 
 class TaskConflictError(RuntimeError):
+    pass
+
+
+class TaskAssignmentUnavailableError(RuntimeError):
     pass
 
 
@@ -102,6 +107,9 @@ class TaskService:
         now = utc_now()
         task_id = str(uuid4())
         with self.engine.begin() as connection:
+            self._validate_relationships(
+                connection, goal_id=input.goal_id, project_id=input.project_id
+            )
             connection.execute(
                 insert(tasks).values(
                     id=task_id,
@@ -136,6 +144,83 @@ class TaskService:
             )
             row = connection.execute(select(tasks).where(tasks.c.id == task_id)).one()
         return _task_output(row)
+
+    def set_relationships(
+        self,
+        task_id: str,
+        input: SetTaskRelationshipsInput,
+        command_id: str,
+    ) -> TaskOutput:
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                select(tasks).where(tasks.c.id == task_id, tasks.c.trashed_at.is_(None))
+            ).one_or_none()
+            if row is None:
+                raise TaskNotFoundError(task_id)
+            if row.revision != input.expected_revision:
+                raise TaskConflictError(task_id)
+            self._validate_relationships(
+                connection, goal_id=input.goal_id, project_id=input.project_id
+            )
+            if row.goal_id == input.goal_id and row.project_id == input.project_id:
+                return _task_output(row)
+            next_revision = row.revision + 1
+            result = connection.execute(
+                update(tasks)
+                .where(tasks.c.id == task_id, tasks.c.revision == row.revision)
+                .values(
+                    goal_id=input.goal_id,
+                    project_id=input.project_id,
+                    updated_at=utc_now(),
+                    revision=next_revision,
+                )
+            )
+            if result.rowcount != 1:
+                raise TaskConflictError(task_id)
+            _audit(
+                connection,
+                entity_id=task_id,
+                action="task_relationships_changed",
+                from_revision=row.revision,
+                to_revision=next_revision,
+                command_id=command_id,
+            )
+            updated = connection.execute(
+                select(tasks).where(tasks.c.id == task_id)
+            ).one()
+        return _task_output(updated)
+
+    @staticmethod
+    def _validate_relationships(
+        connection, *, goal_id: str | None, project_id: str | None
+    ) -> None:
+        if goal_id is not None:
+            goal = connection.execute(
+                select(goals.c.trashed_at, goals.c.archived_at).where(
+                    goals.c.id == goal_id
+                )
+            ).one_or_none()
+            if (
+                goal is None
+                or goal.trashed_at is not None
+                or goal.archived_at is not None
+            ):
+                raise TaskAssignmentUnavailableError(goal_id)
+        if project_id is not None:
+            project = connection.execute(
+                select(
+                    projects.c.trashed_at,
+                    projects.c.archived_at,
+                    projects.c.state,
+                ).where(projects.c.id == project_id)
+            ).one_or_none()
+            if (
+                project is None
+                or project.trashed_at is not None
+                or project.archived_at is not None
+                or project.state == "archived"
+            ):
+                raise TaskAssignmentUnavailableError(project_id)
 
     def update(
         self, task_id: str, input: UpdateTaskInput, command_id: str

@@ -8,10 +8,16 @@ from sqlalchemy.exc import IntegrityError
 from ion_api.task_contracts import (
     CreateTaskInput,
     RevisionInput,
+    SetTaskRelationshipsInput,
     TaskOutput,
     UpdateTaskInput,
 )
-from ion_api.tasks import TaskConflictError, TaskNotFoundError, TaskService
+from ion_api.tasks import (
+    TaskAssignmentUnavailableError,
+    TaskConflictError,
+    TaskNotFoundError,
+    TaskService,
+)
 
 
 def task_router(service: TaskService) -> APIRouter:
@@ -27,16 +33,17 @@ def task_router(service: TaskService) -> APIRouter:
 
     @router.post("", response_model=TaskOutput, status_code=status.HTTP_201_CREATED)
     def create_task(input: CreateTaskInput) -> TaskOutput:
-        try:
-            return service.create(input, str(uuid4()))
-        except IntegrityError as error:
-            raise HTTPException(
-                status_code=422, detail="task data is invalid"
-            ) from error
+        return _mutate(lambda: service.create(input, str(uuid4())))
 
     @router.patch("/{task_id}", response_model=TaskOutput)
     def update_task(task_id: str, input: UpdateTaskInput) -> TaskOutput:
         return _mutate(lambda: service.update(task_id, input, str(uuid4())))
+
+    @router.put("/{task_id}/relationships", response_model=TaskOutput)
+    def set_task_relationships(
+        task_id: str, input: SetTaskRelationshipsInput
+    ) -> TaskOutput:
+        return _mutate(lambda: service.set_relationships(task_id, input, str(uuid4())))
 
     @router.post("/{task_id}/complete", response_model=TaskOutput)
     def complete_task(task_id: str, input: RevisionInput) -> TaskOutput:
@@ -69,8 +76,20 @@ def _mutate(operation) -> TaskOutput:
     try:
         return operation()
     except TaskNotFoundError as error:
-        raise HTTPException(status_code=404, detail="task not found") from error
+        raise HTTPException(
+            status_code=404, detail={"code": "not_found", "blockers": []}
+        ) from error
     except TaskConflictError as error:
-        raise HTTPException(status_code=409, detail="task changed elsewhere") from error
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "revision_conflict", "blockers": []},
+        ) from error
+    except TaskAssignmentUnavailableError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "assignment_unavailable", "blockers": []},
+        ) from error
     except IntegrityError as error:
-        raise HTTPException(status_code=422, detail="task data is invalid") from error
+        raise HTTPException(
+            status_code=422, detail={"code": "validation", "blockers": []}
+        ) from error

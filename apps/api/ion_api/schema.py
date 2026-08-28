@@ -9,6 +9,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
 )
 
 metadata = MetaData()
@@ -78,11 +79,14 @@ milestones = Table(
     Column("state", String, nullable=False),
     Column("target_date", String, nullable=True),
     Column("achieved_at", String, nullable=True),
+    Column("position", Integer, nullable=False),
     CheckConstraint("length(trim(title)) > 0", name="milestone_title_present"),
     CheckConstraint(
         "state IN ('planned', 'in_progress', 'achieved', 'skipped')",
         name="milestone_state_valid",
     ),
+    CheckConstraint("position >= 0", name="milestone_position_nonnegative"),
+    UniqueConstraint("goal_id", "position", name="uq_milestones_goal_position"),
 )
 
 projects = Table(
@@ -117,10 +121,15 @@ project_milestones = Table(
     Column("state", String, nullable=False),
     Column("target_date", String, nullable=True),
     Column("achieved_at", String, nullable=True),
+    Column("position", Integer, nullable=False),
     CheckConstraint("length(trim(title)) > 0", name="project_milestone_title_present"),
     CheckConstraint(
         "state IN ('planned', 'in_progress', 'achieved', 'skipped')",
         name="project_milestone_state_valid",
+    ),
+    CheckConstraint("position >= 0", name="project_milestone_position_nonnegative"),
+    UniqueConstraint(
+        "project_id", "position", name="uq_project_milestones_project_position"
     ),
 )
 

@@ -23,7 +23,7 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
             )
         }
 
-    assert version == ("0002_organizer_foundation",)
+    assert version == ("0003_milestone_ordering",)
     assert {
         "areas",
         "goals",
@@ -33,3 +33,15 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
         "tasks",
         "audit_events",
     } <= tables
+
+    with sqlite3.connect(database_path) as connection:
+        milestone_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(milestones)")
+        }
+        project_milestone_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(project_milestones)")
+        }
+
+    assert "position" in milestone_columns
+    assert "position" in project_milestone_columns

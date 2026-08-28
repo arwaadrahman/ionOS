@@ -59,6 +59,14 @@ Python service owns UUID generation, SQLAlchemy Core transactions, Alembic
 migration-before-readiness, and SQLite canonical state. The production
 database is `ion.sqlite3`; development uses `ion-development.sqlite3`.
 
+## Phase 1B organizer domain
+
+Phase 1B preserves the same product boundary while adding fixed Area, Goal,
+Project, Milestone, and Task-relationship operations. Python owns explicit
+entity services, optimistic concurrency, direct Trash blockers, transactional
+audit metadata, and derived organizer projections. Archive never cascades and
+no generic lifecycle, relationship, proxy, or command framework is introduced.
+
 ## TBD
 
 See ADRs [0004](decisions/0004-macos-local-trust-boundary.md),

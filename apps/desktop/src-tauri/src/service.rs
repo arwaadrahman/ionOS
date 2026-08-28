@@ -50,9 +50,14 @@ pub struct UpdateTaskInput {
     pub estimated_minutes: Option<i64>,
     pub progress_percent: Option<i64>,
     pub deadline: Option<TaskDeadline>,
-    pub project_id: Option<String>,
-    pub goal_id: Option<String>,
     pub completion_evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SetTaskRelationshipsInput {
+    pub expected_revision: i64,
+    pub goal_id: Option<String>,
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -79,6 +84,77 @@ pub struct Task {
     pub updated_at: String,
     pub revision: i64,
     pub trashed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductErrorCode {
+    NotFound,
+    RevisionConflict,
+    Validation,
+    AssignmentUnavailable,
+    TrashBlocked,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Blocker {
+    pub entity: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ProductError {
+    pub code: ProductErrorCode,
+    pub blockers: Vec<Blocker>,
+}
+
+impl ProductError {
+    pub(crate) fn new(code: ProductErrorCode) -> Self {
+        Self {
+            code,
+            blockers: Vec::new(),
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self::new(ProductErrorCode::Unavailable)
+    }
+}
+
+#[derive(Deserialize)]
+struct ProductErrorEnvelope {
+    detail: ProductError,
+}
+
+fn parse_product_error(status: u16, bytes: &[u8]) -> ProductError {
+    if matches!(status, 404 | 409 | 422) && bytes.len() <= MAX_PROTOCOL_BYTES {
+        if let Ok(envelope) = serde_json::from_slice::<ProductErrorEnvelope>(bytes) {
+            return envelope.detail;
+        }
+        let code = match status {
+            404 => ProductErrorCode::NotFound,
+            409 => ProductErrorCode::RevisionConflict,
+            _ => ProductErrorCode::Validation,
+        };
+        return ProductError::new(code);
+    }
+    ProductError::unavailable()
+}
+
+fn task_route(task_id: &str, suffix: &str) -> Result<String, ProductError> {
+    let valid = task_id.len() == 36
+        && task_id
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                8 | 13 | 18 | 23 => byte == b'-',
+                _ => byte.is_ascii_hexdigit(),
+            });
+    if !valid {
+        return Err(ProductError::new(ProductErrorCode::Validation));
+    }
+    Ok(format!("/v1/tasks/{task_id}{suffix}"))
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -342,11 +418,15 @@ fn development_port() -> Result<u16, String> {
         .ok_or_else(|| "unavailable".into())
 }
 
-fn task_target(state: &ServiceState) -> Result<(String, Option<String>), String> {
+fn product_target(state: &ServiceState) -> Result<(String, Option<String>), ProductError> {
     if cfg!(debug_assertions) {
-        return Ok((format!("http://127.0.0.1:{}", development_port()?), None));
+        let port = development_port().map_err(|_| ProductError::unavailable())?;
+        return Ok((format!("http://127.0.0.1:{port}"), None));
     }
-    let process = state.process.lock().map_err(|_| "unavailable")?;
+    let process = state
+        .process
+        .lock()
+        .map_err(|_| ProductError::unavailable())?;
     process
         .as_ref()
         .map(|process| {
@@ -355,54 +435,59 @@ fn task_target(state: &ServiceState) -> Result<(String, Option<String>), String>
                 Some(process.token.clone()),
             )
         })
-        .ok_or_else(|| "unavailable".into())
+        .ok_or_else(ProductError::unavailable)
 }
 
-async fn task_request<T: Serialize, R: for<'de> Deserialize<'de>>(
+pub(crate) async fn product_request<T: Serialize, R: for<'de> Deserialize<'de>>(
     state: &ServiceState,
     method: reqwest::Method,
     route: &str,
     body: Option<&T>,
-) -> Result<R, String> {
-    let (origin, token) = task_target(state)?;
+) -> Result<R, ProductError> {
+    let (origin, token) = product_target(state)?;
     let mut request = reqwest::Client::new().request(method, format!("{origin}{route}"));
     if let Some(token) = token {
         request = request.header(SESSION_HEADER, token);
     }
     if let Some(body) = body {
-        request = request
-            .header("content-type", "application/json")
-            .body(serde_json::to_vec(body).map_err(|_| "validation")?);
+        request = request.header("content-type", "application/json").body(
+            serde_json::to_vec(body)
+                .map_err(|_| ProductError::new(ProductErrorCode::Validation))?,
+        );
     }
-    let response = request.send().await.map_err(|_| "unavailable")?;
-    match response.status().as_u16() {
-        200 | 201 => serde_json::from_str::<R>(&response.text().await.map_err(|_| "unavailable")?)
-            .map_err(|_| "unavailable".into()),
-        404 => Err("not_found".into()),
-        409 => Err("conflict".into()),
-        422 => Err("validation".into()),
-        _ => Err("unavailable".into()),
+    let response = request
+        .send()
+        .await
+        .map_err(|_| ProductError::unavailable())?;
+    let status = response.status().as_u16();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| ProductError::unavailable())?;
+    match status {
+        200 | 201 => serde_json::from_slice::<R>(&bytes).map_err(|_| ProductError::unavailable()),
+        _ => Err(parse_product_error(status, &bytes)),
     }
 }
 
 #[tauri::command]
-pub async fn list_tasks(state: tauri::State<'_, ServiceState>) -> Result<Vec<Task>, String> {
-    task_request::<(), Vec<Task>>(&state, reqwest::Method::GET, "/v1/tasks", None).await
+pub async fn list_tasks(state: tauri::State<'_, ServiceState>) -> Result<Vec<Task>, ProductError> {
+    product_request::<(), Vec<Task>>(&state, reqwest::Method::GET, "/v1/tasks", None).await
 }
 
 #[tauri::command]
 pub async fn list_trashed_tasks(
     state: tauri::State<'_, ServiceState>,
-) -> Result<Vec<Task>, String> {
-    task_request::<(), Vec<Task>>(&state, reqwest::Method::GET, "/v1/tasks/trash", None).await
+) -> Result<Vec<Task>, ProductError> {
+    product_request::<(), Vec<Task>>(&state, reqwest::Method::GET, "/v1/tasks/trash", None).await
 }
 
 #[tauri::command]
 pub async fn create_task(
     state: tauri::State<'_, ServiceState>,
     input: CreateTaskInput,
-) -> Result<Task, String> {
-    task_request(&state, reqwest::Method::POST, "/v1/tasks", Some(&input)).await
+) -> Result<Task, ProductError> {
+    product_request(&state, reqwest::Method::POST, "/v1/tasks", Some(&input)).await
 }
 
 #[tauri::command]
@@ -410,14 +495,9 @@ pub async fn update_task(
     state: tauri::State<'_, ServiceState>,
     task_id: String,
     input: UpdateTaskInput,
-) -> Result<Task, String> {
-    task_request(
-        &state,
-        reqwest::Method::PATCH,
-        &format!("/v1/tasks/{task_id}"),
-        Some(&input),
-    )
-    .await
+) -> Result<Task, ProductError> {
+    let route = task_route(&task_id, "")?;
+    product_request(&state, reqwest::Method::PATCH, &route, Some(&input)).await
 }
 
 async fn task_revision_action(
@@ -425,14 +505,9 @@ async fn task_revision_action(
     task_id: String,
     input: RevisionInput,
     action: &str,
-) -> Result<Task, String> {
-    task_request(
-        &state,
-        reqwest::Method::POST,
-        &format!("/v1/tasks/{task_id}/{action}"),
-        Some(&input),
-    )
-    .await
+) -> Result<Task, ProductError> {
+    let route = task_route(&task_id, &format!("/{action}"))?;
+    product_request(&state, reqwest::Method::POST, &route, Some(&input)).await
 }
 
 #[tauri::command]
@@ -440,7 +515,7 @@ pub async fn complete_task(
     state: tauri::State<'_, ServiceState>,
     task_id: String,
     input: RevisionInput,
-) -> Result<Task, String> {
+) -> Result<Task, ProductError> {
     task_revision_action(state, task_id, input, "complete").await
 }
 
@@ -449,7 +524,7 @@ pub async fn reopen_task(
     state: tauri::State<'_, ServiceState>,
     task_id: String,
     input: RevisionInput,
-) -> Result<Task, String> {
+) -> Result<Task, ProductError> {
     task_revision_action(state, task_id, input, "reopen").await
 }
 
@@ -458,7 +533,7 @@ pub async fn trash_task(
     state: tauri::State<'_, ServiceState>,
     task_id: String,
     input: RevisionInput,
-) -> Result<Task, String> {
+) -> Result<Task, ProductError> {
     task_revision_action(state, task_id, input, "trash").await
 }
 
@@ -467,13 +542,26 @@ pub async fn restore_task(
     state: tauri::State<'_, ServiceState>,
     task_id: String,
     input: RevisionInput,
-) -> Result<Task, String> {
+) -> Result<Task, ProductError> {
     task_revision_action(state, task_id, input, "restore").await
+}
+
+#[tauri::command]
+pub async fn set_task_relationships(
+    state: tauri::State<'_, ServiceState>,
+    task_id: String,
+    input: SetTaskRelationshipsInput,
+) -> Result<Task, ProductError> {
+    let route = task_route(&task_id, "/relationships")?;
+    product_request(&state, reqwest::Method::PUT, &route, Some(&input)).await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{bootstrap_message, encode_session_token, parse_ready, ServiceState, READY_PREFIX};
+    use super::{
+        bootstrap_message, encode_session_token, parse_product_error, parse_ready, task_route,
+        ProductErrorCode, ServiceState, MAX_PROTOCOL_BYTES, READY_PREFIX,
+    };
 
     #[test]
     fn token_encodes_exactly_256_bits_without_a_dependency() {
@@ -523,5 +611,48 @@ mod tests {
 
         assert_eq!(state.status().state, "ready");
         assert_eq!(state.safe_diagnostic(), None);
+    }
+
+    #[test]
+    fn product_errors_preserve_safe_blockers_and_serialize_narrowly() {
+        let error = parse_product_error(
+            409,
+            br#"{"detail":{"code":"trash_blocked","blockers":[{"entity":"project","count":2}]}}"#,
+        );
+        assert_eq!(error.code, ProductErrorCode::TrashBlocked);
+        assert_eq!(error.blockers[0].entity, "project");
+        assert_eq!(error.blockers[0].count, 2);
+
+        let serialized = serde_json::to_string(&error).unwrap();
+        assert_eq!(
+            serialized,
+            r#"{"code":"trash_blocked","blockers":[{"entity":"project","count":2}]}"#
+        );
+    }
+
+    #[test]
+    fn malformed_or_oversized_backend_errors_fall_back_without_body_leakage() {
+        assert_eq!(
+            parse_product_error(409, b"private traceback").code,
+            ProductErrorCode::RevisionConflict
+        );
+        assert_eq!(
+            parse_product_error(500, b"private traceback").code,
+            ProductErrorCode::Unavailable
+        );
+        assert_eq!(
+            parse_product_error(422, &vec![b'x'; MAX_PROTOCOL_BYTES + 1]).code,
+            ProductErrorCode::Unavailable
+        );
+    }
+
+    #[test]
+    fn task_routes_reject_renderer_control_of_path_segments() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        assert_eq!(
+            task_route(id, "/relationships").unwrap(),
+            format!("/v1/tasks/{id}/relationships")
+        );
+        assert!(task_route("../health", "").is_err());
     }
 }

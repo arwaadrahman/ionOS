@@ -1,59 +1,62 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ionTokens } from "@ion/design";
-import { TaskWorkspace } from "./TaskWorkspace";
-import { Task, taskClient } from "./tasks";
+import { OrganizerShell } from "./OrganizerShell";
+import { StartupData, loadStartupData } from "./startup";
 
 type HealthState = "checking" | "ready" | "unavailable";
-
-const apiOrigin = __ION_API_ORIGIN__;
-
 type ServiceStatus = { state: HealthState };
-
 type AppProps = { development?: boolean };
+const apiOrigin = __ION_API_ORIGIN__;
 
 export function App({ development = import.meta.env.DEV }: AppProps = {}) {
   const [health, setHealth] = useState<HealthState>("checking");
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [data, setData] = useState<StartupData | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-
-    async function checkService(): Promise<void> {
+    async function hydrate() {
       try {
         if (!development) {
           const status = await invoke<ServiceStatus>("service_health");
-          if (status.state === "ready") {
-            setTasks(await taskClient.list());
-            setHealth("ready");
-          } else setHealth(status.state);
-          return;
+          if (status.state !== "ready") {
+            setHealth(status.state);
+            return;
+          }
+        } else {
+          const response = await fetch(`${apiOrigin}/health`, {
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            setHealth("unavailable");
+            return;
+          }
         }
-        const response = await fetch(`${apiOrigin}/health`, {
-          signal: controller.signal,
-        });
-        if (response.ok) {
-          setTasks(await taskClient.list());
-          setHealth("ready");
-        } else setHealth("unavailable");
-      } catch {
+        const startup = await loadStartupData();
         if (!controller.signal.aborted) {
-          setHealth("unavailable");
+          setData(startup);
+          setHealth("ready");
         }
+      } catch {
+        if (!controller.signal.aborted) setHealth("unavailable");
       }
     }
-
-    void checkService();
+    void hydrate();
     return () => controller.abort();
   }, [development]);
 
-  if (health === "ready") return <TaskWorkspace initialTasks={tasks} />;
+  if (health === "ready" && data) return <OrganizerShell initialData={data} />;
   return (
     <main className="engineering-shell">
-      <p className="eyebrow">ION OS · PHASE 0C</p>
-      <h1>Local service unavailable</h1>
+      <p className="eyebrow">ION OS · PHASE 1B</p>
+      <h1>
+        {health === "checking"
+          ? "Preparing your workspace"
+          : "Local service unavailable"}
+      </h1>
       <p className="summary">
-        Tasks will be available when Ion's local service is ready.
+        Organizer data appears only after Ion confirms its local service and
+        canonical startup state.
       </p>
       <div className={`service-status service-status--${health}`}>
         <span aria-hidden="true" className="status-dot" />

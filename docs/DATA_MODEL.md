@@ -2,8 +2,9 @@
 
 ## Status
 
-**Phase 1A foundation.** The initial organizer schema is implemented through
-SQLAlchemy Core and Alembic migration `0002_organizer_foundation`.
+**Phase 1B foundation.** The organizer schema begins in
+`0002_organizer_foundation`; `0003_milestone_ordering` adds canonical
+owner-scoped positions to Goal and Project Milestones only.
 
 - Use one canonical record with multiple contextual views; do not duplicate an
   object merely because multiple areas display it.
@@ -21,6 +22,13 @@ SQLAlchemy Core and Alembic migration `0002_organizer_foundation`.
   Milestones, Tasks, and append-only audit metadata only. Today persistence,
   generic relationships, Calendar, search indexes, integrations, and AI data
   remain deferred.
+- Milestone positions are non-negative and unique within the direct owner.
+  Trashed Milestones retain their position and remain in the canonical position
+  space. Areas, Goals, and Projects have no manual-ordering field.
+- Archive never cascades. Trash checks direct non-trashed dependents only, and
+  structural relationships continue to use the accepted direct foreign keys.
+- Goal/Project progress, Project current Milestone and next actions, and recent
+  activity are derived projections rather than duplicated canonical fields.
 
 See [Architecture](ARCHITECTURE.md) and ADR
 [0001](decisions/0001-local-first-data-ownership.md).

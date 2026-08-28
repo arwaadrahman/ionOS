@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TaskWorkspace } from "./TaskWorkspace";
+import { Goal, Project } from "./organizer";
 import { Task } from "./tasks";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -21,10 +22,17 @@ const existingTask: Task = {
   title: "Before edit",
   details: null,
   state: "open",
+  source_kind: "human",
   importance: null,
   estimated_minutes: null,
   progress_percent: null,
   deadline: { kind: "none" },
+  project_id: "22222222-2222-4222-8222-222222222222",
+  goal_id: "11111111-1111-4111-8111-111111111111",
+  completion_evidence: null,
+  completed_at: null,
+  created_at: "2030-01-01T00:00:00Z",
+  updated_at: "2030-01-01T00:00:00Z",
   revision: 7,
   trashed_at: null,
 };
@@ -62,8 +70,6 @@ test("saves an existing Task through update_task before rendering the edit", asy
         estimated_minutes: null,
         progress_percent: null,
         deadline: { kind: "none" },
-        project_id: null,
-        goal_id: null,
         completion_evidence: null,
         expected_revision: existingTask.revision,
       },
@@ -86,4 +92,114 @@ test("saves an existing Task through update_task before rendering the edit", asy
   expect(
     screen.getByRole("button", { name: "Create task" }),
   ).toBeInTheDocument();
+});
+
+test("changes Task relationships only through the explicit complete-pair command", async () => {
+  const goal: Goal = {
+    id: "11111111-1111-4111-8111-111111111111",
+    area_id: null,
+    title: "Synthetic Goal",
+    description: null,
+    kind: "outcome",
+    state: "active",
+    archived_at: null,
+    created_at: existingTask.created_at,
+    updated_at: existingTask.updated_at,
+    revision: 1,
+    trashed_at: null,
+  };
+  const project: Project = {
+    id: "22222222-2222-4222-8222-222222222222",
+    goal_id: null,
+    title: "Synthetic Project",
+    description: null,
+    state: "active",
+    completed_at: null,
+    archived_at: null,
+    created_at: existingTask.created_at,
+    updated_at: existingTask.updated_at,
+    revision: 1,
+    trashed_at: null,
+  };
+  vi.mocked(invoke).mockResolvedValue({
+    ...existingTask,
+    goal_id: null,
+    project_id: project.id,
+    revision: existingTask.revision + 1,
+  });
+
+  render(
+    <TaskWorkspace
+      initialTasks={[existingTask]}
+      goals={[goal]}
+      projects={[project]}
+    />,
+  );
+  fireEvent.change(screen.getByRole("combobox", { name: "Before edit Goal" }), {
+    target: { value: "" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save relationships" }));
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_task_relationships", {
+      taskId: existingTask.id,
+      input: {
+        expected_revision: existingTask.revision,
+        goal_id: null,
+        project_id: project.id,
+      },
+    }),
+  );
+});
+
+test("confirms complete, reopen, Trash, and restore before changing canonical UI", async () => {
+  let resolveComplete: (task: Task) => void = () => undefined;
+  const completeResponse = new Promise<Task>((resolve) => {
+    resolveComplete = resolve;
+  });
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    const task = (args as { input?: { expected_revision?: number } })?.input;
+    if (command === "complete_task") return completeResponse;
+    if (command === "reopen_task")
+      return {
+        ...existingTask,
+        state: "open",
+        revision: task?.expected_revision ?? 9,
+      };
+    if (command === "trash_task")
+      return {
+        ...existingTask,
+        revision: 10,
+        trashed_at: existingTask.updated_at,
+      };
+    if (command === "restore_task")
+      return { ...existingTask, revision: 11, trashed_at: null };
+    throw new Error(`Unexpected command: ${command}`);
+  });
+
+  render(<TaskWorkspace initialTasks={[existingTask]} />);
+  fireEvent.click(screen.getByRole("button", { name: "Complete" }));
+  expect(screen.getByText("open")).toBeInTheDocument();
+  await act(async () => {
+    resolveComplete({ ...existingTask, state: "completed", revision: 8 });
+    await completeResponse;
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Reopen" }));
+  await screen.findByRole("button", { name: "Complete" });
+  fireEvent.click(screen.getByRole("button", { name: "Trash" }));
+  expect(
+    await screen.findByRole("button", { name: "Restore" }),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+  expect(
+    await screen.findByRole("button", { name: "Complete" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText("Before edit")).toBeInTheDocument();
+
+  expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
+    "complete_task",
+    "reopen_task",
+    "trash_task",
+    "restore_task",
+  ]);
 });

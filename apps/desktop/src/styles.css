@@ -10,6 +10,35 @@ body {
   min-height: 100vh;
 }
 
+button,
+input,
+textarea,
+select {
+  border: 1px solid #34313c;
+  border-radius: 0.45rem;
+  color: inherit;
+  background: #15151a;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover:not(:disabled),
+button.is-active,
+.tree-item.is-selected {
+  border-color: var(--ion-accent, #8b5cf6);
+  background: #211a31;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--ion-accent, #8b5cf6);
+  outline-offset: 2px;
+}
+
 .engineering-shell {
   box-sizing: border-box;
   display: grid;
@@ -23,6 +52,252 @@ body {
   max-width: 44rem;
   margin: 0 auto;
   padding: 2rem;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.workspace-switcher {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.8rem 1.4rem;
+  border-bottom: 1px solid #29262f;
+  background: rgb(10 10 12 / 94%);
+}
+
+.workspace {
+  max-width: 86rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.workspace > header {
+  margin-bottom: 1.5rem;
+}
+
+.split-workspace {
+  display: grid;
+  grid-template-columns: minmax(16rem, 0.72fr) minmax(25rem, 1.6fr);
+  min-height: 34rem;
+  overflow: hidden;
+  border: 1px solid #29262f;
+  border-radius: 0.8rem;
+  background: #101014;
+}
+
+.navigator,
+.detail-pane {
+  padding: 1.1rem;
+}
+
+.navigator {
+  overflow-y: auto;
+  border-right: 1px solid #29262f;
+  background: #0d0d11;
+}
+
+.detail-pane {
+  overflow-y: auto;
+}
+
+.tree-group {
+  display: grid;
+  gap: 0.25rem;
+  margin: 1rem 0;
+}
+
+.tree-group h3,
+.detail-section h3 {
+  margin: 0 0 0.55rem;
+  color: #a5a1ad;
+  font-size: 0.8rem;
+  letter-spacing: 0.06em;
+}
+
+.tree-item {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  width: 100%;
+  border-color: transparent;
+  text-align: left;
+}
+
+.tree-item--child {
+  padding-left: 1.35rem;
+}
+
+.quick-create,
+.compact-form,
+.entity-form,
+.relationship-controls,
+.form-actions,
+.action-bar,
+.row-actions {
+  display: flex;
+  gap: 0.55rem;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.quick-create {
+  margin-bottom: 0.65rem;
+}
+
+.quick-create input {
+  min-width: 0;
+  flex: 1;
+}
+
+.entity-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  margin: 1.25rem 0;
+}
+
+.entity-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: #a5a1ad;
+}
+
+.entity-form textarea {
+  min-height: 4.5rem;
+}
+
+.save-status {
+  min-width: 4.5rem;
+  padding-bottom: 0.55rem;
+  color: #a5a1ad;
+  font-size: 0.82rem;
+}
+
+.detail-section {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid #29262f;
+}
+
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 1rem 0;
+}
+
+.summary-grid span {
+  padding: 0.8rem;
+  border: 1px solid #29262f;
+  border-radius: 0.55rem;
+  color: #a5a1ad;
+}
+
+.summary-grid strong {
+  display: block;
+  color: #f4f2f7;
+  font-size: 1.25rem;
+}
+
+.entity-list,
+.milestone-list,
+.read-list,
+.activity-list {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0;
+  list-style: none;
+}
+
+.entity-list li,
+.milestone-list li,
+.read-list li,
+.activity-list li {
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  border: 1px solid #29262f;
+  border-radius: 0.55rem;
+}
+
+.milestone-list li.is-current {
+  border-color: #8b5cf6;
+}
+
+.entity-copy,
+.milestone-list li > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.entity-copy small,
+.milestone-list small,
+.activity-list time {
+  color: #a5a1ad;
+}
+
+.badge {
+  display: inline-flex;
+  width: fit-content;
+  margin-left: 0.35rem;
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  color: #c7b9f8;
+  background: #282039;
+  font-size: 0.7rem;
+}
+
+.notice,
+.context-note,
+.empty-state {
+  padding: 0.75rem;
+  border-left: 2px solid #8b5cf6;
+  color: #c9c3d0;
+  background: #17141e;
+}
+
+.notice--warning {
+  border-color: #c58a52;
+}
+
+.danger-button {
+  color: #f0b7b7;
+}
+
+.quiet-button {
+  color: #b9b2c3;
+  background: transparent;
+}
+
+h2 {
+  margin: 0.2rem 0;
+  font-size: clamp(1.6rem, 4vw, 2.7rem);
+}
+
+@media (max-width: 760px) {
+  .split-workspace,
+  .entity-form {
+    grid-template-columns: 1fr;
+  }
+  .navigator {
+    border-right: 0;
+    border-bottom: 1px solid #29262f;
+  }
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
 }
 .task-form {
   display: grid;

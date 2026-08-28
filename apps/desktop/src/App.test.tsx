@@ -1,76 +1,113 @@
 import "@testing-library/jest-dom/vitest";
 import { invoke } from "@tauri-apps/api/core";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App";
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn().mockResolvedValue([]),
-}));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+
+const area = {
+  id: "11111111-1111-4111-8111-111111111111",
+  name: "Persisted synthetic Area",
+  description: null,
+  archived_at: null,
+  created_at: "2030-01-01T00:00:00Z",
+  updated_at: "2030-01-01T00:00:00Z",
+  revision: 1,
+  trashed_at: null,
+};
+const task = {
+  id: "44444444-4444-4444-8444-444444444444",
+  title: "Persisted synthetic Task",
+  details: null,
+  state: "open",
+  source_kind: "human",
+  importance: "normal",
+  estimated_minutes: null,
+  progress_percent: null,
+  deadline: { kind: "none" },
+  project_id: null,
+  goal_id: null,
+  completion_evidence: null,
+  completed_at: null,
+  created_at: "2030-01-01T00:00:00Z",
+  updated_at: "2030-01-01T00:00:00Z",
+  revision: 1,
+  trashed_at: null,
+};
+
+function mockStartup(overrides: Record<string, unknown> = {}) {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command in overrides) return overrides[command];
+    if (command === "service_health") return { state: "ready" };
+    if (command === "list_tasks") return [];
+    if (command === "list_areas") return [];
+    if (command === "list_goals") return [];
+    if (command === "list_projects") return [];
+    throw new Error(`Unexpected command: ${command}`);
+  });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(invoke).mockResolvedValue([]);
 });
-
 afterEach(cleanup);
 
-test("shows the Task workspace through the narrow command path", async () => {
+test("shows the three milestone-local workspaces through narrow commands", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+  mockStartup();
   render(<App />);
-
   expect(
-    await screen.findByRole("heading", { name: "Tasks" }),
+    await screen.findByRole("heading", { name: "Areas & Goals" }),
   ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+  expect(screen.getByRole("heading", { name: "Tasks" })).toBeInTheDocument();
 });
 
 test("reports an unavailable development service without exposing diagnostics", async () => {
-  vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockRejectedValue(new Error("private diagnostic")),
+  );
   render(<App />);
-
   expect(
     await screen.findByText("Local service: unavailable"),
   ).toBeInTheDocument();
-  expect(screen.queryByText("offline")).not.toBeInTheDocument();
+  expect(screen.queryByText("private diagnostic")).not.toBeInTheDocument();
 });
 
-test("hydrates persisted Tasks before mounting the packaged workspace", async () => {
-  let resolveTasks: (tasks: unknown[]) => void = () => undefined;
-  const taskResponse = new Promise<unknown[]>((resolve) => {
-    resolveTasks = resolve;
+test("hydrates all persisted organizer data before mounting any workspace", async () => {
+  let resolveProjects: (value: unknown[]) => void = () => undefined;
+  const projectResponse = new Promise<unknown[]>((resolve) => {
+    resolveProjects = resolve;
   });
-
-  vi.mocked(invoke).mockImplementation(async (command) => {
-    if (command === "service_health") return { state: "ready" };
-    if (command === "list_tasks") return taskResponse;
-    throw new Error(`Unexpected command: ${command}`);
+  mockStartup({
+    list_tasks: [task],
+    list_areas: [area],
+    list_projects: projectResponse,
   });
-
   render(<App development={false} />);
-
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_tasks"));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("list_projects", { view: "all" }),
+  );
   expect(
-    screen.queryByRole("heading", { name: "Tasks" }),
+    screen.queryByRole("heading", { name: "Areas & Goals" }),
   ).not.toBeInTheDocument();
-
   await act(async () => {
-    resolveTasks([
-      {
-        id: "task-persisted-synthetic",
-        title: "Persisted synthetic Task",
-        details: null,
-        state: "open",
-        importance: "normal",
-        estimated_minutes: null,
-        progress_percent: null,
-        deadline: { kind: "none" },
-        revision: 1,
-        trashed_at: null,
-      },
-    ]);
-    await taskResponse;
+    resolveProjects([]);
+    await projectResponse;
   });
-
+  expect(await screen.findAllByText("Persisted synthetic Area")).toHaveLength(
+    2,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
   expect(
     await screen.findByText("Persisted synthetic Task"),
   ).toBeInTheDocument();

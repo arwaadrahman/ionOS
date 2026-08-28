@@ -1,45 +1,62 @@
 import { FormEvent, useState } from "react";
-import { Task, TaskInput, taskClient } from "./tasks";
+import { Goal, Project, asProductError } from "./organizer";
+import { ProductErrorNotice } from "./ProductErrorNotice";
+import {
+  Task,
+  TaskCreateInput,
+  TaskEditInput,
+  blankTaskInput,
+  taskClient,
+} from "./tasks";
 
-const blankInput = (): TaskInput => ({
-  title: "",
-  details: null,
-  importance: null,
-  estimated_minutes: null,
-  progress_percent: null,
-  deadline: { kind: "none" },
-  project_id: null,
-  goal_id: null,
-  completion_evidence: null,
-});
+type Props = {
+  initialTasks: Task[];
+  goals?: Goal[];
+  projects?: Project[];
+  onTasksChange?(tasks: Task[]): void;
+};
 
-export function TaskWorkspace({ initialTasks }: { initialTasks: Task[] }) {
+export function TaskWorkspace({
+  initialTasks,
+  goals = [],
+  projects = [],
+  onTasksChange,
+}: Props) {
   const [tasks, setTasks] = useState(initialTasks);
   const [trash, setTrash] = useState<Task[]>([]);
-  const [input, setInput] = useState<TaskInput>(blankInput);
+  const [input, setInput] = useState<TaskCreateInput>(blankTaskInput);
   const [editing, setEditing] = useState<Task | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ReturnType<typeof asProductError> | null>(
+    null,
+  );
+
+  function commit(next: Task[]) {
+    setTasks(next);
+    onTasksChange?.(next);
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!input.title.trim()) return;
     try {
+      const editInput: TaskEditInput = {
+        title: input.title,
+        details: input.details,
+        importance: input.importance,
+        estimated_minutes: input.estimated_minutes,
+        progress_percent: input.progress_percent,
+        deadline: input.deadline,
+        completion_evidence: input.completion_evidence,
+      };
       const result = editing
-        ? await taskClient.update(editing, input)
+        ? await taskClient.update(editing, editInput)
         : await taskClient.create(input);
-      setTasks((current) => [
-        result,
-        ...current.filter((task) => task.id !== result.id),
-      ]);
+      commit([result, ...tasks.filter((task) => task.id !== result.id)]);
       setEditing(null);
-      setInput(blankInput());
+      setInput(blankTaskInput());
       setError(null);
     } catch (reason) {
-      setError(
-        String(reason) === "conflict"
-          ? "Task changed elsewhere. Reload and try again."
-          : "Task action unavailable.",
-      );
+      setError(asProductError(reason));
     }
   }
 
@@ -50,37 +67,53 @@ export function TaskWorkspace({ initialTasks }: { initialTasks: Task[] }) {
     try {
       const result = await taskClient[action](task);
       if (action === "trash") {
-        setTasks((current) => current.filter((item) => item.id !== task.id));
+        commit(tasks.filter((item) => item.id !== task.id));
         setTrash((current) => [result, ...current]);
       } else if (action === "restore") {
         setTrash((current) => current.filter((item) => item.id !== task.id));
-        setTasks((current) => [result, ...current]);
-      } else {
-        setTasks((current) =>
-          current.map((item) => (item.id === result.id ? result : item)),
-        );
-      }
+        commit([result, ...tasks]);
+      } else
+        commit(tasks.map((item) => (item.id === result.id ? result : item)));
       setError(null);
-    } catch {
-      setError("Task action unavailable.");
+    } catch (reason) {
+      setError(asProductError(reason));
     }
   }
 
-  async function showTrash() {
+  async function relationships(
+    task: Task,
+    goal_id: string | null,
+    project_id: string | null,
+  ) {
     try {
-      setTrash(await taskClient.listTrash());
-    } catch {
-      setError("Trash is unavailable.");
+      const result = await taskClient.setRelationships(task, {
+        goal_id,
+        project_id,
+      });
+      commit(tasks.map((item) => (item.id === result.id ? result : item)));
+      setError(null);
+    } catch (reason) {
+      setError(asProductError(reason));
     }
   }
+
+  const assignableGoals = goals.filter(
+    (goal) => !goal.archived_at && !goal.trashed_at,
+  );
+  const assignableProjects = projects.filter(
+    (project) => project.state !== "archived" && !project.trashed_at,
+  );
 
   return (
-    <section className="task-workspace" aria-label="Tasks">
+    <section className="workspace" aria-label="Tasks">
       <header>
-        <p className="eyebrow">ION OS · PHASE 1A</p>
+        <p className="eyebrow">ION OS · PHASE 1B</p>
         <h1>Tasks</h1>
+        <p className="summary">
+          Canonical work, with explicit Goal and Project context.
+        </p>
       </header>
-      <form onSubmit={submit} className="task-form">
+      <form onSubmit={submit} className="entity-form">
         <label>
           Title
           <input
@@ -106,8 +139,7 @@ export function TaskWorkspace({ initialTasks }: { initialTasks: Task[] }) {
             onChange={(event) =>
               setInput({
                 ...input,
-                importance: (event.target.value ||
-                  null) as TaskInput["importance"],
+                importance: (event.target.value || null) as Task["importance"],
               })
             }
           >
@@ -117,63 +149,208 @@ export function TaskWorkspace({ initialTasks }: { initialTasks: Task[] }) {
             <option value="high">High</option>
           </select>
         </label>
-        <button type="submit">{editing ? "Save task" : "Create task"}</button>
-        {editing && (
-          <button
-            type="button"
-            onClick={() => {
-              setEditing(null);
-              setInput(blankInput());
-            }}
-          >
-            Cancel
-          </button>
+        {!editing && (
+          <>
+            <label>
+              Goal
+              <select
+                value={input.goal_id ?? ""}
+                onChange={(event) =>
+                  setInput({ ...input, goal_id: event.target.value || null })
+                }
+              >
+                <option value="">Unassigned</option>
+                {assignableGoals.map((goal) => (
+                  <option key={goal.id} value={goal.id}>
+                    {goal.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Project
+              <select
+                value={input.project_id ?? ""}
+                onChange={(event) =>
+                  setInput({ ...input, project_id: event.target.value || null })
+                }
+              >
+                <option value="">Unassigned</option>
+                {assignableProjects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
         )}
-      </form>
-      {error && <p role="alert">{error}</p>}
-      <ul className="task-list">
-        {tasks.map((task) => (
-          <li key={task.id}>
-            <strong>{task.title}</strong>
-            <span>{task.state}</span>
+        <div className="form-actions">
+          <button type="submit">{editing ? "Save task" : "Create task"}</button>
+          {editing && (
             <button
+              type="button"
               onClick={() => {
-                setEditing(task);
-                setInput({
-                  ...blankInput(),
-                  title: task.title,
-                  details: task.details,
-                  importance: task.importance,
-                  estimated_minutes: task.estimated_minutes,
-                  progress_percent: task.progress_percent,
-                  deadline: task.deadline,
-                });
+                setEditing(null);
+                setInput(blankTaskInput());
               }}
             >
-              Edit
+              Cancel
             </button>
-            {task.state === "completed" ? (
-              <button onClick={() => apply(task, "reopen")}>Reopen</button>
-            ) : (
-              <button onClick={() => apply(task, "complete")}>Complete</button>
-            )}
-            <button onClick={() => apply(task, "trash")}>Trash</button>
-          </li>
+          )}
+        </div>
+      </form>
+      <ProductErrorNotice error={error} />
+      <ul className="entity-list task-list">
+        {tasks.map((task) => (
+          <TaskRow
+            key={task.id}
+            task={task}
+            goals={goals}
+            projects={projects}
+            assignableGoals={assignableGoals}
+            assignableProjects={assignableProjects}
+            onEdit={() => {
+              setEditing(task);
+              setInput({
+                ...blankTaskInput(),
+                title: task.title,
+                details: task.details,
+                importance: task.importance,
+                estimated_minutes: task.estimated_minutes,
+                progress_percent: task.progress_percent,
+                deadline: task.deadline,
+                completion_evidence: task.completion_evidence,
+                goal_id: task.goal_id,
+                project_id: task.project_id,
+              });
+            }}
+            onApply={(action) => void apply(task, action)}
+            onRelationships={(goal, project) =>
+              void relationships(task, goal, project)
+            }
+          />
         ))}
       </ul>
-      <button type="button" onClick={showTrash}>
-        Show Trash
+      <button
+        type="button"
+        className="quiet-button"
+        onClick={() =>
+          void taskClient
+            .listTrash()
+            .then(setTrash)
+            .catch((reason) => setError(asProductError(reason)))
+        }
+      >
+        Show Task Trash
       </button>
       {trash.length > 0 && (
-        <ul className="task-list" aria-label="Trash">
+        <ul className="entity-list" aria-label="Trash">
           {trash.map((task) => (
             <li key={task.id}>
               <strong>{task.title}</strong>
-              <button onClick={() => apply(task, "restore")}>Restore</button>
+              <button onClick={() => void apply(task, "restore")}>
+                Restore
+              </button>
             </li>
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+function TaskRow({
+  task,
+  goals,
+  projects,
+  assignableGoals,
+  assignableProjects,
+  onEdit,
+  onApply,
+  onRelationships,
+}: {
+  task: Task;
+  goals: Goal[];
+  projects: Project[];
+  assignableGoals: Goal[];
+  assignableProjects: Project[];
+  onEdit(): void;
+  onApply(action: "complete" | "reopen" | "trash"): void;
+  onRelationships(goal: string | null, project: string | null): void;
+}) {
+  const [goalId, setGoalId] = useState(task.goal_id ?? "");
+  const [projectId, setProjectId] = useState(task.project_id ?? "");
+  const linkedGoal = goals.find((goal) => goal.id === task.goal_id);
+  const linkedProject = projects.find(
+    (project) => project.id === task.project_id,
+  );
+  return (
+    <li>
+      <div className="entity-copy">
+        <strong>{task.title}</strong>
+        <small>{task.state.replace("_", " ")}</small>
+        {linkedGoal?.archived_at && (
+          <span className="badge">Archived Goal: {linkedGoal.title}</span>
+        )}
+        {linkedProject?.state === "archived" && (
+          <span className="badge">Archived Project: {linkedProject.title}</span>
+        )}
+      </div>
+      <div className="relationship-controls">
+        <select
+          aria-label={`${task.title} Goal`}
+          value={goalId}
+          onChange={(event) => setGoalId(event.target.value)}
+        >
+          <option value="">No Goal</option>
+          {assignableGoals.map((goal) => (
+            <option key={goal.id} value={goal.id}>
+              {goal.title}
+            </option>
+          ))}
+          {linkedGoal &&
+            !assignableGoals.some((goal) => goal.id === linkedGoal.id) && (
+              <option value={linkedGoal.id}>
+                {linkedGoal.title} (archived)
+              </option>
+            )}
+        </select>
+        <select
+          aria-label={`${task.title} Project`}
+          value={projectId}
+          onChange={(event) => setProjectId(event.target.value)}
+        >
+          <option value="">No Project</option>
+          {assignableProjects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.title}
+            </option>
+          ))}
+          {linkedProject &&
+            !assignableProjects.some(
+              (project) => project.id === linkedProject.id,
+            ) && (
+              <option value={linkedProject.id}>
+                {linkedProject.title} (archived)
+              </option>
+            )}
+        </select>
+        <button
+          onClick={() => onRelationships(goalId || null, projectId || null)}
+        >
+          Save relationships
+        </button>
+      </div>
+      <div className="row-actions">
+        <button onClick={onEdit}>Edit</button>
+        {task.state === "completed" ? (
+          <button onClick={() => onApply("reopen")}>Reopen</button>
+        ) : (
+          <button onClick={() => onApply("complete")}>Complete</button>
+        )}
+        <button onClick={() => onApply("trash")}>Trash</button>
+      </div>
+    </li>
   );
 }

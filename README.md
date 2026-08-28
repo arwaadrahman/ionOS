@@ -7,18 +7,19 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 ## Status
 
 Current phase: **Phase 1 — Ion Core Personal Organizer**
-Current milestone: **Phase 1A — Core Organizer Domain & First Vertical Slice**
+Current milestone: **Phase 1B — Areas, Goals, Projects & Milestones**
 
-Phase 0 established the secure local runtime. Phase 1A adds the first canonical
-organizer schema and a minimal Task vertical slice while retaining the same
-Rust-owned authenticated production service boundary.
+Phase 0 established the secure local runtime. Phase 1A added the canonical
+organizer schema and Task vertical slice. Phase 1B makes Areas, Goals, Projects,
+Milestones, and Task relationships useful while retaining the same Rust-owned
+authenticated production service boundary.
 
 ## Start here
 
 - [Agent guide](AGENTS.md)
 - [Project context](docs/projectContext.md)
 - [Master Specification](docs/PRODUCT_SPEC.md)
-- [Phase 1A](docs/phases/PHASE_1A.md)
+- [Phase 1B](docs/phases/PHASE_1B.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decision index](docs/decisions/README.md)
 
@@ -51,7 +52,7 @@ sync --dev`; uv provisions the project's Python 3.13 runtime. Then use:
 
 On Apple Silicon macOS, regenerate the ignored packaged Python sidecar with
 `apps/api/packaging/build-sidecar.sh`, then run
-`npm --workspace @ion/desktop run tauri:build`. This produces a local unsigned
+`npm exec --workspace @ion/desktop -- tauri build`. This produces a local unsigned
 or ad-hoc-signed proof only; signing, notarization, installers, and updates are
 out of scope. The packaged service receives its launch credential over stdin
 and does not require end-user Python or uv.

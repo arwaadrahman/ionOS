@@ -10,7 +10,7 @@ from ion_api.db import create_database_engine
 from ion_api.migrations import upgrade_to_head
 from ion_api.schema import audit_events, goals, projects, tasks
 from ion_api.task_contracts import CreateTaskInput, DeadlineInput, UpdateTaskInput
-from ion_api.tasks import TaskConflictError, TaskService
+from ion_api.tasks import TaskAssignmentUnavailableError, TaskConflictError, TaskService
 
 
 @pytest.fixture
@@ -123,7 +123,7 @@ def test_task_relationships_are_independently_nullable_and_foreign_keys_enforced
         "33333333-3333-4333-8333-333333333333",
     )
     assert task.goal_id and task.project_id
-    with pytest.raises(IntegrityError):
+    with pytest.raises(TaskAssignmentUnavailableError):
         service.create(
             CreateTaskInput(title="Broken", goal_id="not-a-goal"),
             "44444444-4444-4444-8444-444444444444",

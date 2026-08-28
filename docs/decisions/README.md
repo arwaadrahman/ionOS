@@ -30,6 +30,7 @@ remain proposed until intentionally accepted.
 - [0009 Local-process authentication](0009-local-process-authentication.md)
 - [0010 Phase 1 organizer domain](0010-phase-1-organizer-domain.md)
 - [0011 Audit, Trash, and recovery foundation](0011-audit-trash-and-recovery-foundation.md)
+- [0012 Organizer lifecycle and containment](0012-organizer-lifecycle-and-containment.md)
 
 ## Decision Backlog
 

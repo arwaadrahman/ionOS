@@ -6,11 +6,15 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from ion_api.db import create_database_engine
 from ion_api.logging import configure_logging
 from ion_api.migrations import upgrade_to_head
+from ion_api.organizer import OrganizerService
+from ion_api.organizer_routes import organizer_router
 from ion_api.settings import Settings, load_settings
 from ion_api.task_routes import task_router
 from ion_api.tasks import TaskService
@@ -28,7 +32,18 @@ def _base_app(settings: Settings) -> FastAPI:
         yield
         logging.getLogger("ion").info("Ion local API stopped")
 
-    return FastAPI(title="Ion local API", version="0.0.0", lifespan=lifespan)
+    app = FastAPI(title="Ion local API", version="0.0.0", lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def safe_validation_error(_: Request, __: RequestValidationError):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": {"code": "validation", "blockers": []},
+            },
+        )
+
+    return app
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -50,9 +65,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    app.include_router(
-        task_router(TaskService(create_database_engine(active_settings.database_path)))
-    )
+    engine = create_database_engine(active_settings.database_path)
+    app.include_router(task_router(TaskService(engine)))
+    app.include_router(organizer_router(OrganizerService(engine)))
     return app
 
 
@@ -67,8 +82,6 @@ def create_production_app(settings: Settings, session_token: str) -> FastAPI:
     async def require_session(request: Request, call_next):
         supplied = request.headers.get(SESSION_HEADER, "")
         if not hmac.compare_digest(supplied, session_token):
-            from fastapi.responses import JSONResponse
-
             return JSONResponse(status_code=401, content={"detail": "unauthorized"})
         return await call_next(request)
 
@@ -76,9 +89,9 @@ def create_production_app(settings: Settings, session_token: str) -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    app.include_router(
-        task_router(TaskService(create_database_engine(settings.database_path)))
-    )
+    engine = create_database_engine(settings.database_path)
+    app.include_router(task_router(TaskService(engine)))
+    app.include_router(organizer_router(OrganizerService(engine)))
     return app
 
 

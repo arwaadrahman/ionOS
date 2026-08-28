@@ -61,9 +61,13 @@ class UpdateTaskInput(BaseModel):
     estimated_minutes: int | None = Field(default=None, ge=0)
     progress_percent: int | None = Field(default=None, ge=0, le=100)
     deadline: DeadlineInput | None = None
-    project_id: str | None = None
-    goal_id: str | None = None
     completion_evidence: str | None = None
+
+
+class SetTaskRelationshipsInput(BaseModel):
+    expected_revision: int = Field(ge=1)
+    goal_id: str | None = None
+    project_id: str | None = None
 
 
 class RevisionInput(BaseModel):
