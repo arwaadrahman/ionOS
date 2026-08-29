@@ -1,8 +1,8 @@
 # Task Router
 
-**Version:** 1.1.0  
-**Updated:** 2026-08-27  
-**Purpose:** Load the minimum correct context for a project task  
+**Version:** 1.1.1
+**Updated:** 2026-08-28
+**Purpose:** Load the minimum correct context for a project task
 **Catalog:** `projectReference.md`
 
 ## 0. Start here
@@ -11,7 +11,8 @@ This is the normal entry point. Do **not** read the full cross-project catalog o
 
 For each task:
 
-1. read the repository's `AGENTS.md` and project-local context;
+1. read the repository's `AGENTS.md`, project-local context, and
+   `docs/agent/executionPolicy.md`;
 2. classify the task using the route table;
 3. load only the required project documents and named catalog cards;
 4. state the selected route and `read_scope` in the working plan;
@@ -40,7 +41,7 @@ For Ion, read the entire Master Specification when beginning a phase, changing a
 | --- | --- | --- | --- | --- |
 | `ROUTE-ARCH` | New subsystem, data ownership, boundary, runtime, major dependency | Canonical spec, architecture docs, relevant ADRs | `MANUS` only if agent architecture is involved | Options, tradeoffs, recommendation, ADR proposal; no silent architecture change |
 | `ROUTE-PHASE` | Start or revise a project phase/milestone | Full phase specification and current status | Only cards directly named by phase requirements | Milestones, acceptance criteria, agent prompt, explicit exclusions |
-| `ROUTE-AGENT` | Task routing, skills, context loading, long-running agent behavior | Agent rules, data/security model, authorization policy | `MANUS`, applicable process card | Deterministic route, data scope, authority, output schema, audit/failure behavior |
+| `ROUTE-AGENT` | Task routing, skills, context loading, long-running agent behavior | Agent rules, execution policy, data/security model, authorization policy | `MANUS`, applicable process card | Deterministic route, data scope, authority, output schema, audit/failure behavior |
 | `ROUTE-DEPENDENCY` | Add or replace a major package/tool | Stack docs, lockfile/package manifest, relevant ADR | Proposed resource card | Need, overlap, license, maintenance, size/runtime cost, security, removal plan; approval before addition |
 | `ROUTE-REFERENCE-UPDATE` | Add, amend, verify, supersede, deprecate, retire, or rename a cross-project resource | Current `projectReference.md`, relevant route rows, known project selections if affected | Target cards plus their proposed replacements | Change classification, current-source verification, conflict/impact summary, coordinated versioned update and changelog |
 | `ROUTE-LEARNING` | Understand a subsystem by building a small version | Learning goal and production boundary | `BUILD-YOUR-OWN-X` | Isolated spike plan and lessons; no automatic production adoption |
@@ -252,6 +253,11 @@ dependencies, or selected-reference snapshots.
 - Pin project-local reference selections to the catalog version used; review updates deliberately instead of syncing automatically.
 
 ## 10. Changelog
+
+### 1.1.1 — 2026-08-28
+
+- Required Ion implementation and verification agents to load the durable
+  execution policy.
 
 ### 1.1.0 — 2026-08-27
 
