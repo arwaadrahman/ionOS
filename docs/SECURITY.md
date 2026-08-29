@@ -27,6 +27,13 @@ every endpoint with constant-time comparison, and binds its retained socket to
 `127.0.0.1:0`. The renderer receives neither secret nor port, and production
 does not enable CORS. No persistent credential store is introduced.
 
+Phase 1G preserves that boundary while adding a Rust-owned native tray and a
+fixed quick-capture WebView. The capture surface can invoke only existing Tauri
+product commands and bounded local events; it receives no sidecar address,
+credential, generic request, filesystem, shell, or process capability. A
+process-held advisory lock in Application Support contains no secret or user
+data and prevents a second desktop process from starting another sidecar.
+
 ## Phase 0B local development details
 
 The local service's development defaults are an explicitly configured loopback

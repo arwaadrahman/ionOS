@@ -126,6 +126,21 @@ Recovery is contextual through the existing command palette, preserving the
 Home-first five-destination primary navigation. Generic Undo, event sourcing,
 snapshots, version history, automatic purge, and cascades remain deferred.
 
+## Phase 1G macOS application lifecycle
+
+Phase 1G enables Tauri's built-in tray support and keeps all fixed menu actions,
+window visibility/focus, macOS reactivation, explicit Quit, and single-instance
+enforcement in Rust. A process-held advisory lock in Application Support is
+acquired before sidecar startup, so a forced second desktop process cannot own
+a duplicate backend. Closing either configured window hides it; Quit retains
+the existing bounded sidecar shutdown path.
+
+The fixed quick-capture WebView creates one canonical unlinked Task through the
+existing `create_task` command and uses only bounded local Tauri events for
+secondary main-window freshness. It receives no generic HTTP, filesystem,
+shell, process, port, or credential authority. No daemon, launch agent, schema,
+service endpoint, or data owner is added.
+
 ## TBD
 
 See ADRs [0004](decisions/0004-macos-local-trust-boundary.md),

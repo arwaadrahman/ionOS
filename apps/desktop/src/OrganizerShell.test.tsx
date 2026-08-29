@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   act,
   cleanup,
@@ -16,6 +17,9 @@ import { StartupData } from "./startup";
 import { TodayOutput } from "./today";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => undefined),
+}));
 const time = "2030-01-01T00:00:00Z";
 const area: Area = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -108,6 +112,21 @@ beforeEach(() => {
   });
 });
 afterEach(cleanup);
+
+test("accepts only fixed Home and Today navigation events", async () => {
+  render(<OrganizerShell initialData={data} />);
+  await waitFor(() => expect(listen).toHaveBeenCalledTimes(2));
+  const navigationCall = vi
+    .mocked(listen)
+    .mock.calls.find(([event]) => event === "ion:navigate");
+  expect(navigationCall).toBeDefined();
+  const handler = navigationCall?.[1];
+
+  act(() => handler?.({ payload: "today" } as never));
+  expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+  act(() => handler?.({ payload: "arbitrary" } as never));
+  expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+});
 
 test("keeps an active Goal visible with archived-parent context", async () => {
   render(

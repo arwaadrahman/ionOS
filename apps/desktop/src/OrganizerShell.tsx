@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { AreasGoalsWorkspace } from "./AreasGoalsWorkspace";
 import { CommandPalette } from "./CommandPalette";
 import { HomeWorkspace } from "./HomeWorkspace";
@@ -15,6 +16,7 @@ import { RecoveryWorkspace } from "./RecoveryWorkspace";
 import { StartupData, loadStartupData } from "./startup";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { TodayWorkspace } from "./TodayWorkspace";
+import { Task } from "./tasks";
 import {
   currentTodayContext,
   millisecondsUntilNextMidnight,
@@ -44,6 +46,37 @@ export function OrganizerShell({
   const [homeProcessing, setHomeProcessing] = useState(false);
   const [homeStale, setHomeStale] = useState(false);
   const commandItems = useMemo(() => buildCommandItems(home), [home]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisteners: UnlistenFn[] = [];
+    void Promise.all([
+      listen<string>("ion:navigate", ({ payload }) => {
+        if (payload !== "home" && payload !== "today") return;
+        setNavigationTarget(null);
+        setWorkspace(payload);
+        if (payload === "home") setHomeDirty(true);
+      }),
+      listen<Task>("ion:task-created", ({ payload }) => {
+        setTasks((current) => {
+          const withoutDuplicate = current.filter(
+            (task) => task.id !== payload.id,
+          );
+          return [...withoutDuplicate, payload];
+        });
+        setHomeDirty(true);
+      }),
+    ])
+      .then((registered) => {
+        if (disposed) registered.forEach((unlisten) => unlisten());
+        else unlisteners = registered;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, []);
 
   const refreshHome = useCallback(
     async (context = todayContextProvider()) => {

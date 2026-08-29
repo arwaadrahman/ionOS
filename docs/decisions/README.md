@@ -35,6 +35,7 @@ remain proposed until intentionally accepted.
 - [0014 Ion Core rendering and Phase 1D Home boundary](0014-ion-core-rendering-and-phase-1d-home-boundary.md)
 - [0015 Deterministic command-search projection](0015-deterministic-command-search-projection.md)
 - [0016 Recovery and history projection](0016-recovery-and-history-projection.md)
+- [0017 macOS menu-bar and instance lifecycle](0017-macos-menu-bar-and-instance-lifecycle.md)
 
 ## Decision Backlog
 

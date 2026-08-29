@@ -29,3 +29,7 @@ All notable repository changes are documented here.
 - Phase 1F bounded Recovery and recent direct-human history projection over
   existing organizer Trash/audit metadata, with explicit entity-specific
   restore and no generic Undo, snapshot, migration, dependency, or cascade.
+- Phase 1G native macOS menu-bar actions, minimal canonical Task quick capture,
+  close-to-hide/reactivation lifecycle, and a process-held guard against
+  duplicate desktop/sidecar instances, with no daemon, migration, or new
+  dependency.

@@ -1,7 +1,10 @@
+mod desktop;
 mod home;
 mod organizer;
 mod service;
 mod today;
+
+use tauri::Manager;
 
 pub fn run() {
     let app = tauri::Builder::default()
@@ -69,6 +72,12 @@ pub fn run() {
             today::reorder_today_tasks,
         ])
         .setup(|app| {
+            let Some(instance_guard) = desktop::acquire_instance_guard(app)? else {
+                app.handle().exit(0);
+                return Ok(());
+            };
+            app.manage(instance_guard);
+            desktop::setup(app)?;
             if !cfg!(debug_assertions) {
                 service::start_nonfatal(app.handle());
             }
@@ -76,9 +85,18 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building Ion desktop application");
-    app.run(|app, event| {
-        if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
-            service::request_shutdown(app);
+    app.run(|app, event| match event {
+        tauri::RunEvent::ExitRequested { .. } => service::request_shutdown(app),
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == "main" || label == "quick-capture" => {
+            api.prevent_close();
+            desktop::hide_window(app, &label);
         }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => desktop::show_main(app),
+        _ => {}
     });
 }

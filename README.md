@@ -7,7 +7,7 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 ## Status
 
 Current phase: **Phase 1 — Ion Core Personal Organizer**
-Current milestone: **Phase 1F — Recovery & History UX**
+Current milestone: **Phase 1G — macOS Menu Bar + Quick Capture**
 
 Phase 0 established the secure local runtime. Phase 1A added the canonical
 organizer schema and Task vertical slice. Phase 1B makes Areas, Goals, Projects,
@@ -22,13 +22,16 @@ without a stored index, new dependency, or trust-boundary change.
 Phase 1F adds a bounded contextual Recovery workspace for current Trash and
 concise direct-human organizer history, using only existing entity-specific
 restore operations without Undo, snapshots, or cascades.
+Phase 1G adds a native fixed menu-bar presence, minimal canonical Task capture,
+close-to-hide/Dock reactivation behavior, and one desktop/sidecar process owner
+without a daemon, migration, or new dependency.
 
 ## Start here
 
 - [Agent guide](AGENTS.md)
 - [Project context](docs/projectContext.md)
 - [Master Specification](docs/PRODUCT_SPEC.md)
-- [Phase 1F](docs/phases/PHASE_1F.md)
+- [Phase 1G](docs/phases/PHASE_1G.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decision index](docs/decisions/README.md)
 

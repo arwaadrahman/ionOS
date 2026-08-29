@@ -10,6 +10,66 @@ body {
   min-height: 100vh;
 }
 
+.quick-capture-shell {
+  box-sizing: border-box;
+  min-height: 100vh;
+  padding: 1.4rem;
+  background:
+    radial-gradient(circle at 75% 5%, rgb(139 92 246 / 16%), transparent 45%),
+    #0a0a0c;
+}
+
+.quick-capture-shell .eyebrow {
+  margin: 0;
+  color: #91899c;
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+}
+
+.quick-capture-shell h1 {
+  margin: 0.35rem 0 1.1rem;
+  font-size: 1.35rem;
+  font-weight: 600;
+}
+
+.quick-capture-shell form,
+.quick-capture-shell label {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.quick-capture-shell label {
+  color: #b5afbc;
+  font-size: 0.78rem;
+}
+
+.quick-capture-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.55rem;
+}
+
+.quick-capture-row input,
+.quick-capture-row button {
+  padding: 0.7rem 0.8rem;
+}
+
+.quick-capture-row button {
+  border-color: #6d49bc;
+  background: #4d2c88;
+}
+
+.capture-feedback {
+  min-height: 1rem;
+  margin: 0.7rem 0 0;
+  color: #8f8998;
+  font-size: 0.75rem;
+}
+
+.capture-feedback--failed {
+  color: #e9a5ad;
+}
+
 button,
 input,
 textarea,

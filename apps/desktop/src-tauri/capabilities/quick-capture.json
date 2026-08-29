@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "quick-capture",
+  "description": "Least-privilege capability for the fixed Task capture window.",
+  "windows": ["quick-capture"],
+  "permissions": ["core:event:allow-emit-to", "core:window:allow-hide"]
+}

@@ -48,7 +48,7 @@ export function App({ development = import.meta.env.DEV }: AppProps = {}) {
   if (health === "ready" && data) return <OrganizerShell initialData={data} />;
   return (
     <main className="engineering-shell">
-      <p className="eyebrow">ION OS · PHASE 1E</p>
+      <p className="eyebrow">ION OS · PHASE 1G</p>
       <h1>
         {health === "checking"
           ? "Preparing your workspace"
