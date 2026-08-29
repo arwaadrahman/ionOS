@@ -347,3 +347,64 @@ test("refreshes Home after a confirmed canonical Task mutation", async () => {
     expect(invoke).toHaveBeenCalledWith("get_home", expect.anything()),
   );
 });
+
+test("opens Command-K search and navigates directly to a canonical record", async () => {
+  const searchableHome: HomeOutput = {
+    ...home,
+    core: {
+      nodes: [
+        {
+          id: project.id,
+          entity_type: "project",
+          label: project.title,
+          lifecycle: "active",
+          today_role: null,
+          attention_reason: null,
+        },
+      ],
+      edges: [],
+    },
+  };
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_home") return searchableHome;
+    if (command === "get_project_detail") {
+      return {
+        project,
+        summary: {
+          milestone_total: 0,
+          milestone_achieved: 0,
+          task_total: 0,
+          task_completed: 0,
+        },
+        milestones: [],
+        current_milestone: null,
+        tasks: [],
+        next_actions: [],
+        recent_activity: [],
+      };
+    }
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  render(<OrganizerShell initialData={{ ...data, home: searchableHome }} />);
+
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("get_home", expect.anything()),
+  );
+  fireEvent.change(
+    screen.getByRole("combobox", { name: "Search commands and records" }),
+    { target: { value: "Synthetic Project" } },
+  );
+  fireEvent.click(
+    await screen.findByRole("option", { name: /Synthetic Project/ }),
+  );
+
+  expect(
+    await screen.findByRole("heading", { name: "Projects" }),
+  ).toBeInTheDocument();
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("get_project_detail", {
+      projectId: project.id,
+    }),
+  );
+});

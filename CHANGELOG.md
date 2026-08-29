@@ -23,3 +23,6 @@ All notable repository changes are documented here.
 - Phase 1D read-only Home projection, deterministic structural Ion Core, raw
   Three.js WebGL2 renderer with strict lifecycle/fallback behavior, Home-first
   navigation, and compact Today-derived Focus/Attention/Upcoming summaries.
+- Phase 1E deterministic local `⌘K` command search over current destinations
+  and canonical Home/Core records, with stable lexical ranking and direct
+  navigation but no stored index, dependency, migration, or AI.

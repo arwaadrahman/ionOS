@@ -33,6 +33,7 @@ remain proposed until intentionally accepted.
 - [0012 Organizer lifecycle and containment](0012-organizer-lifecycle-and-containment.md)
 - [0013 Today planning and pre-Calendar boundary](0013-today-planning-and-pre-calendar-boundary.md)
 - [0014 Ion Core rendering and Phase 1D Home boundary](0014-ion-core-rendering-and-phase-1d-home-boundary.md)
+- [0015 Deterministic command-search projection](0015-deterministic-command-search-projection.md)
 
 ## Decision Backlog
 

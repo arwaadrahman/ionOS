@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 1D foundation.** The organizer schema begins in
+**Phase 1E foundation.** The organizer schema begins in
 `0002_organizer_foundation`; `0003_milestone_ordering` adds canonical
 owner-scoped positions to Goal and Project Milestones, and
 `0004_today_planning` adds human day-planning intent over canonical Tasks.
@@ -46,6 +46,9 @@ owner-scoped positions to Goal and Project Milestones, and
 - The Core includes only untrashed Areas, Goals, both owner-specific Milestone
   types, Projects, and Tasks. Its edges are the existing direct `goal→area`,
   `project→goal`, Milestone→owner, and Task→Goal/Project foreign keys.
+- Phase 1E adds no migration or stored index. Command items, normalized search
+  text, ranking scores, query state, and selection are ephemeral desktop
+  projections over the existing Home/Core DTO and current destinations.
 
 See [Architecture](ARCHITECTURE.md) and ADR
 [0001](decisions/0001-local-first-data-ownership.md).

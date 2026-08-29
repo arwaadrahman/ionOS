@@ -1,18 +1,9 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import {
-  CoreNode,
-  HomeAttentionSummary,
-  HomeOutput,
-  HomeTaskSummary,
-} from "./home";
+import { HomeAttentionSummary, HomeOutput, HomeTaskSummary } from "./home";
 import { IonCoreState } from "./ion-core/renderer";
+import { NavigationTarget, destinationForCoreNode } from "./navigation";
 
 const CoreCanvas = lazy(() => import("./ion-core/CoreCanvas"));
-
-export type HomeNavigationTarget =
-  | { workspace: "areas"; entityType: "area" | "goal"; id: string }
-  | { workspace: "projects"; entityType: "project"; id: string }
-  | { workspace: "tasks"; entityType: "task"; id: string };
 
 function deadlineLabel(task: HomeTaskSummary) {
   if (task.deadline.kind === "date") return `Due ${task.deadline.date}`;
@@ -58,33 +49,6 @@ function StaticCore({ home }: { home: HomeOutput }) {
   );
 }
 
-function destinationFor(
-  home: HomeOutput,
-  node: CoreNode,
-): HomeNavigationTarget | null {
-  if (node.entity_type === "area" || node.entity_type === "goal") {
-    return { workspace: "areas", entityType: node.entity_type, id: node.id };
-  }
-  if (node.entity_type === "project") {
-    return { workspace: "projects", entityType: "project", id: node.id };
-  }
-  if (node.entity_type === "task") {
-    return { workspace: "tasks", entityType: "task", id: node.id };
-  }
-  const relationship =
-    node.entity_type === "goal_milestone"
-      ? "goal_milestone_goal"
-      : "project_milestone_project";
-  const owner = home.core.edges.find(
-    (edge) =>
-      edge.source_id === node.id && edge.relationship_type === relationship,
-  );
-  if (!owner) return null;
-  return node.entity_type === "goal_milestone"
-    ? { workspace: "areas", entityType: "goal", id: owner.target_id }
-    : { workspace: "projects", entityType: "project", id: owner.target_id };
-}
-
 export function HomeWorkspace({
   home,
   processing,
@@ -96,7 +60,7 @@ export function HomeWorkspace({
   processing: boolean;
   stale: boolean;
   onRetry: () => void;
-  onNavigate: (target: HomeNavigationTarget) => void;
+  onNavigate: (target: NavigationTarget) => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = useMemo(
@@ -111,7 +75,7 @@ export function HomeWorkspace({
     : home.needs_attention.length > 0
       ? "attention"
       : "idle";
-  const destination = selected ? destinationFor(home, selected) : null;
+  const destination = selected ? destinationForCoreNode(home, selected) : null;
 
   return (
     <section className="home-workspace" aria-labelledby="home-heading">

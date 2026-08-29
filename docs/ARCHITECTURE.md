@@ -98,6 +98,19 @@ lifecycle, while React owns product selection, navigation, summary cards, and
 fallback UI. No graph/layout state is stored. React Three Fiber, force/physics
 layout, inferred edges, Explore modes, and AI remain outside this boundary.
 
+## Phase 1E deterministic command-search path
+
+Phase 1E builds one ephemeral desktop command list from the five implemented
+destinations and the existing authenticated Home/Core projection. Opening the
+palette refreshes through fixed `get_home`; the WebView receives the same DTO
+and gains no generic request, service address, credential, filesystem, or shell
+capability.
+
+Unicode-normalized lexical ranking and stable tie-breaking run locally in
+TypeScript. The database, Python service, and Rust command surface gain no
+search table, index, endpoint, or mutation. SQLite FTS, persisted recents,
+semantic/vector retrieval, QMD, conversational search, and AI remain deferred.
+
 ## TBD
 
 See ADRs [0004](decisions/0004-macos-local-trust-boundary.md),

@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AreasGoalsWorkspace } from "./AreasGoalsWorkspace";
-import { HomeNavigationTarget, HomeWorkspace } from "./HomeWorkspace";
+import { CommandPalette } from "./CommandPalette";
+import { HomeWorkspace } from "./HomeWorkspace";
+import { CommandItem, buildCommandItems } from "./commandSearch";
 import { homeClient } from "./home";
+import {
+  NavigationTarget,
+  Workspace,
+  workspaceLabel,
+  workspaces,
+} from "./navigation";
 import { ProjectsWorkspace } from "./ProjectsWorkspace";
 import { StartupData, loadStartupData } from "./startup";
 import { TaskWorkspace } from "./TaskWorkspace";
@@ -13,8 +21,6 @@ import {
   todayClient,
 } from "./today";
 
-type Workspace = "home" | "today" | "areas" | "projects" | "tasks";
-
 export function OrganizerShell({
   initialData,
   todayContextProvider = currentTodayContext,
@@ -24,7 +30,8 @@ export function OrganizerShell({
 }) {
   const [workspace, setWorkspace] = useState<Workspace>("home");
   const [navigationTarget, setNavigationTarget] =
-    useState<HomeNavigationTarget | null>(null);
+    useState<NavigationTarget | null>(null);
+  const [commandOpen, setCommandOpen] = useState(false);
   const [tasks, setTasks] = useState(initialData.tasks);
   const [areas, setAreas] = useState(initialData.areas);
   const [goals, setGoals] = useState(initialData.goals);
@@ -35,6 +42,7 @@ export function OrganizerShell({
   const [homeDirty, setHomeDirty] = useState(false);
   const [homeProcessing, setHomeProcessing] = useState(false);
   const [homeStale, setHomeStale] = useState(false);
+  const commandItems = useMemo(() => buildCommandItems(home), [home]);
 
   const refreshHome = useCallback(
     async (context = todayContextProvider()) => {
@@ -64,6 +72,10 @@ export function OrganizerShell({
   useEffect(() => {
     if (workspace === "home" && homeDirty) void refreshHome();
   }, [homeDirty, refreshHome, workspace]);
+
+  useEffect(() => {
+    if (commandOpen) void refreshHome();
+  }, [commandOpen, refreshHome]);
 
   useEffect(() => {
     let timeout = window.setTimeout(() => undefined, 0);
@@ -118,7 +130,7 @@ export function OrganizerShell({
     setHomeDirty(true);
   }
 
-  function navigate(target: HomeNavigationTarget) {
+  function navigate(target: NavigationTarget) {
     setNavigationTarget(target);
     setWorkspace(target.workspace);
   }
@@ -129,23 +141,42 @@ export function OrganizerShell({
     setWorkspace(next);
   }
 
+  function executeCommand(item: CommandItem) {
+    if (item.action.type === "workspace") {
+      chooseWorkspace(item.action.workspace);
+      return;
+    }
+    navigate(item.action.target);
+  }
+
   return (
     <main className="app-shell">
       <nav className="workspace-switcher" aria-label="Ion workspaces">
-        {(["home", "today", "areas", "projects", "tasks"] as const).map(
-          (item) => (
-            <button
-              key={item}
-              className={workspace === item ? "is-active" : ""}
-              onClick={() => chooseWorkspace(item)}
-            >
-              {item === "areas"
-                ? "Areas & Goals"
-                : item.charAt(0).toUpperCase() + item.slice(1)}
-            </button>
-          ),
-        )}
+        {workspaces.map((item) => (
+          <button
+            key={item}
+            className={workspace === item ? "is-active" : ""}
+            onClick={() => chooseWorkspace(item)}
+          >
+            {workspaceLabel(item)}
+          </button>
+        ))}
+        <button
+          className="command-trigger"
+          type="button"
+          aria-keyshortcuts="Meta+K"
+          onClick={() => setCommandOpen(true)}
+        >
+          Search <kbd>⌘K</kbd>
+        </button>
       </nav>
+      <CommandPalette
+        items={commandItems}
+        open={commandOpen}
+        stale={homeStale}
+        onOpenChange={setCommandOpen}
+        onExecute={executeCommand}
+      />
       {workspace === "home" ? (
         <HomeWorkspace
           home={home}

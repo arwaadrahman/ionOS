@@ -200,6 +200,165 @@ select:focus-visible {
   background: rgb(10 10 12 / 94%);
 }
 
+.command-trigger {
+  display: inline-flex;
+  gap: 0.55rem;
+  align-items: center;
+  margin-left: auto;
+  color: #d4ceda;
+}
+
+.command-trigger kbd,
+.command-header kbd {
+  padding: 0.1rem 0.35rem;
+  border: 1px solid #3a3542;
+  border-radius: 0.3rem;
+  color: #a9a2b3;
+  background: #0d0d11;
+  font: inherit;
+  font-size: 0.72rem;
+}
+
+.command-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+  padding: 11vh 1.25rem 1.25rem;
+  background: rgb(3 3 6 / 76%);
+}
+
+.command-palette {
+  display: grid;
+  width: min(42rem, 100%);
+  max-height: 76vh;
+  overflow: hidden;
+  border: 1px solid #3d3748;
+  border-radius: 0.9rem;
+  background: rgb(18 17 23 / 96%);
+  box-shadow:
+    0 1.75rem 5rem rgb(0 0 0 / 55%),
+    0 0 3rem rgb(139 92 246 / 8%);
+  backdrop-filter: blur(18px);
+}
+
+.command-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.05rem 0.8rem;
+}
+
+.command-header h2,
+.command-header p {
+  margin: 0;
+}
+
+.command-header h2 {
+  margin-top: 0.18rem;
+  font-size: 1.05rem;
+}
+
+.command-header-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.command-close {
+  padding: 0.28rem 0.48rem;
+  color: #aaa3b3;
+  font-size: 0.72rem;
+  background: #0d0d11;
+}
+
+.command-input {
+  margin: 0 1.05rem 0.8rem;
+  padding: 0.8rem 0.9rem;
+  border-color: #40394b;
+  border-radius: 0.55rem;
+  background: #0c0c10;
+  font-size: 1rem;
+}
+
+.command-stale,
+.command-empty {
+  margin: 0;
+  padding: 0.7rem 1.05rem;
+  color: #afa7b8;
+  font-size: 0.8rem;
+}
+
+.command-stale {
+  border-top: 1px solid #2d2934;
+  border-bottom: 1px solid #2d2934;
+  color: #d7a4a7;
+}
+
+.command-results {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0;
+  padding: 0.35rem 0.55rem;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.command-results button {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.7rem 0.75rem;
+  border-color: transparent;
+  text-align: left;
+  background: transparent;
+}
+
+.command-results button.is-selected {
+  border-color: rgb(139 92 246 / 38%);
+  background: #211a31;
+}
+
+.command-results button > span:first-child {
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+}
+
+.command-results strong,
+.command-results small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-results small,
+.command-open-label,
+.command-footer {
+  color: #9992a4;
+  font-size: 0.76rem;
+}
+
+.command-open-label {
+  flex: 0 0 auto;
+  opacity: 0;
+}
+
+.command-results button.is-selected .command-open-label {
+  opacity: 1;
+}
+
+.command-footer {
+  display: flex;
+  gap: 1rem;
+  padding: 0.65rem 1.05rem;
+  border-top: 1px solid #2d2934;
+  background: rgb(10 10 14 / 62%);
+}
+
 .workspace {
   max-width: 86rem;
   margin: 0 auto;
@@ -797,6 +956,12 @@ h1 {
 @media (max-width: 760px) {
   .workspace-switcher {
     overflow-x: auto;
+  }
+  .command-trigger {
+    margin-left: 0;
+  }
+  .command-backdrop {
+    padding-top: 4rem;
   }
   .home-heading-row,
   .core-selection {
