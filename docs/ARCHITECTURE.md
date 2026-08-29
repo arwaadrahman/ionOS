@@ -141,6 +141,40 @@ secondary main-window freshness. It receives no generic HTTP, filesystem,
 shell, process, port, or credential authority. No daemon, launch agent, schema,
 service endpoint, or data owner is added.
 
+## Phase 2A Google Calendar read-sync path
+
+Rust owns the complete Google credential and network boundary: Desktop OAuth
+authorization URL construction, S256 PKCE and state, the ephemeral
+`127.0.0.1` callback listener, system-browser launch, authorization-code
+exchange, macOS Keychain refresh-token access, memory-only access tokens,
+refresh, CalendarList discovery, Events pagination, retry/backoff, revocation,
+and all Google HTTPS. Python and React receive no Google token, OAuth code, or
+PKCE verifier. Real client configuration lives outside the repository in the
+Application Support path shown by the setup UI.
+
+Rust sends only sanitized CalendarList/Event DTOs through fixed authenticated
+local routes. Python owns account/calendar metadata, the independent
+enabled-in-Ion selection, sync generations and tokens, duplicate-safe
+reconciliation, canonical CalendarBlock transactions, and compact automated
+audit records. The renderer receives only fixed Tauri commands and safe status
+DTOs; it receives neither the Keychain locator nor any generic provider,
+network, service, filesystem, shell, or process capability.
+
+Each enabled calendar starts with an unexpanded, deletion-inclusive full sync,
+then reuses a per-calendar incremental token. One generation spans every
+provider page. HTTP 410 abandons the incremental generation and begins a safe
+full generation; full completion cancels unseen provider records without
+deleting their Ion-only metadata. Provider event ID is the reconciliation key;
+iCalUID remains separate. Recurrence stores masters and explicit exceptions,
+while generated occurrences remain derived.
+
+Startup hydration reads cached canonical blocks without Google. A connected
+account then gets one background-in-process sync attempt; later foreground
+attempts are rate-bounded to five minutes and manual sync is explicit. This
+adds no daemon, launch agent, webhook, cloud relay, LAN/mobile boundary, Google
+event write, generic integration framework, or Python provider SDK. See ADR
+[0018](decisions/0018-google-calendar-read-sync-foundation.md).
+
 ## TBD
 
 See ADRs [0004](decisions/0004-macos-local-trust-boundary.md),

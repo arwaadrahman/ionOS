@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { AreasGoalsWorkspace } from "./AreasGoalsWorkspace";
 import { CommandPalette } from "./CommandPalette";
+import { CalendarWorkspace } from "./CalendarWorkspace";
+import { googleCalendarClient } from "./calendar";
 import { HomeWorkspace } from "./HomeWorkspace";
 import { CommandItem, buildCommandItems } from "./commandSearch";
 import { homeClient } from "./home";
@@ -41,10 +43,20 @@ export function OrganizerShell({
   const [projects, setProjects] = useState(initialData.projects);
   const [today, setToday] = useState(initialData.today);
   const [home, setHome] = useState(initialData.home);
+  const [calendar, setCalendar] = useState(initialData.calendar);
   const [todayContext, setTodayContext] = useState(initialData.todayContext);
   const [homeDirty, setHomeDirty] = useState(false);
   const [homeProcessing, setHomeProcessing] = useState(false);
   const [homeStale, setHomeStale] = useState(false);
+  const connectedAccountKey = useMemo(
+    () =>
+      calendar.accounts
+        .filter((account) => account.auth_state === "connected")
+        .map((account) => account.id)
+        .sort()
+        .join(","),
+    [calendar.accounts],
+  );
   const commandItems = useMemo(() => buildCommandItems(home), [home]);
 
   useEffect(() => {
@@ -77,6 +89,34 @@ export function OrganizerShell({
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, []);
+
+  useEffect(() => {
+    if (!connectedAccountKey) return;
+    let disposed = false;
+    let lastAttempt = 0;
+    const sync = async () => {
+      const now = Date.now();
+      if (now - lastAttempt < 5 * 60 * 1000) return;
+      lastAttempt = now;
+      try {
+        const output = await googleCalendarClient.sync();
+        if (!disposed) setCalendar(output);
+      } catch {
+        // Cached canonical blocks remain visible; persisted sync state reports failure.
+      }
+    };
+    const foreground = () => {
+      if (document.visibilityState === "visible") void sync();
+    };
+    void sync();
+    window.addEventListener("focus", foreground);
+    document.addEventListener("visibilitychange", foreground);
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", foreground);
+      document.removeEventListener("visibilitychange", foreground);
+    };
+  }, [connectedAccountKey]);
 
   const refreshHome = useCallback(
     async (context = todayContextProvider()) => {
@@ -155,6 +195,7 @@ export function OrganizerShell({
     setProjects(data.projects);
     setToday(data.today);
     setHome(data.home);
+    setCalendar(data.calendar);
     setTodayContext(data.todayContext);
     setHomeDirty(false);
     setHomeStale(false);
@@ -242,6 +283,9 @@ export function OrganizerShell({
           }}
           onDayChanged={refreshToday}
         />
+      ) : null}
+      {workspace === "calendar" ? (
+        <CalendarWorkspace status={calendar} onStatus={setCalendar} />
       ) : null}
       {workspace === "areas" ? (
         <AreasGoalsWorkspace

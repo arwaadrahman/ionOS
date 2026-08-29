@@ -15,6 +15,7 @@ import { HomeOutput } from "./home";
 import { Area, Goal, GoalDetail, Project } from "./organizer";
 import { StartupData } from "./startup";
 import { TodayOutput } from "./today";
+import { emptyCalendarStatus } from "./calendar";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({
@@ -97,6 +98,7 @@ const data: StartupData = {
   tasks: [],
   today,
   home,
+  calendar: emptyCalendarStatus(),
   todayContext: {
     planning_date: today.planning_date,
     timezone: today.timezone,

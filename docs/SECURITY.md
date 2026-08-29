@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted invariants; implementation deferred.**
+**Accepted invariants with Phase 2A Google credential implementation.**
 
 - Ion is local-first. The public repository contains no real personal Ion data.
 - Tests, demos, screenshots, and fixtures use clearly synthetic records only.
@@ -11,8 +11,9 @@
 - Credentials, API keys, tokens, passwords, private keys, and banking or other
   sensitive data must never appear in source, Git, documentation, or plaintext
   user records.
-- Future credentials belong in macOS Keychain or an equivalent secure OS store;
-  this milestone does not implement credential storage.
+- Persistent Google refresh tokens belong only in macOS Keychain. Google access
+  tokens, OAuth authorization codes, PKCE verifier/state, and temporary callback
+  material remain Rust-memory-only and are never persisted or logged.
 - Major security/privacy, data-ownership, authentication, or authorization
   changes require owner approval and an ADR where lasting.
 - The active trust boundary is macOS-local. Phase 0B's FastAPI service must
@@ -33,6 +34,35 @@ product commands and bounded local events; it receives no sidecar address,
 credential, generic request, filesystem, shell, or process capability. A
 process-held advisory lock in Application Support contains no secret or user
 data and prevents a second desktop process from starting another sidecar.
+
+## Phase 2A Google boundary
+
+- OAuth uses the default system browser, a temporary IPv4 `127.0.0.1:0`
+  callback, S256 PKCE, and a fresh cryptographic state value. The listener is
+  path/state/code validated, bounded to five minutes, returns a no-store generic
+  page, and never displays or logs the authorization code.
+- Ion requests exactly CalendarList read-only and Events read-only. It requests
+  no Tasks, Gmail, ACL, sharing, broad calendar-management, or write scope.
+- Rust alone reads the local OAuth client configuration, exchanges and refreshes
+  tokens, accesses Keychain, sends bearer-authenticated Google HTTPS requests,
+  and attempts revocation on disconnect. The optional Desktop client secret is
+  treated as local configuration, never repository content.
+- SQLite stores no token or OAuth code. It stores only non-secret account/scope
+  state, an opaque Keychain locator, CalendarList/Event metadata, and sync
+  tokens. The public status DTO omits even the Keychain locator and provider
+  sync token.
+- Python receives sanitized provider resource fields only. It receives no
+  bearer credential and writes no secret or payload snapshot to audit.
+- The renderer can call only fixed status, connect, selection, sync, and
+  disconnect commands. It receives no Google token, PKCE verifier, OAuth code,
+  Keychain locator, service origin/port/session credential, generic HTTP,
+  filesystem, shell, or process authority.
+- Google HTTPS uses rustls with bounded request timeouts and bounded retry.
+  OAuth callbacks remain loopback; no webhook, inbound provider listener after
+  OAuth, daemon, cloud relay, LAN endpoint, or mobile trust boundary exists.
+- Repository tests and examples use synthetic identifiers and fake token-store
+  behavior. Real account data and configuration remain in Application Support,
+  Keychain, and the runtime database outside Git.
 
 ## Phase 0B local development details
 

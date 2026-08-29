@@ -4,7 +4,25 @@ All notable repository changes are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Phase 2A Google Calendar synchronization now uses the canonical account and
+  calendar route prefixes, persists safe sync failures instead of returning an
+  unchanged `Never synced` projection, constructs the documented Events.list
+  path without a duplicate separator, rejects invalid empty sync/page tokens,
+  skips roles without event-detail access, and emits allowlisted metadata-only
+  sync failure diagnostics.
+
 ### Added
+
+- Phase 2A Google Calendar read-sync foundation: Rust-owned Desktop OAuth with
+  PKCE/state and ephemeral loopback callback, macOS Keychain refresh tokens,
+  memory-only access tokens, exact read-only scopes, multi-account CalendarList
+  discovery, independent Ion selection, canonical CalendarBlocks, recurrence
+  masters/exceptions, per-calendar full/incremental sync with safe 410 recovery,
+  offline cached status, fixed Tauri commands, and minimal setup UI. No Google
+  event write/delete, Tasks scope, webhook, daemon, cloud relay, or mobile/LAN
+  boundary is included.
 
 - Phase 0A repository documentation, governance, agent routing, and ADR
   bootstrap.

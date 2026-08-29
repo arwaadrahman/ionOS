@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { OrganizerShell } from "./OrganizerShell";
 import { StartupData } from "./startup";
 import { currentTodayContext, TodayOutput } from "./today";
+import { emptyCalendarStatus } from "./calendar";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -38,6 +39,7 @@ function data(): StartupData {
       needs_attention: [],
       upcoming: [],
     },
+    calendar: emptyCalendarStatus(),
     todayContext: {
       planning_date: today.planning_date,
       timezone: today.timezone,

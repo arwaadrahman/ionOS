@@ -108,7 +108,7 @@ def test_milestone_ordering_migration_is_reversible_and_deterministic(tmp_path):
         assert goal_positions == [("m-a", 0), ("m-b", 1), ("m-c", 2)]
         assert project_positions == [("pm-a", 0), ("pm-b", 1)]
         assert second_project_positions == [("pm-c", 0)]
-        assert revision == ("0004_today_planning",)
+        assert revision == ("0005_google_calendar_foundation",)
 
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
@@ -195,7 +195,7 @@ def test_today_planning_migration_preserves_0003_data_and_enforces_contract(tmp_
             "SELECT version_num FROM alembic_version"
         ).fetchone()
         task_count = connection.execute("SELECT COUNT(*) FROM tasks").fetchone()
-    assert revision == ("0004_today_planning",)
+    assert revision == ("0005_google_calendar_foundation",)
     assert task_count == (2,)
 
     command.downgrade(config, "0003_milestone_ordering")
@@ -209,4 +209,60 @@ def test_today_planning_migration_preserves_0003_data_and_enforces_contract(tmp_
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
             "SELECT version_num FROM alembic_version"
-        ).fetchone() == ("0004_today_planning",)
+        ).fetchone() == ("0005_google_calendar_foundation",)
+
+
+def test_google_calendar_migration_fresh_upgrade_preservation_and_downgrade(tmp_path):
+    database_path = tmp_path / "calendar-migration.sqlite3"
+    config = migration_config(database_path)
+    command.upgrade(config, "0004_today_planning")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "INSERT INTO tasks "
+            "(id, created_at, updated_at, revision, title, state, source_kind, "
+            "deadline_kind) VALUES "
+            "('preserved-task', '2030-01-01T00:00:00Z', "
+            "'2030-01-01T00:00:00Z', 1, 'Preserved Synthetic Task', "
+            "'open', 'human', 'none')"
+        )
+
+    command.upgrade(config, "head")
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert {
+            "google_accounts",
+            "google_calendars",
+            "calendar_blocks",
+            "calendar_block_ion_metadata",
+            "google_event_links",
+        } <= tables
+        assert connection.execute(
+            "SELECT title FROM tasks WHERE id = 'preserved-task'"
+        ).fetchone() == ("Preserved Synthetic Task",)
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone() == ("0005_google_calendar_foundation",)
+
+    command.downgrade(config, "0004_today_planning")
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert "google_accounts" not in tables
+        assert connection.execute(
+            "SELECT title FROM tasks WHERE id = 'preserved-task'"
+        ).fetchone() == ("Preserved Synthetic Task",)
+
+    command.upgrade(config, "head")
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute(
+            "SELECT version_num FROM alembic_version"
+        ).fetchone() == ("0005_google_calendar_foundation",)

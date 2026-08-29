@@ -239,3 +239,205 @@ task_day_plans = Table(
         name="uq_task_day_plans_date_role_position",
     ),
 )
+
+google_accounts = Table(
+    "google_accounts",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("provider_account_id", Text, nullable=False, unique=True),
+    Column("display_name", Text, nullable=False),
+    Column("granted_scopes", Text, nullable=False),
+    Column("keychain_locator", Text, nullable=False, unique=True),
+    Column("auth_state", String, nullable=False),
+    Column("last_auth_at", String, nullable=True),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("revision", Integer, nullable=False, server_default="1"),
+    CheckConstraint(
+        "auth_state IN ('connected', 'reauth_required', 'disconnected')",
+        name="google_account_auth_state_valid",
+    ),
+    CheckConstraint("revision >= 1", name="google_account_revision_positive"),
+)
+
+google_calendars = Table(
+    "google_calendars",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column(
+        "account_id",
+        String(36),
+        ForeignKey("google_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    ),
+    Column("provider_calendar_id", Text, nullable=False),
+    Column("summary", Text, nullable=False),
+    Column("description", Text, nullable=True),
+    Column("location", Text, nullable=True),
+    Column("timezone", Text, nullable=True),
+    Column("access_role", String, nullable=False),
+    Column("provider_etag", Text, nullable=True),
+    Column("is_primary", Integer, nullable=False, server_default="0"),
+    Column("provider_selected", Integer, nullable=False, server_default="0"),
+    Column("provider_hidden", Integer, nullable=False, server_default="0"),
+    Column("enabled_in_ion", Integer, nullable=False, server_default="0"),
+    Column("provider_deleted", Integer, nullable=False, server_default="0"),
+    Column("next_sync_token", Text, nullable=True),
+    Column("sync_state", String, nullable=False),
+    Column("active_sync_generation", String(36), nullable=True),
+    Column("active_sync_mode", String, nullable=True),
+    Column("last_synced_at", String, nullable=True),
+    Column("last_error_code", String, nullable=True),
+    Column("retry_count", Integer, nullable=False, server_default="0"),
+    Column("next_retry_at", String, nullable=True),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("revision", Integer, nullable=False, server_default="1"),
+    CheckConstraint(
+        "access_role IN ('none', 'freeBusyReader', 'reader', "
+        "'writerWithoutPrivateAccess', 'writer', 'owner')",
+        name="google_calendar_access_role_valid",
+    ),
+    CheckConstraint(
+        "sync_state IN ('idle', 'syncing', 'retry_wait', 'failed', "
+        "'reauth_required', 'disconnected')",
+        name="google_calendar_sync_state_valid",
+    ),
+    CheckConstraint(
+        "active_sync_mode IN ('full', 'incremental') OR active_sync_mode IS NULL",
+        name="google_calendar_sync_mode_valid",
+    ),
+    CheckConstraint("retry_count >= 0", name="google_calendar_retry_nonnegative"),
+    CheckConstraint("revision >= 1", name="google_calendar_revision_positive"),
+    UniqueConstraint(
+        "account_id",
+        "provider_calendar_id",
+        name="uq_google_calendar_account_provider_id",
+    ),
+)
+
+calendar_blocks = Table(
+    "calendar_blocks",
+    metadata,
+    *organizer_columns(),
+    Column("source_kind", String, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("description", Text, nullable=True),
+    Column("location", Text, nullable=True),
+    Column("temporal_kind", String, nullable=False),
+    Column("start_date", String, nullable=True),
+    Column("end_date", String, nullable=True),
+    Column("start_at", String, nullable=True),
+    Column("end_at", String, nullable=True),
+    Column("start_timezone", Text, nullable=True),
+    Column("end_timezone", Text, nullable=True),
+    Column("status", String, nullable=False),
+    Column("transparency", String, nullable=False),
+    Column("recurrence_kind", String, nullable=False),
+    Column("recurrence_rules", Text, nullable=True),
+    Column(
+        "recurrence_master_block_id",
+        String(36),
+        ForeignKey("calendar_blocks.id", ondelete="RESTRICT"),
+        nullable=True,
+    ),
+    Column("provider_deleted_at", String, nullable=True),
+    CheckConstraint(
+        "source_kind IN ('google', 'ion')", name="calendar_block_source_valid"
+    ),
+    CheckConstraint("length(trim(title)) > 0", name="calendar_block_title_present"),
+    CheckConstraint(
+        "temporal_kind IN ('all_day', 'timed')",
+        name="calendar_block_temporal_kind_valid",
+    ),
+    CheckConstraint(
+        "(temporal_kind = 'all_day' AND start_date IS NOT NULL "
+        "AND end_date IS NOT NULL "
+        "AND start_at IS NULL AND end_at IS NULL AND start_timezone IS NULL "
+        "AND end_timezone IS NULL) OR "
+        "(temporal_kind = 'timed' AND start_date IS NULL AND end_date IS NULL "
+        "AND start_at IS NOT NULL AND end_at IS NOT NULL "
+        "AND start_timezone IS NOT NULL "
+        "AND end_timezone IS NOT NULL)",
+        name="calendar_block_temporal_union_valid",
+    ),
+    CheckConstraint(
+        "status IN ('confirmed', 'tentative', 'cancelled')",
+        name="calendar_block_status_valid",
+    ),
+    CheckConstraint(
+        "transparency IN ('opaque', 'transparent')",
+        name="calendar_block_transparency_valid",
+    ),
+    CheckConstraint(
+        "recurrence_kind IN ('single', 'master', 'exception')",
+        name="calendar_block_recurrence_kind_valid",
+    ),
+)
+
+calendar_block_ion_metadata = Table(
+    "calendar_block_ion_metadata",
+    metadata,
+    Column(
+        "calendar_block_id",
+        String(36),
+        ForeignKey("calendar_blocks.id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    Column("flexibility", String, nullable=False),
+    Column("notes", Text, nullable=True),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("revision", Integer, nullable=False, server_default="1"),
+    CheckConstraint(
+        "flexibility IN ('locked', 'flexible', 'ion_controlled')",
+        name="calendar_block_flexibility_valid",
+    ),
+    CheckConstraint("revision >= 1", name="calendar_block_metadata_revision_positive"),
+)
+
+google_event_links = Table(
+    "google_event_links",
+    metadata,
+    Column(
+        "calendar_block_id",
+        String(36),
+        ForeignKey("calendar_blocks.id", ondelete="RESTRICT"),
+        primary_key=True,
+    ),
+    Column(
+        "account_id",
+        String(36),
+        ForeignKey("google_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "calendar_id",
+        String(36),
+        ForeignKey("google_calendars.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("provider_event_id", Text, nullable=False),
+    Column("ical_uid", Text, nullable=True, index=True),
+    Column("provider_etag", Text, nullable=True),
+    Column("provider_updated_at", String, nullable=True),
+    Column("recurring_event_id", Text, nullable=True),
+    Column("original_start_kind", String, nullable=False),
+    Column("original_start_date", String, nullable=True),
+    Column("original_start_at", String, nullable=True),
+    Column("original_start_timezone", Text, nullable=True),
+    Column("last_seen_sync_generation", String(36), nullable=False),
+    CheckConstraint(
+        "(original_start_kind = 'none' AND original_start_date IS NULL "
+        "AND original_start_at IS NULL AND original_start_timezone IS NULL) OR "
+        "(original_start_kind = 'date' AND original_start_date IS NOT NULL "
+        "AND original_start_at IS NULL AND original_start_timezone IS NULL) OR "
+        "(original_start_kind = 'instant' AND original_start_date IS NULL "
+        "AND original_start_at IS NOT NULL AND original_start_timezone IS NOT NULL)",
+        name="google_event_original_start_union_valid",
+    ),
+    UniqueConstraint(
+        "calendar_id", "provider_event_id", name="uq_google_event_calendar_event_id"
+    ),
+)

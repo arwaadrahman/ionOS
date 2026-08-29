@@ -68,14 +68,15 @@ const home: HomeOutput = {
 
 test("builds commands from destinations and the canonical Home projection", () => {
   const items = buildCommandItems(home);
-  expect(items.slice(1, 6).map((item) => item.label)).toEqual([
+  expect(items.slice(1, 7).map((item) => item.label)).toEqual([
     "Home",
     "Today",
+    "Calendar",
     "Areas & Goals",
     "Projects",
     "Tasks",
   ]);
-  expect(items).toHaveLength(11);
+  expect(items).toHaveLength(12);
   expect(searchCommands(items, "recovery")[0]).toMatchObject({
     id: "command:recovery",
     action: { type: "recovery" },
@@ -103,6 +104,7 @@ test("ranks exact, prefix, title, and metadata matches deterministically", () =>
     "Review architecture notes",
   );
   expect(searchCommands(items, "").map((item) => item.category)).toEqual([
+    "destination",
     "destination",
     "destination",
     "destination",

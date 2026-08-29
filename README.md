@@ -6,8 +6,8 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 
 ## Status
 
-Current phase: **Phase 1 — Ion Core Personal Organizer**
-Current milestone: **Phase 1G — macOS Menu Bar + Quick Capture**
+Current phase: **Phase 2 — Calendar**
+Current milestone: **Phase 2A — Google Account + Calendar Sync Foundation**
 
 Phase 0 established the secure local runtime. Phase 1A added the canonical
 organizer schema and Task vertical slice. Phase 1B makes Areas, Goals, Projects,
@@ -25,13 +25,19 @@ restore operations without Undo, snapshots, or cascades.
 Phase 1G adds a native fixed menu-bar presence, minimal canonical Task capture,
 close-to-hide/Dock reactivation behavior, and one desktop/sidecar process owner
 without a daemon, migration, or new dependency.
+Phase 1H validates and hardens the complete Phase 1 organizer and packaged
+runtime flow.
+Phase 2A adds Rust-owned Google Desktop OAuth and Keychain credentials,
+multi-account CalendarList discovery, independent Ion selection, canonical
+offline CalendarBlocks, and full/incremental read sync without enabling Google
+event writes.
 
 ## Start here
 
 - [Agent guide](AGENTS.md)
 - [Project context](docs/projectContext.md)
 - [Master Specification](docs/PRODUCT_SPEC.md)
-- [Phase 1G](docs/phases/PHASE_1G.md)
+- [Phase 2A](docs/phases/PHASE_2A.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decision index](docs/decisions/README.md)
 

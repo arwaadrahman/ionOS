@@ -1,0 +1,1770 @@
+//! Rust-owned Google OAuth, Keychain credentials, HTTPS, and fixed sync commands.
+
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+    time::{Duration, Instant},
+};
+
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use getrandom::fill;
+use reqwest::{Client, StatusCode, Url};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tauri::{AppHandle, Manager, Runtime, State};
+
+use crate::service::{product_request, ProductError, ServiceState};
+
+const CALENDAR_LIST_SCOPE: &str = "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
+const EVENTS_READ_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events.readonly";
+const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
+const REVOKE_ENDPOINT: &str = "https://oauth2.googleapis.com/revoke";
+const CALENDAR_API: &str = "https://www.googleapis.com/calendar/v3/";
+const CALLBACK_PATH: &str = "/oauth2/callback";
+const CONFIG_FILENAME: &str = "google-oauth.json";
+const KEYCHAIN_SERVICE: &str = "com.ionos.desktop.google-calendar";
+const MAX_CONFIG_BYTES: u64 = 65_536;
+const MAX_CALLBACK_BYTES: usize = 8_192;
+const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
+const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_PROVIDER_ATTEMPTS: u32 = 3;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OAuthConfig {
+    client_id: String,
+    #[serde(default)]
+    client_secret: Option<String>,
+}
+
+impl OAuthConfig {
+    fn validate(self) -> Result<Self, GoogleCommandError> {
+        let valid_id = self.client_id.ends_with(".apps.googleusercontent.com")
+            && self.client_id.len() <= 4096
+            && !self.client_id.chars().any(char::is_whitespace);
+        let valid_secret = match self.client_secret.as_ref() {
+            Some(value) => !value.is_empty() && value.len() <= 4096,
+            None => true,
+        };
+        if !valid_id || !valid_secret {
+            return Err(GoogleCommandError::new("configuration_invalid"));
+        }
+        Ok(self)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CachedAccessToken {
+    value: String,
+    expires_at: Instant,
+}
+
+pub struct GoogleState {
+    access_tokens: Mutex<HashMap<String, CachedAccessToken>>,
+    sync_active: AtomicBool,
+}
+
+impl Default for GoogleState {
+    fn default() -> Self {
+        Self {
+            access_tokens: Mutex::new(HashMap::new()),
+            sync_active: AtomicBool::new(false),
+        }
+    }
+}
+
+struct SyncGuard<'a>(&'a AtomicBool);
+
+impl Drop for SyncGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+impl GoogleState {
+    fn begin_sync(&self) -> Result<SyncGuard<'_>, GoogleCommandError> {
+        self.sync_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| GoogleCommandError::new("busy"))?;
+        Ok(SyncGuard(&self.sync_active))
+    }
+
+    fn cached_token(&self, account_id: &str) -> Option<String> {
+        self.access_tokens
+            .lock()
+            .expect("Google access token lock poisoned")
+            .get(account_id)
+            .filter(|token| token.expires_at > Instant::now() + Duration::from_secs(60))
+            .map(|token| token.value.clone())
+    }
+
+    fn store_access_token(&self, account_id: &str, value: String, expires_in: u64) {
+        self.access_tokens
+            .lock()
+            .expect("Google access token lock poisoned")
+            .insert(
+                account_id.to_owned(),
+                CachedAccessToken {
+                    value,
+                    expires_at: Instant::now() + Duration::from_secs(expires_in.saturating_sub(30)),
+                },
+            );
+    }
+
+    fn forget_account(&self, account_id: &str) {
+        self.access_tokens
+            .lock()
+            .expect("Google access token lock poisoned")
+            .remove(account_id);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GoogleCommandError {
+    code: String,
+}
+
+impl GoogleCommandError {
+    fn new(code: &str) -> Self {
+        Self { code: code.into() }
+    }
+}
+
+impl From<ProductError> for GoogleCommandError {
+    fn from(_: ProductError) -> Self {
+        Self::new("local_service_unavailable")
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GoogleAccount {
+    pub id: String,
+    pub provider_account_id: String,
+    pub display_name: String,
+    pub granted_scopes: Vec<String>,
+    pub auth_state: String,
+    pub last_auth_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InternalGoogleAccount {
+    #[serde(flatten)]
+    account: GoogleAccount,
+    keychain_locator: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GoogleCalendar {
+    pub id: String,
+    pub account_id: String,
+    pub provider_calendar_id: String,
+    pub summary: String,
+    pub description: Option<String>,
+    pub location: Option<String>,
+    pub timezone: Option<String>,
+    pub access_role: String,
+    pub is_primary: bool,
+    pub provider_selected: bool,
+    pub provider_hidden: bool,
+    pub enabled_in_ion: bool,
+    pub provider_deleted: bool,
+    pub has_sync_token: bool,
+    pub sync_state: String,
+    pub last_synced_at: Option<String>,
+    pub last_error_code: Option<String>,
+    pub retry_count: i64,
+    pub next_retry_at: Option<String>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InternalGoogleCalendar {
+    #[serde(flatten)]
+    calendar: GoogleCalendar,
+    next_sync_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CalendarBlock {
+    pub id: String,
+    pub calendar_id: String,
+    pub provider_event_id: String,
+    pub ical_uid: Option<String>,
+    pub title: String,
+    pub description: Option<String>,
+    pub location: Option<String>,
+    pub temporal_kind: String,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub start_at: Option<String>,
+    pub end_at: Option<String>,
+    pub start_timezone: Option<String>,
+    pub end_timezone: Option<String>,
+    pub status: String,
+    pub transparency: String,
+    pub recurrence_kind: String,
+    pub recurrence_rules: Vec<String>,
+    pub recurrence_master_block_id: Option<String>,
+    pub recurring_event_id: Option<String>,
+    pub flexibility: String,
+    pub notes: Option<String>,
+    pub provider_deleted_at: Option<String>,
+    pub revision: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CalendarStatus {
+    pub configured: bool,
+    #[serde(default)]
+    pub configuration_path: String,
+    pub accounts: Vec<GoogleAccount>,
+    pub calendars: Vec<GoogleCalendar>,
+    pub blocks: Vec<CalendarBlock>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InternalCalendarState {
+    accounts: Vec<InternalGoogleAccount>,
+    calendars: Vec<InternalGoogleCalendar>,
+}
+
+#[derive(Serialize)]
+struct EmptyInput {}
+
+#[derive(Serialize)]
+struct SelectionInput {
+    enabled: bool,
+    expected_revision: i64,
+}
+
+#[derive(Serialize)]
+struct SyncBeginInput<'a> {
+    generation: &'a str,
+    mode: &'a str,
+}
+
+#[derive(Serialize)]
+struct SyncPageInput<'a> {
+    generation: &'a str,
+    events: &'a [ProviderEvent],
+}
+
+#[derive(Serialize)]
+struct SyncCompleteInput<'a> {
+    generation: &'a str,
+    next_sync_token: &'a str,
+}
+
+#[derive(Serialize)]
+struct SyncFailureInput<'a> {
+    error_code: &'a str,
+    retry_count: u32,
+    next_retry_at: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    expires_in: u64,
+    scope: String,
+    token_type: String,
+}
+
+#[derive(Deserialize)]
+struct RefreshResponse {
+    access_token: String,
+    expires_in: u64,
+    token_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CalendarListPage {
+    #[serde(default)]
+    items: Vec<ProviderCalendarRaw>,
+    next_page_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderCalendarRaw {
+    id: String,
+    #[serde(default)]
+    summary: String,
+    summary_override: Option<String>,
+    description: Option<String>,
+    location: Option<String>,
+    time_zone: Option<String>,
+    #[serde(default)]
+    access_role: String,
+    etag: Option<String>,
+    #[serde(default)]
+    primary: bool,
+    #[serde(default)]
+    selected: bool,
+    #[serde(default)]
+    hidden: bool,
+    #[serde(default)]
+    deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProviderCalendar {
+    provider_calendar_id: String,
+    summary: String,
+    description: Option<String>,
+    location: Option<String>,
+    timezone: Option<String>,
+    access_role: String,
+    provider_etag: Option<String>,
+    is_primary: bool,
+    provider_selected: bool,
+    provider_hidden: bool,
+    provider_deleted: bool,
+}
+
+#[derive(Serialize)]
+struct ConnectAccountInput<'a> {
+    provider_account_id: &'a str,
+    display_name: &'a str,
+    granted_scopes: [&'static str; 2],
+    keychain_locator: &'a str,
+    calendars: &'a [ProviderCalendar],
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EventsPage {
+    #[serde(default)]
+    items: Vec<ProviderEventRaw>,
+    next_page_token: Option<String>,
+    next_sync_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleErrorEnvelope {
+    error: GoogleErrorBody,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleErrorBody {
+    #[serde(default)]
+    errors: Vec<GoogleErrorDetail>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoogleErrorDetail {
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderEventRaw {
+    id: String,
+    i_cal_uid: Option<String>,
+    etag: Option<String>,
+    updated: Option<String>,
+    summary: Option<String>,
+    description: Option<String>,
+    location: Option<String>,
+    status: Option<String>,
+    transparency: Option<String>,
+    start: Option<ProviderDateTimeRaw>,
+    end: Option<ProviderDateTimeRaw>,
+    #[serde(default)]
+    recurrence: Vec<String>,
+    recurring_event_id: Option<String>,
+    original_start_time: Option<ProviderDateTimeRaw>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderDateTimeRaw {
+    date: Option<String>,
+    date_time: Option<String>,
+    time_zone: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProviderDateTime {
+    date: Option<String>,
+    date_time: Option<String>,
+    timezone: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ProviderEvent {
+    provider_event_id: String,
+    ical_uid: Option<String>,
+    provider_etag: Option<String>,
+    provider_updated_at: Option<String>,
+    title: Option<String>,
+    description: Option<String>,
+    location: Option<String>,
+    status: String,
+    transparency: String,
+    start: Option<ProviderDateTime>,
+    end: Option<ProviderDateTime>,
+    recurrence: Vec<String>,
+    recurring_event_id: Option<String>,
+    original_start: Option<ProviderDateTime>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderFailure {
+    Gone,
+    Reauth,
+    RateLimited,
+    Unavailable,
+    Rejected(ProviderRejection),
+    InvalidResponse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderRejection {
+    BadRequest,
+    Forbidden,
+    NotFound,
+    InsufficientPermissions,
+    ApiDisabled,
+    Other,
+}
+
+fn should_reset_to_full(mode: &str, failure: &ProviderFailure) -> bool {
+    mode == "incremental" && matches!(failure, ProviderFailure::Gone)
+}
+
+trait RefreshTokenStore {
+    fn set(&self, locator: &str, value: &str) -> Result<(), GoogleCommandError>;
+    fn get(&self, locator: &str) -> Result<String, GoogleCommandError>;
+    fn delete(&self, locator: &str) -> Result<(), GoogleCommandError>;
+}
+
+struct SystemKeychain;
+
+#[cfg(target_os = "macos")]
+impl RefreshTokenStore for SystemKeychain {
+    fn set(&self, locator: &str, value: &str) -> Result<(), GoogleCommandError> {
+        security_framework::passwords::set_generic_password(
+            KEYCHAIN_SERVICE,
+            locator,
+            value.as_bytes(),
+        )
+        .map_err(|_| GoogleCommandError::new("keychain_unavailable"))
+    }
+
+    fn get(&self, locator: &str) -> Result<String, GoogleCommandError> {
+        let bytes = security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, locator)
+            .map_err(|_| GoogleCommandError::new("reauth_required"))?;
+        String::from_utf8(bytes).map_err(|_| GoogleCommandError::new("reauth_required"))
+    }
+
+    fn delete(&self, locator: &str) -> Result<(), GoogleCommandError> {
+        security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, locator)
+            .map_err(|_| GoogleCommandError::new("keychain_unavailable"))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl RefreshTokenStore for SystemKeychain {
+    fn set(&self, _: &str, _: &str) -> Result<(), GoogleCommandError> {
+        Err(GoogleCommandError::new("keychain_unavailable"))
+    }
+
+    fn get(&self, _: &str) -> Result<String, GoogleCommandError> {
+        Err(GoogleCommandError::new("keychain_unavailable"))
+    }
+
+    fn delete(&self, _: &str) -> Result<(), GoogleCommandError> {
+        Err(GoogleCommandError::new("keychain_unavailable"))
+    }
+}
+
+fn oauth_config_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, GoogleCommandError> {
+    app.path()
+        .app_data_dir()
+        .map(|directory| directory.join(CONFIG_FILENAME))
+        .map_err(|_| GoogleCommandError::new("configuration_unavailable"))
+}
+
+fn load_oauth_config(path: &Path) -> Result<OAuthConfig, GoogleCommandError> {
+    let metadata = fs::metadata(path).map_err(|_| GoogleCommandError::new("not_configured"))?;
+    if metadata.len() > MAX_CONFIG_BYTES || !metadata.is_file() {
+        return Err(GoogleCommandError::new("configuration_invalid"));
+    }
+    let bytes = fs::read(path).map_err(|_| GoogleCommandError::new("configuration_invalid"))?;
+    serde_json::from_slice::<OAuthConfig>(&bytes)
+        .map_err(|_| GoogleCommandError::new("configuration_invalid"))?
+        .validate()
+}
+
+fn random_bytes<const N: usize>() -> Result<[u8; N], GoogleCommandError> {
+    let mut bytes = [0_u8; N];
+    fill(&mut bytes).map_err(|_| GoogleCommandError::new("secure_random_unavailable"))?;
+    Ok(bytes)
+}
+
+fn new_uuid() -> Result<String, GoogleCommandError> {
+    let mut bytes = random_bytes::<16>()?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15]
+    ))
+}
+
+fn pkce_pair() -> Result<(String, String), GoogleCommandError> {
+    let verifier = URL_SAFE_NO_PAD.encode(random_bytes::<64>()?);
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    Ok((verifier, challenge))
+}
+
+fn authorization_url(
+    config: &OAuthConfig,
+    redirect_uri: &str,
+    state: &str,
+    challenge: &str,
+) -> Result<Url, GoogleCommandError> {
+    let mut url = Url::parse(AUTH_ENDPOINT).map_err(|_| GoogleCommandError::new("oauth_failed"))?;
+    url.query_pairs_mut()
+        .append_pair("client_id", &config.client_id)
+        .append_pair("redirect_uri", redirect_uri)
+        .append_pair("response_type", "code")
+        .append_pair(
+            "scope",
+            &format!("{CALENDAR_LIST_SCOPE} {EVENTS_READ_SCOPE}"),
+        )
+        .append_pair("code_challenge", challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("state", state)
+        .append_pair("access_type", "offline")
+        .append_pair("prompt", "consent");
+    Ok(url)
+}
+
+#[cfg(target_os = "macos")]
+fn open_system_browser(url: &Url) -> Result<(), GoogleCommandError> {
+    Command::new("/usr/bin/open")
+        .arg(url.as_str())
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| GoogleCommandError::new("browser_unavailable"))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_system_browser(_: &Url) -> Result<(), GoogleCommandError> {
+    Err(GoogleCommandError::new("browser_unavailable"))
+}
+
+fn callback_code(target: &str, expected_state: &str) -> Result<String, GoogleCommandError> {
+    if target.len() > MAX_CALLBACK_BYTES {
+        return Err(GoogleCommandError::new("oauth_callback_invalid"));
+    }
+    let url = Url::parse(&format!("http://127.0.0.1{target}"))
+        .map_err(|_| GoogleCommandError::new("oauth_callback_invalid"))?;
+    if url.path() != CALLBACK_PATH {
+        return Err(GoogleCommandError::new("oauth_callback_invalid"));
+    }
+    let values: HashMap<_, _> = url.query_pairs().into_owned().collect();
+    if values.get("state").map(String::as_str) != Some(expected_state) {
+        return Err(GoogleCommandError::new("oauth_state_mismatch"));
+    }
+    if values.contains_key("error") {
+        return Err(GoogleCommandError::new("oauth_cancelled"));
+    }
+    values
+        .get("code")
+        .filter(|value| !value.is_empty() && value.len() <= 4096)
+        .cloned()
+        .ok_or_else(|| GoogleCommandError::new("oauth_callback_invalid"))
+}
+
+fn callback_response(stream: &mut TcpStream, success: bool) {
+    let message = if success {
+        "Ion received Google authorization. You can close this tab."
+    } else {
+        "Ion could not validate this authorization. Return to Ion and try again."
+    };
+    let body = format!("<!doctype html><meta charset=\"utf-8\"><title>Ion</title><p>{message}</p>");
+    let response = format!(
+        "HTTP/1.1 {}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{}",
+        if success { "200 OK" } else { "400 Bad Request" },
+        body.len(),
+        body
+    );
+    let _ = stream.write_all(response.as_bytes());
+}
+
+fn await_callback(listener: TcpListener, state: String) -> Result<String, GoogleCommandError> {
+    listener
+        .set_nonblocking(true)
+        .map_err(|_| GoogleCommandError::new("oauth_callback_unavailable"))?;
+    let deadline = Instant::now() + CALLBACK_TIMEOUT;
+    let (mut stream, peer) = loop {
+        match listener.accept() {
+            Ok(connection) => break connection,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(GoogleCommandError::new("oauth_callback_timeout"));
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(_) => return Err(GoogleCommandError::new("oauth_callback_unavailable")),
+        }
+    };
+    if !peer.ip().is_loopback() {
+        callback_response(&mut stream, false);
+        return Err(GoogleCommandError::new("oauth_callback_invalid"));
+    }
+    stream
+        .set_read_timeout(Some(CALLBACK_TIMEOUT))
+        .map_err(|_| GoogleCommandError::new("oauth_callback_unavailable"))?;
+    let mut bytes = [0_u8; MAX_CALLBACK_BYTES];
+    let count = stream
+        .read(&mut bytes)
+        .map_err(|_| GoogleCommandError::new("oauth_callback_invalid"))?;
+    let request = std::str::from_utf8(&bytes[..count])
+        .map_err(|_| GoogleCommandError::new("oauth_callback_invalid"))?;
+    let line = request
+        .lines()
+        .next()
+        .ok_or_else(|| GoogleCommandError::new("oauth_callback_invalid"))?;
+    let mut parts = line.split_whitespace();
+    if parts.next() != Some("GET") {
+        callback_response(&mut stream, false);
+        return Err(GoogleCommandError::new("oauth_callback_invalid"));
+    }
+    let target = parts
+        .next()
+        .ok_or_else(|| GoogleCommandError::new("oauth_callback_invalid"))?;
+    let result = callback_code(target, &state);
+    callback_response(&mut stream, result.is_ok());
+    result
+}
+
+fn google_client() -> Result<Client, GoogleCommandError> {
+    Client::builder()
+        .timeout(PROVIDER_TIMEOUT)
+        .user_agent("Ion-OS/0.0.0")
+        .build()
+        .map_err(|_| GoogleCommandError::new("provider_unavailable"))
+}
+
+async fn exchange_code(
+    client: &Client,
+    config: &OAuthConfig,
+    code: &str,
+    verifier: &str,
+    redirect_uri: &str,
+) -> Result<TokenResponse, GoogleCommandError> {
+    let mut form = vec![
+        ("client_id", config.client_id.as_str()),
+        ("code", code),
+        ("code_verifier", verifier),
+        ("grant_type", "authorization_code"),
+        ("redirect_uri", redirect_uri),
+    ];
+    if let Some(secret) = config.client_secret.as_deref() {
+        form.push(("client_secret", secret));
+    }
+    let response = client
+        .post(TOKEN_ENDPOINT)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|_| GoogleCommandError::new("provider_unavailable"))?;
+    if !response.status().is_success() {
+        return Err(GoogleCommandError::new("oauth_exchange_failed"));
+    }
+    let token = response
+        .json::<TokenResponse>()
+        .await
+        .map_err(|_| GoogleCommandError::new("oauth_exchange_failed"))?;
+    let granted: HashSet<_> = token.scope.split_whitespace().collect();
+    let required = HashSet::from([CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE]);
+    if token.token_type != "Bearer" || granted != required || token.refresh_token.is_none() {
+        return Err(GoogleCommandError::new("oauth_scope_denied"));
+    }
+    Ok(token)
+}
+
+async fn discover_calendars(
+    client: &Client,
+    access_token: &str,
+) -> Result<Vec<ProviderCalendar>, GoogleCommandError> {
+    let mut calendars = Vec::new();
+    let mut page_token: Option<String> = None;
+    loop {
+        let mut url = Url::parse(&format!("{CALENDAR_API}users/me/calendarList"))
+            .map_err(|_| GoogleCommandError::new("provider_unavailable"))?;
+        url.query_pairs_mut()
+            .append_pair("maxResults", "250")
+            .append_pair("showHidden", "true")
+            .append_pair("showDeleted", "true");
+        if let Some(value) = page_token.as_deref() {
+            url.query_pairs_mut().append_pair("pageToken", value);
+        }
+        let response = client
+            .get(url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|_| GoogleCommandError::new("provider_unavailable"))?;
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(GoogleCommandError::new("reauth_required"));
+        }
+        if !response.status().is_success() {
+            return Err(GoogleCommandError::new("provider_unavailable"));
+        }
+        let page = response
+            .json::<CalendarListPage>()
+            .await
+            .map_err(|_| GoogleCommandError::new("provider_response_invalid"))?;
+        calendars.extend(page.items.into_iter().map(|item| {
+            ProviderCalendar {
+                provider_calendar_id: item.id,
+                summary: item
+                    .summary_override
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        if item.summary.trim().is_empty() {
+                            "Untitled Google calendar".into()
+                        } else {
+                            item.summary
+                        }
+                    }),
+                description: item.description,
+                location: item.location,
+                timezone: item.time_zone,
+                access_role: if item.access_role.is_empty() {
+                    "none".into()
+                } else {
+                    item.access_role
+                },
+                provider_etag: item.etag,
+                is_primary: item.primary,
+                provider_selected: item.selected,
+                provider_hidden: item.hidden,
+                provider_deleted: item.deleted,
+            }
+        }));
+        page_token = page.next_page_token;
+        if page_token.is_none() {
+            break;
+        }
+    }
+    if calendars.len() > 10_000 {
+        return Err(GoogleCommandError::new("provider_response_invalid"));
+    }
+    Ok(calendars)
+}
+
+fn validated_backend_id(id: &str) -> Result<&str, GoogleCommandError> {
+    let valid = id.len() == 36
+        && id.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        });
+    if !valid {
+        return Err(GoogleCommandError::new("local_state_invalid"));
+    }
+    Ok(id)
+}
+
+fn calendar_backend_route(id: &str, suffix: &str) -> Result<String, GoogleCommandError> {
+    Ok(format!(
+        "/v1/calendar/calendars/{}{suffix}",
+        validated_backend_id(id)?
+    ))
+}
+
+fn account_backend_route(id: &str, suffix: &str) -> Result<String, GoogleCommandError> {
+    Ok(format!(
+        "/v1/calendar/accounts/{}{suffix}",
+        validated_backend_id(id)?
+    ))
+}
+
+async fn internal_state(state: &ServiceState) -> Result<InternalCalendarState, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/state",
+        Some(&EmptyInput {}),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+async fn local_status(state: &ServiceState) -> Result<CalendarStatus, GoogleCommandError> {
+    product_request::<EmptyInput, CalendarStatus>(
+        state,
+        reqwest::Method::GET,
+        "/v1/calendar/status",
+        None,
+    )
+    .await
+    .map_err(Into::into)
+}
+
+fn configured_status<R: Runtime>(app: &AppHandle<R>, mut status: CalendarStatus) -> CalendarStatus {
+    let path = oauth_config_path(app);
+    status.configuration_path = path
+        .as_ref()
+        .map(|value| value.display().to_string())
+        .unwrap_or_default();
+    status.configured = path
+        .as_deref()
+        .ok()
+        .and_then(|value| load_oauth_config(value).ok())
+        .is_some();
+    status
+}
+
+#[tauri::command]
+pub async fn get_google_calendar_status<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    local_status(&service)
+        .await
+        .map(|status| configured_status(&app, status))
+}
+
+#[tauri::command]
+pub async fn connect_google_calendar<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+    google: State<'_, GoogleState>,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    let config_path = oauth_config_path(&app)?;
+    let config = load_oauth_config(&config_path)?;
+    let client = google_client()?;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|_| GoogleCommandError::new("oauth_callback_unavailable"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|_| GoogleCommandError::new("oauth_callback_unavailable"))?
+        .port();
+    let redirect_uri = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
+    let state_value = URL_SAFE_NO_PAD.encode(random_bytes::<32>()?);
+    let (verifier, challenge) = pkce_pair()?;
+    let url = authorization_url(&config, &redirect_uri, &state_value, &challenge)?;
+    open_system_browser(&url)?;
+    let callback =
+        tauri::async_runtime::spawn_blocking(move || await_callback(listener, state_value))
+            .await
+            .map_err(|_| GoogleCommandError::new("oauth_callback_unavailable"))??;
+    let token = exchange_code(&client, &config, &callback, &verifier, &redirect_uri).await?;
+    let calendars = discover_calendars(&client, &token.access_token).await?;
+    let primary = calendars
+        .iter()
+        .find(|calendar| calendar.is_primary && !calendar.provider_deleted)
+        .ok_or_else(|| GoogleCommandError::new("provider_response_invalid"))?;
+    let previous = internal_state(&service).await?;
+    let old_locator = previous
+        .accounts
+        .iter()
+        .find(|account| account.account.provider_account_id == primary.provider_calendar_id)
+        .map(|account| account.keychain_locator.clone());
+    let locator = format!("ion-google-{}", new_uuid()?);
+    let refresh_token = token
+        .refresh_token
+        .as_deref()
+        .ok_or_else(|| GoogleCommandError::new("oauth_exchange_failed"))?;
+    SystemKeychain.set(&locator, refresh_token)?;
+    let input = ConnectAccountInput {
+        provider_account_id: &primary.provider_calendar_id,
+        display_name: &primary.summary,
+        granted_scopes: [CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE],
+        keychain_locator: &locator,
+        calendars: &calendars,
+    };
+    let connected = product_request::<ConnectAccountInput<'_>, CalendarStatus>(
+        &service,
+        reqwest::Method::POST,
+        "/v1/calendar/accounts/connect",
+        Some(&input),
+    )
+    .await;
+    let status = match connected {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = SystemKeychain.delete(&locator);
+            return Err(error.into());
+        }
+    };
+    if let Some(old) = old_locator.filter(|value| value != &locator) {
+        let _ = SystemKeychain.delete(&old);
+    }
+    let account = status
+        .accounts
+        .iter()
+        .find(|account| account.provider_account_id == primary.provider_calendar_id)
+        .ok_or_else(|| GoogleCommandError::new("local_state_invalid"))?;
+    google.store_access_token(&account.id, token.access_token, token.expires_in);
+    Ok(configured_status(&app, status))
+}
+
+#[tauri::command]
+pub async fn set_google_calendar_enabled(
+    service: State<'_, ServiceState>,
+    calendar_id: String,
+    enabled: bool,
+    expected_revision: i64,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    let route = calendar_backend_route(&calendar_id, "/selection")?;
+    product_request(
+        &service,
+        reqwest::Method::PUT,
+        &route,
+        Some(&SelectionInput {
+            enabled,
+            expected_revision,
+        }),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+async fn refresh_access_token(
+    client: &Client,
+    config: &OAuthConfig,
+    refresh_token: &str,
+) -> Result<RefreshResponse, ProviderFailure> {
+    let mut form = vec![
+        ("client_id", config.client_id.as_str()),
+        ("refresh_token", refresh_token),
+        ("grant_type", "refresh_token"),
+    ];
+    if let Some(secret) = config.client_secret.as_deref() {
+        form.push(("client_secret", secret));
+    }
+    let response = client
+        .post(TOKEN_ENDPOINT)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|_| ProviderFailure::Unavailable)?;
+    if response.status() == StatusCode::BAD_REQUEST || response.status() == StatusCode::UNAUTHORIZED
+    {
+        return Err(ProviderFailure::Reauth);
+    }
+    if !response.status().is_success() {
+        return Err(ProviderFailure::Unavailable);
+    }
+    let token = response
+        .json::<RefreshResponse>()
+        .await
+        .map_err(|_| ProviderFailure::InvalidResponse)?;
+    if token.token_type != "Bearer" {
+        return Err(ProviderFailure::InvalidResponse);
+    }
+    Ok(token)
+}
+
+fn sanitize_time(
+    raw: Option<ProviderDateTimeRaw>,
+    fallback_timezone: &str,
+) -> Option<ProviderDateTime> {
+    raw.and_then(|value| {
+        if let Some(date) = value.date {
+            return Some(ProviderDateTime {
+                date: Some(date),
+                date_time: None,
+                timezone: None,
+            });
+        }
+        value.date_time.map(|date_time| ProviderDateTime {
+            date: None,
+            date_time: Some(date_time),
+            timezone: Some(
+                value
+                    .time_zone
+                    .filter(|zone| !zone.is_empty())
+                    .unwrap_or_else(|| fallback_timezone.to_owned()),
+            ),
+        })
+    })
+}
+
+fn sanitize_event(raw: ProviderEventRaw, fallback_timezone: &str) -> ProviderEvent {
+    let status = match raw.status.as_deref() {
+        Some("tentative") => "tentative",
+        Some("cancelled") => "cancelled",
+        _ => "confirmed",
+    };
+    ProviderEvent {
+        provider_event_id: raw.id,
+        ical_uid: raw.i_cal_uid,
+        provider_etag: raw.etag,
+        provider_updated_at: raw.updated,
+        title: raw.summary,
+        description: raw.description,
+        location: raw.location,
+        status: status.into(),
+        transparency: if raw.transparency.as_deref() == Some("transparent") {
+            "transparent".into()
+        } else {
+            "opaque".into()
+        },
+        start: sanitize_time(raw.start, fallback_timezone),
+        end: sanitize_time(raw.end, fallback_timezone),
+        recurrence: raw.recurrence,
+        recurring_event_id: raw.recurring_event_id,
+        original_start: sanitize_time(raw.original_start_time, fallback_timezone),
+    }
+}
+
+fn events_url(
+    provider_calendar_id: &str,
+    sync_token: Option<&str>,
+    page_token: Option<&str>,
+) -> Result<Url, ProviderFailure> {
+    if provider_calendar_id.is_empty()
+        || sync_token.is_some_and(str::is_empty)
+        || page_token.is_some_and(str::is_empty)
+    {
+        return Err(ProviderFailure::InvalidResponse);
+    }
+    let mut url = Url::parse(CALENDAR_API).map_err(|_| ProviderFailure::InvalidResponse)?;
+    url.path_segments_mut()
+        .map_err(|_| ProviderFailure::InvalidResponse)?
+        .pop_if_empty()
+        .extend(["calendars", provider_calendar_id, "events"]);
+    url.query_pairs_mut()
+        .append_pair("maxResults", "2500")
+        .append_pair("showDeleted", "true")
+        .append_pair("singleEvents", "false");
+    if let Some(value) = sync_token {
+        url.query_pairs_mut().append_pair("syncToken", value);
+    }
+    if let Some(value) = page_token {
+        url.query_pairs_mut().append_pair("pageToken", value);
+    }
+    Ok(url)
+}
+
+fn events_request(
+    client: &Client,
+    access_token: &str,
+    provider_calendar_id: &str,
+    sync_token: Option<&str>,
+    page_token: Option<&str>,
+) -> Result<reqwest::RequestBuilder, ProviderFailure> {
+    Ok(client
+        .get(events_url(provider_calendar_id, sync_token, page_token)?)
+        .bearer_auth(access_token))
+}
+
+fn classify_provider_rejection(status: StatusCode, body: &[u8]) -> ProviderFailure {
+    let reason = serde_json::from_slice::<GoogleErrorEnvelope>(body)
+        .ok()
+        .and_then(|value| value.error.errors.into_iter().next())
+        .map(|detail| detail.reason);
+    match reason.as_deref() {
+        Some(
+            "rateLimitExceeded" | "userRateLimitExceeded" | "quotaExceeded" | "dailyLimitExceeded",
+        ) => ProviderFailure::RateLimited,
+        Some("insufficientPermissions") => {
+            ProviderFailure::Rejected(ProviderRejection::InsufficientPermissions)
+        }
+        Some("accessNotConfigured") => ProviderFailure::Rejected(ProviderRejection::ApiDisabled),
+        Some("notFound") => ProviderFailure::Rejected(ProviderRejection::NotFound),
+        _ if status == StatusCode::BAD_REQUEST => {
+            ProviderFailure::Rejected(ProviderRejection::BadRequest)
+        }
+        _ if status == StatusCode::FORBIDDEN => {
+            ProviderFailure::Rejected(ProviderRejection::Forbidden)
+        }
+        _ if status == StatusCode::NOT_FOUND => {
+            ProviderFailure::Rejected(ProviderRejection::NotFound)
+        }
+        _ => ProviderFailure::Rejected(ProviderRejection::Other),
+    }
+}
+
+fn provider_failure_code(failure: &ProviderFailure) -> &'static str {
+    match failure {
+        ProviderFailure::Gone => "invalid_response",
+        ProviderFailure::Reauth => "reauth_required",
+        ProviderFailure::RateLimited => "rate_limited",
+        ProviderFailure::Unavailable => "provider_unavailable",
+        ProviderFailure::Rejected(ProviderRejection::BadRequest) => "provider_bad_request",
+        ProviderFailure::Rejected(ProviderRejection::Forbidden) => "provider_forbidden",
+        ProviderFailure::Rejected(ProviderRejection::NotFound) => "provider_not_found",
+        ProviderFailure::Rejected(ProviderRejection::InsufficientPermissions) => {
+            "provider_insufficient_permissions"
+        }
+        ProviderFailure::Rejected(ProviderRejection::ApiDisabled) => "provider_api_disabled",
+        ProviderFailure::Rejected(ProviderRejection::Other) => "provider_rejected",
+        ProviderFailure::InvalidResponse => "invalid_response",
+    }
+}
+
+fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_millis(250_u64.saturating_mul(1_u64 << attempt.min(4)))
+}
+
+async fn fetch_events_page(
+    client: &Client,
+    access_token: &str,
+    provider_calendar_id: &str,
+    sync_token: Option<&str>,
+    page_token: Option<&str>,
+) -> Result<EventsPage, ProviderFailure> {
+    for attempt in 0..MAX_PROVIDER_ATTEMPTS {
+        let response = events_request(
+            client,
+            access_token,
+            provider_calendar_id,
+            sync_token,
+            page_token,
+        )?
+        .send()
+        .await;
+        let response = match response {
+            Ok(value) => value,
+            Err(_) if attempt + 1 < MAX_PROVIDER_ATTEMPTS => {
+                tokio::time::sleep(retry_delay(attempt)).await;
+                continue;
+            }
+            Err(_) => return Err(ProviderFailure::Unavailable),
+        };
+        match response.status() {
+            StatusCode::GONE => return Err(ProviderFailure::Gone),
+            StatusCode::UNAUTHORIZED => return Err(ProviderFailure::Reauth),
+            StatusCode::TOO_MANY_REQUESTS if attempt + 1 < MAX_PROVIDER_ATTEMPTS => {
+                tokio::time::sleep(retry_delay(attempt)).await;
+            }
+            StatusCode::TOO_MANY_REQUESTS => return Err(ProviderFailure::RateLimited),
+            status if status.is_server_error() && attempt + 1 < MAX_PROVIDER_ATTEMPTS => {
+                tokio::time::sleep(retry_delay(attempt)).await;
+            }
+            status if status.is_server_error() => return Err(ProviderFailure::Unavailable),
+            status if !status.is_success() => {
+                let body = response.bytes().await.unwrap_or_default();
+                return Err(classify_provider_rejection(status, &body));
+            }
+            _ => {
+                return response
+                    .json::<EventsPage>()
+                    .await
+                    .map_err(|_| ProviderFailure::InvalidResponse);
+            }
+        }
+    }
+    Err(ProviderFailure::Unavailable)
+}
+
+async fn backend_ok<T: Serialize>(
+    service: &ServiceState,
+    route: &str,
+    body: &T,
+) -> Result<(), GoogleCommandError> {
+    let _: HashMap<String, String> =
+        product_request(service, reqwest::Method::POST, route, Some(body)).await?;
+    Ok(())
+}
+
+async fn report_failure(
+    service: &ServiceState,
+    calendar_id: &str,
+    failure: &ProviderFailure,
+) -> Result<(), GoogleCommandError> {
+    let code = provider_failure_code(failure);
+    let route = calendar_backend_route(calendar_id, "/sync/failure")?;
+    backend_ok(
+        service,
+        &route,
+        &SyncFailureInput {
+            error_code: code,
+            retry_count: if matches!(
+                failure,
+                ProviderFailure::RateLimited | ProviderFailure::Unavailable
+            ) {
+                MAX_PROVIDER_ATTEMPTS
+            } else {
+                0
+            },
+            next_retry_at: None,
+        },
+    )
+    .await
+}
+
+async fn sync_calendar(
+    client: &Client,
+    service: &ServiceState,
+    calendar: &InternalGoogleCalendar,
+    access_token: &str,
+) -> Result<(), ProviderFailure> {
+    let mut mode = if calendar.next_sync_token.is_some() {
+        "incremental"
+    } else {
+        "full"
+    };
+    loop {
+        let generation = new_uuid().map_err(|_| ProviderFailure::InvalidResponse)?;
+        let begin_route = calendar_backend_route(&calendar.calendar.id, "/sync/begin")
+            .map_err(|_| ProviderFailure::InvalidResponse)?;
+        backend_ok(
+            service,
+            &begin_route,
+            &SyncBeginInput {
+                generation: &generation,
+                mode,
+            },
+        )
+        .await
+        .map_err(|_| ProviderFailure::Unavailable)?;
+        let sync_token = if mode == "incremental" {
+            calendar.next_sync_token.as_deref()
+        } else {
+            None
+        };
+        let mut page_token: Option<String> = None;
+        let final_sync_token = loop {
+            let page = match fetch_events_page(
+                client,
+                access_token,
+                &calendar.calendar.provider_calendar_id,
+                sync_token,
+                page_token.as_deref(),
+            )
+            .await
+            {
+                Err(error) if should_reset_to_full(mode, &error) => break None,
+                Err(error) => return Err(error),
+                Ok(page) => page,
+            };
+            let timezone = calendar.calendar.timezone.as_deref().unwrap_or("UTC");
+            let events: Vec<_> = page
+                .items
+                .into_iter()
+                .map(|event| sanitize_event(event, timezone))
+                .collect();
+            let page_route = calendar_backend_route(&calendar.calendar.id, "/sync/page")
+                .map_err(|_| ProviderFailure::InvalidResponse)?;
+            backend_ok(
+                service,
+                &page_route,
+                &SyncPageInput {
+                    generation: &generation,
+                    events: &events,
+                },
+            )
+            .await
+            .map_err(|_| ProviderFailure::Unavailable)?;
+            if let Some(next) = page.next_page_token {
+                page_token = Some(next);
+                continue;
+            }
+            break Some(
+                page.next_sync_token
+                    .ok_or(ProviderFailure::InvalidResponse)?,
+            );
+        };
+        if let Some(next_sync_token) = final_sync_token {
+            let complete_route = calendar_backend_route(&calendar.calendar.id, "/sync/complete")
+                .map_err(|_| ProviderFailure::InvalidResponse)?;
+            backend_ok(
+                service,
+                &complete_route,
+                &SyncCompleteInput {
+                    generation: &generation,
+                    next_sync_token: &next_sync_token,
+                },
+            )
+            .await
+            .map_err(|_| ProviderFailure::Unavailable)?;
+            return Ok(());
+        }
+        mode = "full";
+    }
+}
+
+fn event_detail_readable(access_role: &str) -> bool {
+    matches!(
+        access_role,
+        "reader" | "writerWithoutPrivateAccess" | "writer" | "owner"
+    )
+}
+
+async fn synchronize<R: Runtime>(
+    app: &AppHandle<R>,
+    service: &ServiceState,
+    google: &GoogleState,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    let _guard = google.begin_sync()?;
+    let config = load_oauth_config(&oauth_config_path(app)?)?;
+    let client = google_client()?;
+    let state = internal_state(service).await?;
+    for account in state
+        .accounts
+        .iter()
+        .filter(|account| account.account.auth_state == "connected")
+    {
+        let account_calendars: Vec<_> = state
+            .calendars
+            .iter()
+            .filter(|calendar| {
+                calendar.calendar.account_id == account.account.id
+                    && calendar.calendar.enabled_in_ion
+                    && !calendar.calendar.provider_deleted
+                    && event_detail_readable(&calendar.calendar.access_role)
+            })
+            .collect();
+        if account_calendars.is_empty() {
+            continue;
+        }
+        let access_token = if let Some(value) = google.cached_token(&account.account.id) {
+            value
+        } else {
+            let refresh_token = match SystemKeychain.get(&account.keychain_locator) {
+                Ok(value) => value,
+                Err(_) => {
+                    for calendar in &account_calendars {
+                        report_failure(service, &calendar.calendar.id, &ProviderFailure::Reauth)
+                            .await?;
+                    }
+                    continue;
+                }
+            };
+            match refresh_access_token(&client, &config, &refresh_token).await {
+                Ok(token) => {
+                    let value = token.access_token.clone();
+                    google.store_access_token(
+                        &account.account.id,
+                        token.access_token,
+                        token.expires_in,
+                    );
+                    value
+                }
+                Err(error) => {
+                    for calendar in &account_calendars {
+                        report_failure(service, &calendar.calendar.id, &error).await?;
+                    }
+                    continue;
+                }
+            }
+        };
+        for calendar in account_calendars {
+            if let Err(error) = sync_calendar(&client, service, calendar, &access_token).await {
+                report_failure(service, &calendar.calendar.id, &error).await?;
+                if matches!(error, ProviderFailure::Reauth) {
+                    google.forget_account(&account.account.id);
+                    break;
+                }
+            }
+        }
+    }
+    local_status(service)
+        .await
+        .map(|status| configured_status(app, status))
+}
+
+#[tauri::command]
+pub async fn sync_google_calendars<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+    google: State<'_, GoogleState>,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    synchronize(&app, &service, &google).await
+}
+
+#[tauri::command]
+pub async fn disconnect_google_calendar<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+    google: State<'_, GoogleState>,
+    account_id: String,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    let state = internal_state(&service).await?;
+    let account = state
+        .accounts
+        .iter()
+        .find(|account| account.account.id == account_id)
+        .ok_or_else(|| GoogleCommandError::new("not_found"))?;
+    let route = account_backend_route(&account_id, "/disconnect")?;
+    let status: CalendarStatus = product_request(
+        &service,
+        reqwest::Method::POST,
+        &route,
+        Some(&EmptyInput {}),
+    )
+    .await?;
+    if let Ok(token) = SystemKeychain.get(&account.keychain_locator) {
+        if let Ok(client) = google_client() {
+            let _ = client
+                .post(REVOKE_ENDPOINT)
+                .form(&[("token", token.as_str())])
+                .send()
+                .await;
+        }
+    }
+    let _ = SystemKeychain.delete(&account.keychain_locator);
+    google.forget_account(&account_id);
+    Ok(configured_status(&app, status))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Mutex};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct FakeTokenStore(Mutex<HashMap<String, String>>);
+
+    impl RefreshTokenStore for FakeTokenStore {
+        fn set(&self, locator: &str, value: &str) -> Result<(), GoogleCommandError> {
+            self.0.lock().unwrap().insert(locator.into(), value.into());
+            Ok(())
+        }
+
+        fn get(&self, locator: &str) -> Result<String, GoogleCommandError> {
+            self.0
+                .lock()
+                .unwrap()
+                .get(locator)
+                .cloned()
+                .ok_or_else(|| GoogleCommandError::new("reauth_required"))
+        }
+
+        fn delete(&self, locator: &str) -> Result<(), GoogleCommandError> {
+            self.0.lock().unwrap().remove(locator);
+            Ok(())
+        }
+    }
+
+    fn synthetic_config() -> OAuthConfig {
+        OAuthConfig {
+            client_id: "synthetic-client.apps.googleusercontent.com".into(),
+            client_secret: None,
+        }
+    }
+
+    #[test]
+    fn pkce_and_authorization_are_scoped_and_do_not_expose_verifier() {
+        let (verifier, challenge) = pkce_pair().unwrap();
+        assert!((43..=128).contains(&verifier.len()));
+        assert_ne!(verifier, challenge);
+        let url = authorization_url(
+            &synthetic_config(),
+            "http://127.0.0.1:49152/oauth2/callback",
+            "synthetic-state",
+            &challenge,
+        )
+        .unwrap();
+        let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(query.get("code_challenge_method").unwrap(), "S256");
+        assert_eq!(
+            query.get("scope").unwrap(),
+            &format!("{CALENDAR_LIST_SCOPE} {EVENTS_READ_SCOPE}")
+        );
+        assert!(!url.as_str().contains(&verifier));
+        assert!(!url.as_str().contains("tasks"));
+        assert!(!url.as_str().contains("calendar%20"));
+    }
+
+    #[test]
+    fn callback_requires_exact_path_state_and_code() {
+        assert_eq!(
+            callback_code(
+                "/oauth2/callback?state=expected&code=synthetic-code",
+                "expected"
+            )
+            .unwrap(),
+            "synthetic-code"
+        );
+        assert_eq!(
+            callback_code(
+                "/oauth2/callback?state=wrong&code=synthetic-code",
+                "expected"
+            )
+            .unwrap_err()
+            .code,
+            "oauth_state_mismatch"
+        );
+        assert_eq!(
+            callback_code("/oauth2/callback?state=expected&error=denied", "expected")
+                .unwrap_err()
+                .code,
+            "oauth_cancelled"
+        );
+        assert!(callback_code("/other?state=expected&code=x", "expected").is_err());
+    }
+
+    #[test]
+    fn keychain_abstraction_round_trips_without_real_keychain_access() {
+        let store = FakeTokenStore::default();
+        store
+            .set("synthetic-locator", "synthetic-refresh-token")
+            .unwrap();
+        assert_eq!(
+            store.get("synthetic-locator").unwrap(),
+            "synthetic-refresh-token"
+        );
+        store.delete("synthetic-locator").unwrap();
+        assert!(store.get("synthetic-locator").is_err());
+    }
+
+    #[test]
+    fn provider_event_sanitization_preserves_all_day_and_iana_time() {
+        let timed = sanitize_time(
+            Some(ProviderDateTimeRaw {
+                date: None,
+                date_time: Some("2030-03-10T03:30:00-07:00".into()),
+                time_zone: None,
+            }),
+            "America/Los_Angeles",
+        )
+        .unwrap();
+        assert_eq!(timed.timezone.as_deref(), Some("America/Los_Angeles"));
+        assert_eq!(timed.date, None);
+
+        let date = sanitize_time(
+            Some(ProviderDateTimeRaw {
+                date: Some("2030-03-10".into()),
+                date_time: None,
+                time_zone: None,
+            }),
+            "America/Los_Angeles",
+        )
+        .unwrap();
+        assert_eq!(date.date.as_deref(), Some("2030-03-10"));
+        assert_eq!(date.date_time, None);
+        assert_eq!(date.timezone, None);
+    }
+
+    #[test]
+    fn event_urls_encode_provider_ids_and_keep_sync_query_stable() {
+        let url = events_url(
+            "synthetic/calendar@example.invalid",
+            Some("sync+token"),
+            Some("page/token"),
+        )
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://www.googleapis.com/calendar/v3/calendars/\
+synthetic%2Fcalendar@example.invalid/events?maxResults=2500&showDeleted=true&\
+singleEvents=false&syncToken=sync%2Btoken&pageToken=page%2Ftoken"
+        );
+        assert!(url.path().contains("synthetic%2Fcalendar@example.invalid"));
+        let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(query.get("singleEvents").unwrap(), "false");
+        assert_eq!(query.get("showDeleted").unwrap(), "true");
+        assert_eq!(query.get("syncToken").unwrap(), "sync+token");
+        assert_eq!(query.get("pageToken").unwrap(), "page/token");
+    }
+
+    #[test]
+    fn event_urls_match_google_full_and_incremental_request_constraints() {
+        let full = events_url("primary", None, None).unwrap();
+        assert_eq!(
+            full.as_str(),
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events?\
+maxResults=2500&showDeleted=true&singleEvents=false"
+        );
+        let full_keys: HashSet<_> = full
+            .query_pairs()
+            .map(|(key, _)| key.into_owned())
+            .collect();
+        assert_eq!(
+            full_keys,
+            HashSet::from([
+                "maxResults".to_string(),
+                "showDeleted".to_string(),
+                "singleEvents".to_string(),
+            ])
+        );
+
+        let incremental = events_url("primary", Some("synthetic-sync"), None).unwrap();
+        let incremental_query: HashMap<_, _> = incremental.query_pairs().into_owned().collect();
+        assert_eq!(
+            incremental_query.get("syncToken").unwrap(),
+            "synthetic-sync"
+        );
+        assert_eq!(incremental_query.get("showDeleted").unwrap(), "true");
+        for incompatible in [
+            "iCalUID",
+            "orderBy",
+            "privateExtendedProperty",
+            "q",
+            "sharedExtendedProperty",
+            "timeMin",
+            "timeMax",
+            "updatedMin",
+        ] {
+            assert!(!incremental_query.contains_key(incompatible));
+        }
+        assert!(events_url("primary", Some(""), None).is_err());
+        assert!(events_url("primary", None, Some("")).is_err());
+    }
+
+    #[test]
+    fn events_request_keeps_bearer_credentials_out_of_the_url() {
+        let request = events_request(
+            &Client::new(),
+            "synthetic-access-token",
+            "primary",
+            None,
+            None,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        assert_eq!(
+            request
+                .headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .unwrap(),
+            "Bearer synthetic-access-token"
+        );
+        assert!(!request.url().as_str().contains("synthetic-access-token"));
+    }
+
+    #[test]
+    fn provider_rejections_are_allowlisted_without_leaking_payload_reasons() {
+        let not_found = classify_provider_rejection(
+            StatusCode::NOT_FOUND,
+            br#"{"error":{"errors":[{"reason":"notFound"}]}}"#,
+        );
+        assert_eq!(provider_failure_code(&not_found), "provider_not_found");
+
+        let insufficient = classify_provider_rejection(
+            StatusCode::FORBIDDEN,
+            br#"{"error":{"errors":[{"reason":"insufficientPermissions"}]}}"#,
+        );
+        assert_eq!(
+            provider_failure_code(&insufficient),
+            "provider_insufficient_permissions"
+        );
+
+        let rate_limited = classify_provider_rejection(
+            StatusCode::FORBIDDEN,
+            br#"{"error":{"errors":[{"reason":"rateLimitExceeded"}]}}"#,
+        );
+        assert_eq!(rate_limited, ProviderFailure::RateLimited);
+
+        let private_reason = classify_provider_rejection(
+            StatusCode::FORBIDDEN,
+            br#"{"error":{"errors":[{"reason":"private-owner-detail"}]}}"#,
+        );
+        assert_eq!(provider_failure_code(&private_reason), "provider_forbidden");
+        assert_ne!(
+            provider_failure_code(&private_reason),
+            "private-owner-detail"
+        );
+    }
+
+    #[test]
+    fn event_sync_skips_roles_without_event_detail_access() {
+        for role in ["reader", "writerWithoutPrivateAccess", "writer", "owner"] {
+            assert!(event_detail_readable(role));
+        }
+        for role in ["none", "freeBusyReader", "unknown"] {
+            assert!(!event_detail_readable(role));
+        }
+    }
+
+    #[test]
+    fn fixed_backend_routes_match_calendar_api_ownership() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        assert_eq!(
+            calendar_backend_route(id, "/selection").unwrap(),
+            format!("/v1/calendar/calendars/{id}/selection")
+        );
+        for stage in ["begin", "page", "complete", "failure"] {
+            assert_eq!(
+                calendar_backend_route(id, &format!("/sync/{stage}")).unwrap(),
+                format!("/v1/calendar/calendars/{id}/sync/{stage}")
+            );
+        }
+        assert_eq!(
+            account_backend_route(id, "/disconnect").unwrap(),
+            format!("/v1/calendar/accounts/{id}/disconnect")
+        );
+        assert!(calendar_backend_route("../status", "/sync/begin").is_err());
+        assert!(account_backend_route("../status", "/disconnect").is_err());
+    }
+
+    #[test]
+    fn retries_are_bounded_exponential_backoff() {
+        assert_eq!(retry_delay(0), Duration::from_millis(250));
+        assert_eq!(retry_delay(1), Duration::from_millis(500));
+        assert_eq!(retry_delay(2), Duration::from_millis(1000));
+        assert_eq!(retry_delay(99), Duration::from_millis(4000));
+    }
+
+    #[test]
+    fn renderer_status_has_no_keychain_locator_or_token_field() {
+        let status = CalendarStatus {
+            configured: true,
+            configuration_path: "/synthetic/google-oauth.json".into(),
+            accounts: vec![],
+            calendars: vec![],
+            blocks: vec![],
+        };
+        let serialized = serde_json::to_string(&status).unwrap();
+        assert!(!serialized.contains("keychain"));
+        assert!(!serialized.contains("token"));
+        assert!(!serialized.contains("verifier"));
+        assert!(!serialized.contains("authorization_code"));
+    }
+
+    #[test]
+    fn provider_pages_parse_pagination_and_final_sync_tokens() {
+        let first: EventsPage =
+            serde_json::from_str(r#"{"items":[],"nextPageToken":"synthetic-page"}"#).unwrap();
+        assert_eq!(first.next_page_token.as_deref(), Some("synthetic-page"));
+        assert_eq!(first.next_sync_token, None);
+
+        let last: EventsPage =
+            serde_json::from_str(r#"{"items":[],"nextSyncToken":"synthetic-sync"}"#).unwrap();
+        assert_eq!(last.next_page_token, None);
+        assert_eq!(last.next_sync_token.as_deref(), Some("synthetic-sync"));
+    }
+
+    #[test]
+    fn http_410_resets_only_incremental_sync_to_a_full_generation() {
+        assert!(should_reset_to_full("incremental", &ProviderFailure::Gone));
+        assert!(!should_reset_to_full("full", &ProviderFailure::Gone));
+        assert!(!should_reset_to_full(
+            "incremental",
+            &ProviderFailure::Unavailable
+        ));
+    }
+}

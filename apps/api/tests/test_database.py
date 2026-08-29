@@ -23,7 +23,7 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
             )
         }
 
-    assert version == ("0004_today_planning",)
+    assert version == ("0005_google_calendar_foundation",)
     assert {
         "areas",
         "goals",
@@ -33,6 +33,11 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
         "tasks",
         "audit_events",
         "task_day_plans",
+        "google_accounts",
+        "google_calendars",
+        "calendar_blocks",
+        "calendar_block_ion_metadata",
+        "google_event_links",
     } <= tables
 
     with sqlite3.connect(database_path) as connection:

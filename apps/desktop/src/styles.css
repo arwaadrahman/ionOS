@@ -782,6 +782,105 @@ h1 {
   background: #b8b2c2;
 }
 
+/* Phase 2A account, discovery, and read-sync setup */
+.calendar-workspace {
+  max-width: 72rem;
+}
+
+.calendar-header,
+.calendar-account-heading {
+  display: flex;
+  gap: 2rem;
+  align-items: end;
+  justify-content: space-between;
+}
+
+.calendar-header-actions {
+  display: flex;
+  gap: 0.55rem;
+  flex: 0 0 auto;
+}
+
+.calendar-workspace .notice {
+  display: grid;
+  gap: 0.35rem;
+  margin: 1rem 0;
+}
+
+.calendar-workspace code {
+  overflow-wrap: anywhere;
+  color: #d7cdf4;
+}
+
+.calendar-empty,
+.calendar-account {
+  margin-top: 1rem;
+  padding: 1.15rem;
+  border: 1px solid #29262f;
+  border-radius: 0.8rem;
+  background: #101014;
+}
+
+.calendar-empty p,
+.calendar-account-heading p {
+  margin: 0.35rem 0 0;
+  color: #9791a0;
+}
+
+.calendar-account-heading {
+  align-items: start;
+}
+
+.calendar-account-heading h2 {
+  margin-top: 0.45rem;
+  font-size: 1.35rem;
+}
+
+.calendar-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.calendar-list > li {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.8rem;
+  border: 1px solid #29262f;
+  border-radius: 0.55rem;
+  background: #121217;
+}
+
+.calendar-copy {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.calendar-copy span,
+.calendar-toggle {
+  color: #9992a4;
+  font-size: 0.78rem;
+}
+
+.calendar-error {
+  color: #d8aa84 !important;
+}
+
+.calendar-toggle {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.calendar-toggle input {
+  accent-color: var(--ion-accent, #8b5cf6);
+}
+
 /* Phase 1D Home and Ion Core */
 .home-workspace {
   --core-violet: #9b7cff;

@@ -1,5 +1,10 @@
 import { HomeOutput, homeClient } from "./home";
 import {
+  CalendarStatus,
+  emptyCalendarStatus,
+  googleCalendarClient,
+} from "./calendar";
+import {
   Area,
   Goal,
   Project,
@@ -22,18 +27,33 @@ export type StartupData = {
   projects: Project[];
   today: TodayOutput;
   home: HomeOutput;
+  calendar: CalendarStatus;
   todayContext: TodayContext;
 };
 
 export async function loadStartupData(): Promise<StartupData> {
   const todayContext = currentTodayContext();
-  const [tasks, areas, goals, projects, today, home] = await Promise.all([
-    taskClient.list(),
-    areaClient.list("all"),
-    goalClient.list("all"),
-    projectClient.list("all"),
-    todayClient.get(todayContext),
-    homeClient.get(todayContext),
-  ]);
-  return { tasks, areas, goals, projects, today, home, todayContext };
+  const calendarStatus = googleCalendarClient
+    .status()
+    .catch(() => emptyCalendarStatus());
+  const [tasks, areas, goals, projects, today, home, calendar] =
+    await Promise.all([
+      taskClient.list(),
+      areaClient.list("all"),
+      goalClient.list("all"),
+      projectClient.list("all"),
+      todayClient.get(todayContext),
+      homeClient.get(todayContext),
+      calendarStatus,
+    ]);
+  return {
+    tasks,
+    areas,
+    goals,
+    projects,
+    today,
+    home,
+    calendar,
+    todayContext,
+  };
 }

@@ -1,7 +1,7 @@
 import { CoreNode, HomeOutput } from "./home";
 
 export type Workspace =
-  "home" | "today" | "areas" | "projects" | "tasks" | "recovery";
+  "home" | "today" | "calendar" | "areas" | "projects" | "tasks" | "recovery";
 
 export type NavigationTarget =
   | { workspace: "areas"; entityType: "area" | "goal"; id: string }
@@ -11,6 +11,7 @@ export type NavigationTarget =
 export const workspaces: readonly Workspace[] = [
   "home",
   "today",
+  "calendar",
   "areas",
   "projects",
   "tasks",

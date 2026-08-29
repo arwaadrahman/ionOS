@@ -1,4 +1,5 @@
 mod desktop;
+mod google_calendar;
 mod home;
 mod organizer;
 mod service;
@@ -10,7 +11,13 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(service::ServiceState::default())
+        .manage(google_calendar::GoogleState::default())
         .invoke_handler(tauri::generate_handler![
+            google_calendar::get_google_calendar_status,
+            google_calendar::connect_google_calendar,
+            google_calendar::set_google_calendar_enabled,
+            google_calendar::sync_google_calendars,
+            google_calendar::disconnect_google_calendar,
             home::get_home,
             service::service_health,
             service::list_tasks,
