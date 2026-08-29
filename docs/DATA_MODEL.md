@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 1C foundation.** The organizer schema begins in
+**Phase 1D foundation.** The organizer schema begins in
 `0002_organizer_foundation`; `0003_milestone_ordering` adds canonical
 owner-scoped positions to Goal and Project Milestones, and
 `0004_today_planning` adds human day-planning intent over canonical Tasks.
@@ -40,6 +40,12 @@ owner-scoped positions to Goal and Project Milestones, and
 - The current IANA timezone is request context for validating Today and
   classifying exact deadlines; historical plan rows retain their original
   civil date.
+- Phase 1D adds no migration. Home/Core nodes, edges, lifecycle normalization,
+  Today/attention annotations, coordinates, and summaries are deterministic
+  read projections over the existing tables and are never persisted.
+- The Core includes only untrashed Areas, Goals, both owner-specific Milestone
+  types, Projects, and Tasks. Its edges are the existing direct `goal→area`,
+  `project→goal`, Milestone→owner, and Task→Goal/Project foreign keys.
 
 See [Architecture](ARCHITECTURE.md) and ADR
 [0001](decisions/0001-local-first-data-ownership.md).

@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { OrganizerShell } from "./OrganizerShell";
+import { HomeOutput } from "./home";
 import { Area, Goal, GoalDetail, Project } from "./organizer";
 import { StartupData } from "./startup";
 import { TodayOutput } from "./today";
@@ -76,12 +77,22 @@ const today: TodayOutput = {
   unfinished_from_yesterday: [],
   completed_today: [],
 };
+const home: HomeOutput = {
+  planning_date: today.planning_date,
+  timezone: today.timezone,
+  generated_at: time,
+  core: { nodes: [], edges: [] },
+  focus: null,
+  needs_attention: [],
+  upcoming: [],
+};
 const data: StartupData = {
   areas: [area],
   goals: [goal],
   projects: [project],
   tasks: [],
   today,
+  home,
   todayContext: {
     planning_date: today.planning_date,
     timezone: today.timezone,
@@ -213,6 +224,7 @@ test("refreshes a revision conflict while preserving the owner's Area draft", as
     if (command === "list_areas") return [area];
     if (command === "list_goals") return [];
     if (command === "get_today") return today;
+    if (command === "get_home") return home;
     throw new Error(`Unexpected command: ${command}`);
   });
   render(<OrganizerShell initialData={{ ...data, goals: [], projects: [] }} />);
@@ -295,5 +307,43 @@ test("shows a genuine Goal validation failure without false success", async () =
   expect(screen.queryByText("Saved")).not.toBeInTheDocument();
   expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue(
     "Rejected Goal",
+  );
+});
+
+test("refreshes Home after a confirmed canonical Task mutation", async () => {
+  const confirmedTask = {
+    id: "66666666-6666-4666-8666-666666666666",
+    title: "New canonical Task",
+    details: null,
+    state: "open",
+    source_kind: "human",
+    importance: null,
+    estimated_minutes: null,
+    progress_percent: null,
+    deadline: { kind: "none" },
+    project_id: null,
+    goal_id: null,
+    completion_evidence: null,
+    completed_at: null,
+    created_at: time,
+    updated_at: time,
+    revision: 1,
+    trashed_at: null,
+  };
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "create_task") return confirmedTask;
+    if (command === "get_home") return home;
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  render(<OrganizerShell initialData={data} />);
+  fireEvent.click(screen.getByRole("button", { name: "Tasks" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+    target: { value: confirmedTask.title },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+  expect(await screen.findByText(confirmedTask.title)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Home" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("get_home", expect.anything()),
   );
 });

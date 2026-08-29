@@ -508,3 +508,313 @@ h1 {
 .service-status--unavailable .status-dot {
   background: #b8b2c2;
 }
+
+/* Phase 1D Home and Ion Core */
+.home-workspace {
+  --core-violet: #9b7cff;
+  --core-cyan: #49dccb;
+  --core-gold: #ffce72;
+  position: relative;
+  max-width: 92rem;
+  margin: 0 auto;
+  padding: clamp(1.2rem, 3vw, 2.6rem);
+}
+
+.home-heading-row {
+  display: flex;
+  gap: 2rem;
+  align-items: end;
+  justify-content: space-between;
+}
+
+.home-heading-row h1 {
+  font-size: clamp(2.5rem, 7vw, 5.6rem);
+  letter-spacing: -0.065em;
+}
+
+.home-heading-row p:not(.eyebrow) {
+  margin: 0.7rem 0 0;
+  color: #9c97a8;
+}
+
+.core-state-badge {
+  display: inline-flex;
+  gap: 0.55rem;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #302b3d;
+  border-radius: 999px;
+  color: #bdb6c8;
+  background: rgb(17 16 23 / 82%);
+  font-size: 0.75rem;
+  text-transform: capitalize;
+}
+
+.core-state-badge span {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--core-cyan);
+  box-shadow: 0 0 1rem var(--core-cyan);
+}
+
+.core-state-badge.is-processing span {
+  background: var(--core-violet);
+}
+
+.core-state-badge.is-attention span {
+  background: #ff7f86;
+}
+
+.home-stale-notice {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1rem;
+  color: #d5c5b0;
+}
+
+.home-core-panel {
+  position: relative;
+  min-height: clamp(31rem, 62vh, 46rem);
+  margin-top: 0.5rem;
+  overflow: hidden;
+  border: 1px solid rgb(127 105 183 / 15%);
+  border-radius: 1.25rem;
+  background:
+    radial-gradient(circle at 50% 50%, rgb(90 67 149 / 13%), transparent 42%),
+    linear-gradient(180deg, rgb(14 13 19 / 65%), rgb(8 8 11 / 92%));
+}
+
+.ion-core-halo {
+  position: absolute;
+  inset: 15% 24%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgb(128 98 214 / 14%), transparent 68%);
+  filter: blur(20px);
+  pointer-events: none;
+}
+
+.ion-core-stage,
+.ion-core-renderer {
+  position: absolute;
+  inset: 0;
+}
+
+.ion-core-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.ion-core-hover {
+  position: fixed;
+  z-index: 5;
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #514664;
+  border-radius: 0.5rem;
+  background: rgb(13 12 17 / 94%);
+  pointer-events: none;
+}
+
+.ion-core-hover span {
+  color: #9f98ab;
+  font-size: 0.7rem;
+  text-transform: capitalize;
+}
+
+.ion-core-controls {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.35rem;
+  border: 1px solid #2c2934;
+  border-radius: 0.65rem;
+  background: rgb(9 9 12 / 80%);
+}
+
+.ion-core-controls button {
+  min-width: 2.15rem;
+  border-color: transparent;
+  background: transparent;
+}
+
+.core-counts {
+  position: absolute;
+  bottom: 1rem;
+  left: 1rem;
+  display: flex;
+  gap: 0.45rem;
+  color: #8f8999;
+  font-size: 0.72rem;
+}
+
+.core-counts span {
+  padding: 0.35rem 0.55rem;
+  border: 1px solid #2c2934;
+  border-radius: 999px;
+  background: rgb(9 9 12 / 76%);
+}
+
+.core-counts strong {
+  color: #eeeaf4;
+}
+
+.ion-core-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  color: #9f98ab;
+  text-align: center;
+}
+
+.ion-core-fallback-orbit {
+  width: 9rem;
+  height: 9rem;
+  border: 1px solid rgb(155 124 255 / 45%);
+  border-radius: 50%;
+  background: radial-gradient(circle, #b9a5ff 0 3px, transparent 4px);
+  box-shadow: inset 0 0 3rem rgb(73 220 203 / 12%);
+  transform: rotate(-18deg) scaleY(0.52);
+}
+
+.core-selection {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0.8rem 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid #373044;
+  border-radius: 0.75rem;
+  background: #111016;
+}
+
+.core-selection span,
+.core-selection p {
+  color: #968fa1;
+  font-size: 0.76rem;
+  text-transform: capitalize;
+}
+
+.core-selection h2,
+.core-selection p {
+  margin: 0.15rem 0;
+}
+
+.core-selection h2 {
+  font-size: 1.05rem;
+}
+
+.core-selection-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.home-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 0.8rem;
+}
+
+.home-card {
+  min-height: 10rem;
+  padding: 1rem;
+  border: 1px solid #292631;
+  border-radius: 0.8rem;
+  background: linear-gradient(145deg, #121117, #0e0e12);
+}
+
+.home-card.is-focus {
+  border-color: rgb(255 206 114 / 25%);
+}
+
+.home-card-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.7rem;
+}
+
+.home-card-heading h2 {
+  font-size: 1rem;
+}
+
+.home-card-heading span,
+.empty-copy {
+  color: #888291;
+  font-size: 0.75rem;
+}
+
+.home-summary-item {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid #24212b;
+}
+
+.home-summary-item span,
+.home-summary-item time {
+  color: #9b94a3;
+  font-size: 0.76rem;
+}
+
+.home-summary-item.is-attention span {
+  color: #d88f93;
+}
+
+.ask-ion-placeholder {
+  display: block;
+  min-width: 11rem;
+  margin: 1rem auto 0;
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.entity-list li.is-home-target {
+  border-color: var(--core-cyan);
+  box-shadow: 0 0 0 1px rgb(73 220 203 / 20%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 760px) {
+  .workspace-switcher {
+    overflow-x: auto;
+  }
+  .home-heading-row,
+  .core-selection {
+    align-items: start;
+  }
+  .home-heading-row,
+  .home-summary-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .home-core-panel {
+    min-height: 29rem;
+  }
+  .ion-core-controls {
+    right: 0.6rem;
+    bottom: 0.6rem;
+    max-width: 12rem;
+    flex-wrap: wrap;
+    justify-content: end;
+  }
+}

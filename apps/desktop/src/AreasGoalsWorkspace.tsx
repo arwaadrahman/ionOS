@@ -24,6 +24,7 @@ type Props = {
   onGoals(goals: Goal[]): void;
   onTasks(tasks: Task[]): void;
   onRefresh(): Promise<void>;
+  navigationTarget?: { type: "area" | "goal"; id: string } | null;
 };
 
 const replace = <T extends { id: string }>(items: T[], item: T) => [
@@ -39,6 +40,7 @@ export function AreasGoalsWorkspace({
   onGoals,
   onTasks,
   onRefresh,
+  navigationTarget,
 }: Props) {
   const [selection, setSelection] = useState<{
     type: "area" | "goal";
@@ -71,6 +73,10 @@ export function AreasGoalsWorkspace({
     [areas],
   );
   const selectedGoalId = selectedGoal?.id ?? null;
+
+  useEffect(() => {
+    if (navigationTarget) setSelection(navigationTarget);
+  }, [navigationTarget]);
 
   useEffect(() => {
     if (!selectedGoalId) {

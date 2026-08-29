@@ -20,3 +20,6 @@ All notable repository changes are documented here.
 - Phase 1C canonical Today planning, deterministic deadline/attention
   projections, local-date rollover, fixed authenticated Today commands, and a
   truthful pre-Calendar execution workspace.
+- Phase 1D read-only Home projection, deterministic structural Ion Core, raw
+  Three.js WebGL2 renderer with strict lifecycle/fallback behavior, Home-first
+  navigation, and compact Today-derived Focus/Attention/Upcoming summaries.

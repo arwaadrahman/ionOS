@@ -26,6 +26,11 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
-    "externalBin": ["binaries/ion-api"]
+    "icon": ["icons/icon.icns"],
+    "externalBin": ["binaries/ion-api"],
+    "macOS": {
+      "signingIdentity": "-",
+      "hardenedRuntime": false
+    }
   }
 }

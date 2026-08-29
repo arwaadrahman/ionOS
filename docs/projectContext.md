@@ -10,14 +10,13 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 1 — Ion Core Personal Organizer
-- **Milestone:** Phase 1C — Today
-- **In scope:** persistent human Today intent, priority/planned/backup ordering,
-  deterministic deadline and attention projections, yesterday suggestions,
-  completed work, local-date rollover, truthful pre-Calendar context, fixed
-  authenticated desktop commands, and the inherited organizer/runtime.
+- **Milestone:** Phase 1D — Home and Ion Core baseline
+- **In scope:** one read-only Home projection, deterministic structural Core,
+  compact Today-derived summary context, Home-first navigation, raw Three.js
+  interaction/fallback/lifecycle, and the inherited organizer/runtime.
 - **Out of scope:** integrations, AI, scheduling, Calendar/free-busy,
-  FocusSession, DailyReview, WeeklyPlan, Home, search UI, mobile, remote/LAN
-  access, and a production Ion Core.
+  FocusSession, DailyReview, WeeklyPlan, search UI, inferred relationships,
+  final Core Explore modes, mobile, remote/LAN access, and AI.
 
 ## Proposed stack baseline — subject to prototyping
 
@@ -43,8 +42,8 @@ actions as authoritative.
 
 `PROFILE-ION` is a calm operational system with one unmistakable future Core:
 dark-first, near-black and neutral-dominant, with restrained violet energy and
-a premium technical/editorial tone. The advanced Core renderer is not Phase 0A
-scope.
+a premium technical/editorial tone. Phase 1D implements the first operational
+Core baseline; later Explore and AI modes remain deferred.
 
 Design/motion ladder: process guidance (`IMPECCABLE`, `EMIL-MOTION`); CSS for
 simple motion; Motion for React for normal stateful UI; Three.js only for a
@@ -70,7 +69,7 @@ performance-conscious.
 - [Task router](agent/taskRouter.md)
 - [Approved Ion reference snapshot](references/approvedReferences.md)
 - [Decision index](decisions/README.md)
-- [Active phase](phases/PHASE_1C.md)
+- [Active phase](phases/PHASE_1D.md)
 
 The approved-reference snapshot derives from `projectReference.md` version
 **1.1.0** (updated 2026-08-27). Project-local decisions override it.

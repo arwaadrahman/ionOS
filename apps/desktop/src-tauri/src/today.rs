@@ -158,7 +158,7 @@ fn valid_id(id: &str) -> bool {
         })
 }
 
-fn validate_context(planning_date: &str, timezone: &str) -> Result<(), ProductError> {
+pub(crate) fn validate_context(planning_date: &str, timezone: &str) -> Result<(), ProductError> {
     let date_valid = planning_date.len() == 10
         && planning_date
             .bytes()
@@ -173,9 +173,9 @@ fn validate_context(planning_date: &str, timezone: &str) -> Result<(), ProductEr
     Ok(())
 }
 
-fn get_route(context: &TodayContext) -> Result<String, ProductError> {
+pub(crate) fn context_route(path: &str, context: &TodayContext) -> Result<String, ProductError> {
     validate_context(&context.planning_date, &context.timezone)?;
-    let mut url = reqwest::Url::parse("http://ion.invalid/v1/today")
+    let mut url = reqwest::Url::parse(&format!("http://ion.invalid{path}"))
         .map_err(|_| ProductError::new(ProductErrorCode::Validation))?;
     url.query_pairs_mut()
         .append_pair("planning_date", &context.planning_date)
@@ -186,6 +186,10 @@ fn get_route(context: &TodayContext) -> Result<String, ProductError> {
         url.query()
             .ok_or_else(|| ProductError::new(ProductErrorCode::Validation))?
     ))
+}
+
+fn get_route(context: &TodayContext) -> Result<String, ProductError> {
+    context_route("/v1/today", context)
 }
 
 fn plan_route(plan_id: &str, suffix: &str) -> Result<String, ProductError> {

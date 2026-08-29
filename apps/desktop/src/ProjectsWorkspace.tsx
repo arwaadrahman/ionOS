@@ -21,6 +21,7 @@ type Props = {
   onProjects(projects: Project[]): void;
   onTasks(tasks: Task[]): void;
   onRefresh(): Promise<void>;
+  navigationTarget?: string | null;
 };
 
 const groups: { state: ProjectState; label: string }[] = [
@@ -45,6 +46,7 @@ export function ProjectsWorkspace({
   onProjects,
   onTasks,
   onRefresh,
+  navigationTarget,
 }: Props) {
   const [selectedId, setSelectedId] = useState(
     projects.find((project) => !project.trashed_at)?.id ??
@@ -59,6 +61,10 @@ export function ProjectsWorkspace({
   const [newTitle, setNewTitle] = useState("");
   const [contextTask, setContextTask] = useState("");
   const selectedProjectId = selected?.id ?? null;
+
+  useEffect(() => {
+    if (navigationTarget) setSelectedId(navigationTarget);
+  }, [navigationTarget]);
 
   useEffect(() => {
     if (!selectedProjectId) {

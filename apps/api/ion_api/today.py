@@ -135,9 +135,14 @@ class TodayService:
         self.clock = clock or _utc_now
 
     def get_today(self, context: TodayContext) -> TodayOutput:
-        now, zone = self._validate_context(context)
         with self.engine.connect() as connection:
-            return self._project(connection, context, now, zone)
+            return self.project(connection, context)
+
+    def project(self, connection, context: TodayContext) -> TodayOutput:
+        """Project Today inside an existing read transaction."""
+
+        now, zone = self._validate_context(context)
+        return self._project(connection, context, now, zone)
 
     def add_task(self, input: AddTaskToTodayInput, command_id: str) -> TodayOutput:
         now, zone = self._validate_context(input)

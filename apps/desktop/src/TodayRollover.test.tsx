@@ -29,6 +29,15 @@ function data(): StartupData {
     goals: [],
     projects: [],
     today,
+    home: {
+      planning_date: today.planning_date,
+      timezone: today.timezone,
+      generated_at: today.generated_at,
+      core: { nodes: [], edges: [] },
+      focus: null,
+      needs_attention: [],
+      upcoming: [],
+    },
     todayContext: {
       planning_date: today.planning_date,
       timezone: today.timezone,

@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { Goal, Project, asProductError } from "./organizer";
 import { ProductErrorNotice } from "./ProductErrorNotice";
 import {
@@ -14,6 +14,7 @@ type Props = {
   goals?: Goal[];
   projects?: Project[];
   onTasksChange?(tasks: Task[]): void;
+  navigationTaskId?: string | null;
 };
 
 export function TaskWorkspace({
@@ -21,6 +22,7 @@ export function TaskWorkspace({
   goals = [],
   projects = [],
   onTasksChange,
+  navigationTaskId,
 }: Props) {
   const [tasks, setTasks] = useState(initialTasks);
   const [trash, setTrash] = useState<Task[]>([]);
@@ -29,6 +31,14 @@ export function TaskWorkspace({
   const [error, setError] = useState<ReturnType<typeof asProductError> | null>(
     null,
   );
+
+  useEffect(() => {
+    if (!navigationTaskId) return;
+    document.getElementById(`task-${navigationTaskId}`)?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  }, [navigationTaskId]);
 
   function commit(next: Task[]) {
     setTasks(next);
@@ -206,6 +216,7 @@ export function TaskWorkspace({
           <TaskRow
             key={task.id}
             task={task}
+            highlighted={task.id === navigationTaskId}
             goals={goals}
             projects={projects}
             assignableGoals={assignableGoals}
@@ -262,6 +273,7 @@ export function TaskWorkspace({
 
 function TaskRow({
   task,
+  highlighted,
   goals,
   projects,
   assignableGoals,
@@ -271,6 +283,7 @@ function TaskRow({
   onRelationships,
 }: {
   task: Task;
+  highlighted: boolean;
   goals: Goal[];
   projects: Project[];
   assignableGoals: Goal[];
@@ -286,7 +299,10 @@ function TaskRow({
     (project) => project.id === task.project_id,
   );
   return (
-    <li>
+    <li
+      id={`task-${task.id}`}
+      className={highlighted ? "is-home-target" : undefined}
+    >
       <div className="entity-copy">
         <strong>{task.title}</strong>
         <small>{task.state.replace("_", " ")}</small>

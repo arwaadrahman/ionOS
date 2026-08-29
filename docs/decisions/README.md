@@ -32,8 +32,9 @@ remain proposed until intentionally accepted.
 - [0011 Audit, Trash, and recovery foundation](0011-audit-trash-and-recovery-foundation.md)
 - [0012 Organizer lifecycle and containment](0012-organizer-lifecycle-and-containment.md)
 - [0013 Today planning and pre-Calendar boundary](0013-today-planning-and-pre-calendar-boundary.md)
+- [0014 Ion Core rendering and Phase 1D Home boundary](0014-ion-core-rendering-and-phase-1d-home-boundary.md)
 
 ## Decision Backlog
 
 - License selection and CI strategy.
-- Relationship provenance/promotion rules and the future Ion Core spike plan.
+- Relationship provenance/promotion rules and future Core Explore modes.

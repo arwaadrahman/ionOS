@@ -1,3 +1,4 @@
+mod home;
 mod organizer;
 mod service;
 mod today;
@@ -7,6 +8,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(service::ServiceState::default())
         .invoke_handler(tauri::generate_handler![
+            home::get_home,
             service::service_health,
             service::list_tasks,
             service::list_trashed_tasks,

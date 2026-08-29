@@ -72,6 +72,22 @@ const today = {
   unfinished_from_yesterday: [],
   completed_today: [],
 };
+const home = {
+  planning_date: today.planning_date,
+  timezone: today.timezone,
+  generated_at: today.generated_at,
+  core: { nodes: [], edges: [] },
+  focus: {
+    id: task.id,
+    title: task.title,
+    state: task.state,
+    deadline: task.deadline,
+    goal: null,
+    project: null,
+  },
+  needs_attention: [],
+  upcoming: [],
+};
 
 function mockStartup(overrides: Record<string, unknown> = {}) {
   vi.mocked(invoke).mockImplementation(async (command) => {
@@ -82,6 +98,7 @@ function mockStartup(overrides: Record<string, unknown> = {}) {
     if (command === "list_goals") return [];
     if (command === "list_projects") return [];
     if (command === "get_today") return today;
+    if (command === "get_home") return home;
     throw new Error(`Unexpected command: ${command}`);
   });
 }
@@ -91,12 +108,12 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-test("shows Today first and the milestone-local workspaces through narrow commands", async () => {
+test("shows Home first and the milestone-local workspaces through narrow commands", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
   mockStartup();
   render(<App />);
   expect(
-    await screen.findByRole("heading", { name: "Today" }),
+    await screen.findByRole("heading", { name: "Home" }),
   ).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Areas & Goals" }));
   expect(

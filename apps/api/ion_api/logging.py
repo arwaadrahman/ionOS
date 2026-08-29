@@ -25,10 +25,14 @@ def configure_logging(log_path: Path) -> None:
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logger = logging.getLogger("ion")
+    # Uvicorn's test/runtime configuration may disable pre-existing named
+    # loggers. Reconfiguration must restore Ion's explicit local logger.
+    logger.disabled = False
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
     if logger.handlers:
         return
 
-    logger.setLevel(logging.INFO)
     formatter = JsonFormatter()
     stderr_handler = logging.StreamHandler()
     file_handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=3)

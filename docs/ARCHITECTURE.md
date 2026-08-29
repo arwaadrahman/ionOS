@@ -27,7 +27,7 @@ separately labels proposed implementation choices.
 | Structured records | SQLite                                                      |
 | Knowledge          | Obsidian-compatible local Markdown vault                    |
 | Future search      | Local text search, then evaluated local retrieval           |
-| Future graphics    | One justified Three.js/R3F or suitable custom Core renderer |
+| Core graphics      | Raw Three.js `WebGLRenderer` behind a React-owned controller |
 
 ## Phase 0C production runtime
 
@@ -84,6 +84,19 @@ service origin, port, session credential, or generic HTTP capability.
 The right pane is an explicit pre-Calendar boundary: it may render canonical
 deadline markers but cannot render a timeline, appointments, occupied/free
 time, or FocusSession state.
+
+## Phase 1D Home and Ion Core path
+
+Phase 1D adds one read-only Python Home projection over existing organizer and
+Today records. Rust exposes it only as fixed `get_home`; the WebView still has
+no generic HTTP, port, credential, filesystem, or shell access. Home performs
+no writes and creates no audit records.
+
+The desktop derives a structural graph and versioned hash-based positions in
+memory. Raw Three.js owns one lazy WebGL2 renderer with explicit controller
+lifecycle, while React owns product selection, navigation, summary cards, and
+fallback UI. No graph/layout state is stored. React Three Fiber, force/physics
+layout, inferred edges, Explore modes, and AI remain outside this boundary.
 
 ## TBD
 

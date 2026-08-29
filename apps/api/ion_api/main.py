@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ion_api.db import create_database_engine
+from ion_api.home import HomeService
+from ion_api.home_routes import home_router
 from ion_api.logging import configure_logging
 from ion_api.migrations import upgrade_to_head
 from ion_api.organizer import OrganizerService
@@ -68,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     engine = create_database_engine(active_settings.database_path)
+    app.include_router(home_router(HomeService(engine)))
     app.include_router(task_router(TaskService(engine)))
     app.include_router(organizer_router(OrganizerService(engine)))
     app.include_router(today_router(TodayService(engine)))
@@ -93,6 +96,7 @@ def create_production_app(settings: Settings, session_token: str) -> FastAPI:
         return {"status": "ok"}
 
     engine = create_database_engine(settings.database_path)
+    app.include_router(home_router(HomeService(engine)))
     app.include_router(task_router(TaskService(engine)))
     app.include_router(organizer_router(OrganizerService(engine)))
     app.include_router(today_router(TodayService(engine)))
