@@ -10,10 +10,11 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 1 — Ion Core Personal Organizer
-- **Milestone:** Phase 1G — macOS Menu Bar + Quick Capture
-- **In scope:** a native fixed menu-bar surface, minimal canonical Task quick
-  capture, correct close/hide/reactivate/quit behavior, single desktop/sidecar
-  ownership, and the inherited organizer/runtime.
+- **Milestone:** Phase 1H — Phase 1 Acceptance & Hardening
+- **In scope:** acceptance and defect removal across the existing local
+  organizer, Home/Core, Today, deterministic command/recovery surfaces, and
+  native menu-bar/Quick Capture runtime. Canonical identity, lifecycle, and
+  the Rust-owned sidecar boundary remain unchanged.
 - **Out of scope:** integrations, AI, scheduling, Calendar/free-busy,
   FocusSession, DailyReview, WeeklyPlan, semantic/conversational search,
   persisted search indexes/history, generic Undo/version history, automatic
@@ -47,8 +48,9 @@ actions as authoritative.
 dark-first, near-black and neutral-dominant, with restrained violet energy and
 a premium technical/editorial tone. Phase 1D established the first operational
 Core baseline; Phases 1E and 1F add compact command search and contextual
-recovery/history; Phase 1G adds a quiet native menu-bar presence and focused
-Task capture while later Explore, semantic search, and AI modes remain deferred.
+  recovery/history; Phase 1G adds a quiet native menu-bar presence and focused
+  Task capture; Phase 1H hardens the complete Phase 1 flow while later Explore,
+  semantic search, and AI modes remain deferred.
 
 Design/motion ladder: process guidance (`IMPECCABLE`, `EMIL-MOTION`); CSS for
 simple motion; Motion for React for normal stateful UI; Three.js only for a
@@ -74,7 +76,7 @@ performance-conscious.
 - [Task router](agent/taskRouter.md)
 - [Approved Ion reference snapshot](references/approvedReferences.md)
 - [Decision index](decisions/README.md)
-- [Active phase](phases/PHASE_1G.md)
+- [Active phase](phases/PHASE_1H.md)
 
 The approved-reference snapshot derives from `projectReference.md` version
 **1.1.0** (updated 2026-08-27). Project-local decisions override it.

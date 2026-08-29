@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { MilestoneState, ProductError, asProductError } from "./organizer";
 
 export type VisualMilestone = {
@@ -47,14 +47,18 @@ export function MilestoneList<T extends VisualMilestone>({
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showTrash, setShowTrash] = useState(false);
+  const operationInFlight = useRef(false);
 
   async function run(operation: () => Promise<void>) {
+    if (operationInFlight.current) return;
+    operationInFlight.current = true;
     setBusy(true);
     try {
       await operation();
     } catch (reason) {
       onError(asProductError(reason));
     } finally {
+      operationInFlight.current = false;
       setBusy(false);
     }
   }

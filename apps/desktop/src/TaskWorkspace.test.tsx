@@ -94,6 +94,62 @@ test("saves an existing Task through update_task before rendering the edit", asy
   ).toBeInTheDocument();
 });
 
+test("keeps same-title Tasks as distinct canonical records", () => {
+  const sameTitleTask: Task = {
+    ...existingTask,
+    id: "task-same-title-synthetic",
+    revision: 1,
+  };
+  render(<TaskWorkspace initialTasks={[existingTask, sameTitleTask]} />);
+
+  expect(screen.getAllByText("Before edit")).toHaveLength(2);
+});
+
+test("accepts externally refreshed Tasks without a workspace reload", async () => {
+  const { rerender } = render(<TaskWorkspace initialTasks={[existingTask]} />);
+  const capturedTask: Task = {
+    ...existingTask,
+    id: "task-external-synthetic",
+    title: "Captured elsewhere",
+    revision: 1,
+  };
+
+  rerender(<TaskWorkspace initialTasks={[capturedTask, existingTask]} />);
+
+  expect(await screen.findByText("Captured elsewhere")).toBeInTheDocument();
+});
+
+test("submits one Task while canonical creation is pending", async () => {
+  let resolveCreate: (task: Task) => void = () => undefined;
+  const pendingCreate = new Promise<Task>((resolve) => {
+    resolveCreate = resolve;
+  });
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "create_task") return pendingCreate;
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  render(<TaskWorkspace initialTasks={[]} />);
+
+  fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+    target: { value: "Synthetic Task" },
+  });
+  const form = screen.getByRole("textbox", { name: "Title" }).closest("form");
+  expect(form).not.toBeNull();
+  fireEvent.submit(form!);
+  fireEvent.submit(form!);
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    resolveCreate({
+      ...existingTask,
+      id: "task-created-synthetic",
+      title: "Synthetic Task",
+    });
+    await pendingCreate;
+  });
+  expect(await screen.findByText("Synthetic Task")).toBeInTheDocument();
+});
+
 test("changes Task relationships only through the explicit complete-pair command", async () => {
   const goal: Goal = {
     id: "11111111-1111-4111-8111-111111111111",

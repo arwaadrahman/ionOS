@@ -9,6 +9,7 @@ export function QuickCapture() {
   const [title, setTitle] = useState("");
   const [state, setState] = useState<CaptureState>("idle");
   const inputRef = useRef<HTMLInputElement>(null);
+  const captureInFlight = useRef(false);
 
   useEffect(() => {
     const focus = () => {
@@ -29,8 +30,9 @@ export function QuickCapture() {
   async function capture(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const normalized = title.trim();
-    if (!normalized || state === "saving") return;
+    if (!normalized || captureInFlight.current) return;
 
+    captureInFlight.current = true;
     setState("saving");
     try {
       const task = await taskClient.create({
@@ -54,6 +56,8 @@ export function QuickCapture() {
       }
     } catch {
       setState("failed");
+    } finally {
+      captureInFlight.current = false;
     }
   }
 

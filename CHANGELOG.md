@@ -33,3 +33,7 @@ All notable repository changes are documented here.
   close-to-hide/reactivation lifecycle, and a process-held guard against
   duplicate desktop/sidecar instances, with no daemon, migration, or new
   dependency.
+- Phase 1H acceptance hardening: in-flight guards against duplicate canonical
+  creates, Task workspace refresh synchronization, and explicit same-title
+  Task identity coverage, without product, schema, dependency, or
+  trust-boundary expansion.

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -57,6 +58,33 @@ test("captures one canonical Task then notifies and hides", async () => {
     confirmedTask,
   );
   expect(hide).toHaveBeenCalledOnce();
+});
+
+test("submits one canonical Task when capture is triggered twice before confirmation", async () => {
+  let resolveCreate: (task: typeof confirmedTask) => void = () => undefined;
+  const pendingCreate = new Promise<typeof confirmedTask>((resolve) => {
+    resolveCreate = resolve;
+  });
+  vi.mocked(invoke).mockResolvedValue(pendingCreate);
+  vi.mocked(emitTo).mockResolvedValue(undefined);
+  render(<QuickCapture />);
+
+  fireEvent.change(screen.getByRole("textbox", { name: "What needs doing?" }), {
+    target: { value: "Synthetic captured Task" },
+  });
+  const form = screen
+    .getByRole("textbox", { name: "What needs doing?" })
+    .closest("form");
+  expect(form).not.toBeNull();
+  fireEvent.submit(form!);
+  fireEvent.submit(form!);
+
+  await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+  await act(async () => {
+    resolveCreate(confirmedTask);
+    await pendingCreate;
+  });
+  await waitFor(() => expect(hide).toHaveBeenCalledOnce());
 });
 
 test("does not relabel confirmed creation when secondary notification fails", async () => {

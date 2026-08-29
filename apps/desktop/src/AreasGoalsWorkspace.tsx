@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { MilestoneList } from "./MilestoneList";
 import {
   Area,
@@ -59,6 +59,10 @@ export function AreasGoalsWorkspace({
   const [goalTitle, setGoalTitle] = useState("");
   const [goalKind, setGoalKind] = useState<GoalKind>("outcome");
   const [contextTask, setContextTask] = useState("");
+  const areaCreateInFlight = useRef(false);
+  const goalCreateInFlight = useRef(false);
+  const [creatingArea, setCreatingArea] = useState(false);
+  const [creatingGoal, setCreatingGoal] = useState(false);
 
   const selectedArea =
     selection?.type === "area"
@@ -121,38 +125,52 @@ export function AreasGoalsWorkspace({
 
   async function createArea(event: FormEvent) {
     event.preventDefault();
-    if (!areaName.trim()) return;
-    await run(
-      () => areaClient.create({ name: areaName, description: null }),
-      (area) => {
-        onAreas(replace(areas, area));
-        setAreaName("");
-        setSelection({ type: "area", id: area.id });
-      },
-    );
+    if (!areaName.trim() || areaCreateInFlight.current) return;
+    areaCreateInFlight.current = true;
+    setCreatingArea(true);
+    try {
+      await run(
+        () => areaClient.create({ name: areaName, description: null }),
+        (area) => {
+          onAreas(replace(areas, area));
+          setAreaName("");
+          setSelection({ type: "area", id: area.id });
+        },
+      );
+    } finally {
+      areaCreateInFlight.current = false;
+      setCreatingArea(false);
+    }
   }
 
   async function createGoal(event: FormEvent) {
     event.preventDefault();
-    if (!goalTitle.trim()) return;
+    if (!goalTitle.trim() || goalCreateInFlight.current) return;
     const area_id =
       selectedArea && !selectedArea.archived_at && !selectedArea.trashed_at
         ? selectedArea.id
         : null;
-    await run(
-      () =>
-        goalClient.create({
-          title: goalTitle,
-          description: null,
-          kind: goalKind,
-          area_id,
-        }),
-      (goal) => {
-        onGoals(replace(goals, goal));
-        setGoalTitle("");
-        setSelection({ type: "goal", id: goal.id });
-      },
-    );
+    goalCreateInFlight.current = true;
+    setCreatingGoal(true);
+    try {
+      await run(
+        () =>
+          goalClient.create({
+            title: goalTitle,
+            description: null,
+            kind: goalKind,
+            area_id,
+          }),
+        (goal) => {
+          onGoals(replace(goals, goal));
+          setGoalTitle("");
+          setSelection({ type: "goal", id: goal.id });
+        },
+      );
+    } finally {
+      goalCreateInFlight.current = false;
+      setCreatingGoal(false);
+    }
   }
 
   const activeAreas = areas.filter(
@@ -188,7 +206,7 @@ export function AreasGoalsWorkspace({
               value={areaName}
               onChange={(event) => setAreaName(event.target.value)}
             />
-            <button>Create Area</button>
+            <button disabled={creatingArea}>Create Area</button>
           </form>
           <form className="quick-create" onSubmit={createGoal}>
             <input
@@ -217,7 +235,7 @@ export function AreasGoalsWorkspace({
                 <option key={kind}>{kind}</option>
               ))}
             </select>
-            <button>Create Goal</button>
+            <button disabled={creatingGoal}>Create Goal</button>
           </form>
           {activeAreas.map((area) => (
             <div className="tree-group" key={area.id}>
@@ -512,6 +530,8 @@ function GoalPanel({
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">(
     "idle",
   );
+  const contextTaskInFlight = useRef(false);
+  const [creatingContextTask, setCreatingContextTask] = useState(false);
   async function act<T>(
     operation: () => Promise<T>,
     accept: (result: T) => void,
@@ -542,6 +562,34 @@ function GoalPanel({
       onError(error);
       setSaveStatus("idle");
       if (error.code === "revision_conflict") await onRefresh();
+    }
+  }
+  async function createContextTask(event: FormEvent) {
+    event.preventDefault();
+    if (!contextTask.trim() || contextTaskInFlight.current) return;
+    contextTaskInFlight.current = true;
+    setCreatingContextTask(true);
+    try {
+      const input = {
+        ...blankTaskInput(),
+        title: contextTask,
+        goal_id: goal.id,
+        project_id: null,
+      };
+      await act(
+        () => taskClient.create(input),
+        (task) => {
+          onTasks(replace(tasks, task));
+          onDetail({
+            ...detail,
+            direct_tasks: replace(detail.direct_tasks, task),
+          });
+          setContextTask("");
+        },
+      );
+    } finally {
+      contextTaskInFlight.current = false;
+      setCreatingContextTask(false);
     }
   }
   const updateMilestone = (item: GoalMilestone) =>
@@ -749,27 +797,7 @@ function GoalPanel({
       />
       <form
         className="quick-create"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!contextTask.trim()) return;
-          const input = {
-            ...blankTaskInput(),
-            title: contextTask,
-            goal_id: goal.id,
-            project_id: null,
-          };
-          void act(
-            () => taskClient.create(input),
-            (task) => {
-              onTasks(replace(tasks, task));
-              onDetail({
-                ...detail,
-                direct_tasks: replace(detail.direct_tasks, task),
-              });
-              setContextTask("");
-            },
-          );
-        }}
+        onSubmit={(event) => void createContextTask(event)}
       >
         <input
           aria-label="New Goal Task"
@@ -777,7 +805,7 @@ function GoalPanel({
           placeholder="New Task for this Goal"
           onChange={(event) => setContextTask(event.target.value)}
         />
-        <button>Create Task</button>
+        <button disabled={creatingContextTask}>Create Task</button>
       </form>
     </article>
   );

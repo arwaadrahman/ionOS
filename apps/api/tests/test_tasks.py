@@ -88,6 +88,23 @@ def test_stale_revision_and_trash_filter_are_safe(service):
         service.trash(task.id, 1, "33333333-3333-4333-8333-333333333333")
 
 
+def test_same_title_tasks_remain_distinct_canonical_records(service):
+    first = service.create(
+        CreateTaskInput(title="Synthetic duplicate title"),
+        "11111111-1111-4111-8111-111111111111",
+    )
+    second = service.create(
+        CreateTaskInput(title="Synthetic duplicate title"),
+        "22222222-2222-4222-8222-222222222222",
+    )
+
+    assert first.id != second.id
+    assert {task.id for task in service.list()} == {first.id, second.id}
+    with service.engine.connect() as connection:
+        actions = connection.execute(select(audit_events.c.action)).scalars().all()
+    assert actions == ["created", "created"]
+
+
 def test_task_relationships_are_independently_nullable_and_foreign_keys_enforced(
     service,
 ):

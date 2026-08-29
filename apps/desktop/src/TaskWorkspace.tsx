@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Goal, Project, asProductError } from "./organizer";
 import { ProductErrorNotice } from "./ProductErrorNotice";
 import {
@@ -31,6 +31,12 @@ export function TaskWorkspace({
   const [error, setError] = useState<ReturnType<typeof asProductError> | null>(
     null,
   );
+  const submitInFlight = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setTasks(initialTasks);
+  }, [initialTasks]);
 
   useEffect(() => {
     if (!navigationTaskId) return;
@@ -47,7 +53,9 @@ export function TaskWorkspace({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!input.title.trim()) return;
+    if (!input.title.trim() || submitInFlight.current) return;
+    submitInFlight.current = true;
+    setSubmitting(true);
     try {
       const editInput: TaskEditInput = {
         title: input.title,
@@ -67,6 +75,9 @@ export function TaskWorkspace({
       setError(null);
     } catch (reason) {
       setError(asProductError(reason));
+    } finally {
+      submitInFlight.current = false;
+      setSubmitting(false);
     }
   }
 
@@ -196,7 +207,9 @@ export function TaskWorkspace({
           </>
         )}
         <div className="form-actions">
-          <button type="submit">{editing ? "Save task" : "Create task"}</button>
+          <button disabled={submitting} type="submit">
+            {editing ? "Save task" : "Create task"}
+          </button>
           {editing && (
             <button
               type="button"
@@ -294,6 +307,10 @@ function TaskRow({
 }) {
   const [goalId, setGoalId] = useState(task.goal_id ?? "");
   const [projectId, setProjectId] = useState(task.project_id ?? "");
+  useEffect(() => {
+    setGoalId(task.goal_id ?? "");
+    setProjectId(task.project_id ?? "");
+  }, [task.goal_id, task.project_id]);
   const linkedGoal = goals.find((goal) => goal.id === task.goal_id);
   const linkedProject = projects.find(
     (project) => project.id === task.project_id,

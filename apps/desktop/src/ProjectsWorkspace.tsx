@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { MilestoneList } from "./MilestoneList";
 import {
   Goal,
@@ -60,6 +60,8 @@ export function ProjectsWorkspace({
   const [error, setError] = useState<ProductError | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [contextTask, setContextTask] = useState("");
+  const projectCreateInFlight = useRef(false);
+  const [creatingProject, setCreatingProject] = useState(false);
   const selectedProjectId = selected?.id ?? null;
 
   useEffect(() => {
@@ -108,21 +110,28 @@ export function ProjectsWorkspace({
 
   async function create(event: FormEvent) {
     event.preventDefault();
-    if (!newTitle.trim()) return;
-    await run(
-      () =>
-        projectClient.create({
-          title: newTitle,
-          description: null,
-          state: "idea",
-          goal_id: null,
-        }),
-      (project) => {
-        onProjects(replace(projects, project));
-        setSelectedId(project.id);
-        setNewTitle("");
-      },
-    );
+    if (!newTitle.trim() || projectCreateInFlight.current) return;
+    projectCreateInFlight.current = true;
+    setCreatingProject(true);
+    try {
+      await run(
+        () =>
+          projectClient.create({
+            title: newTitle,
+            description: null,
+            state: "idea",
+            goal_id: null,
+          }),
+        (project) => {
+          onProjects(replace(projects, project));
+          setSelectedId(project.id);
+          setNewTitle("");
+        },
+      );
+    } finally {
+      projectCreateInFlight.current = false;
+      setCreatingProject(false);
+    }
   }
 
   return (
@@ -143,7 +152,7 @@ export function ProjectsWorkspace({
               placeholder="New Project"
               onChange={(event) => setNewTitle(event.target.value)}
             />
-            <button>Create Project</button>
+            <button disabled={creatingProject}>Create Project</button>
           </form>
           {groups.map((group) => (
             <div className="tree-group" key={group.state}>
@@ -246,6 +255,8 @@ function ProjectPanel({
   const project = detail.project;
   const [title, setTitle] = useState(project.title);
   const [description, setDescription] = useState(project.description ?? "");
+  const contextTaskInFlight = useRef(false);
+  const [creatingContextTask, setCreatingContextTask] = useState(false);
   async function act<T>(
     operation: () => Promise<T>,
     accept: (result: T) => void | Promise<void>,
@@ -270,6 +281,35 @@ function ProjectPanel({
           ? item
           : detail.current_milestone,
     });
+  async function createContextTask(event: FormEvent) {
+    event.preventDefault();
+    if (!contextTask.trim() || contextTaskInFlight.current) return;
+    contextTaskInFlight.current = true;
+    setCreatingContextTask(true);
+    try {
+      await act(
+        () =>
+          taskClient.create({
+            ...blankTaskInput(),
+            title: contextTask,
+            project_id: project.id,
+            goal_id: null,
+          }),
+        (task) => {
+          onTasks(replace(tasks, task));
+          onDetail({
+            ...detail,
+            tasks: replace(detail.tasks, task),
+            next_actions: replace(detail.next_actions, task),
+          });
+          setContextTask("");
+        },
+      );
+    } finally {
+      contextTaskInFlight.current = false;
+      setCreatingContextTask(false);
+    }
+  }
   const eligibleGoals = goals.filter(
     (goal) => !goal.archived_at && !goal.trashed_at,
   );
@@ -492,28 +532,7 @@ function ProjectPanel({
       </section>
       <form
         className="quick-create"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!contextTask.trim()) return;
-          void act(
-            () =>
-              taskClient.create({
-                ...blankTaskInput(),
-                title: contextTask,
-                project_id: project.id,
-                goal_id: null,
-              }),
-            (task) => {
-              onTasks(replace(tasks, task));
-              onDetail({
-                ...detail,
-                tasks: replace(detail.tasks, task),
-                next_actions: replace(detail.next_actions, task),
-              });
-              setContextTask("");
-            },
-          );
-        }}
+        onSubmit={(event) => void createContextTask(event)}
       >
         <input
           aria-label="New Project Task"
@@ -521,7 +540,7 @@ function ProjectPanel({
           placeholder="New Task for this Project"
           onChange={(event) => setContextTask(event.target.value)}
         />
-        <button>Create Task</button>
+        <button disabled={creatingContextTask}>Create Task</button>
       </form>
       <section className="detail-section">
         <h3>Recent activity</h3>
