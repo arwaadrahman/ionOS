@@ -350,3 +350,60 @@ def test_task_relationships_are_explicit_independent_and_noop_safe(services):
             select(goals.c.id).where(goals.c.id == archived_goal.id)
         )
     assert stored_goal == archived_goal.id
+
+
+def test_recovery_projection_is_read_only_and_uses_existing_entity_state(services):
+    organizer, task_service = services
+    area = organizer.create_area(AreaCreateInput(name="Recovery Area"), command_id())
+    goal = organizer.create_goal(
+        GoalCreateInput(title="Recovery Goal", kind="outcome"), command_id()
+    )
+    goal_milestone = organizer.create_goal_milestone(
+        goal.id, MilestoneCreateInput(title="Recovery Goal Milestone"), command_id()
+    )
+    project = organizer.create_project(
+        ProjectCreateInput(title="Recovery Project"), command_id()
+    )
+    project_milestone = organizer.create_project_milestone(
+        project.id,
+        MilestoneCreateInput(title="Recovery Project Milestone"),
+        command_id(),
+    )
+    task = task_service.create(CreateTaskInput(title="Recovery Task"), command_id())
+
+    area = organizer.trash_area(area.id, area.revision, command_id())
+    goal_milestone = organizer.trash_goal_milestone(
+        goal_milestone.id, goal_milestone.revision, command_id()
+    )
+    project_milestone = organizer.trash_project_milestone(
+        project_milestone.id, project_milestone.revision, command_id()
+    )
+    task = task_service.trash(task.id, task.revision, command_id())
+
+    with organizer.engine.connect() as connection:
+        before = connection.scalar(select(func.count()).select_from(audit_events))
+    recovery = organizer.get_recovery()
+    with organizer.engine.connect() as connection:
+        after = connection.scalar(select(func.count()).select_from(audit_events))
+
+    assert after == before
+    assert {(item.entity_type, item.label) for item in recovery.trash} == {
+        ("area", area.name),
+        ("goal_milestone", goal_milestone.title),
+        ("project_milestone", project_milestone.title),
+        ("task", task.title),
+    }
+    assert (
+        next(
+            item for item in recovery.trash if item.entity_id == goal_milestone.id
+        ).owner_label
+        == goal.title
+    )
+    assert (
+        next(
+            item for item in recovery.trash if item.entity_id == project_milestone.id
+        ).owner_label
+        == project.title
+    )
+    assert recovery.recent_activity[0].action == "trashed"
+    assert all(event.authority == "direct" for event in recovery.recent_activity)

@@ -26,3 +26,6 @@ All notable repository changes are documented here.
 - Phase 1E deterministic local `⌘K` command search over current destinations
   and canonical Home/Core records, with stable lexical ranking and direct
   navigation but no stored index, dependency, migration, or AI.
+- Phase 1F bounded Recovery and recent direct-human history projection over
+  existing organizer Trash/audit metadata, with explicit entity-specific
+  restore and no generic Undo, snapshot, migration, dependency, or cascade.

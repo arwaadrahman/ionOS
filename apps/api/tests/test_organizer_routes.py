@@ -79,6 +79,19 @@ def test_organizer_routes_are_authenticated_and_return_safe_product_errors(tmp_p
             "blockers": [],
         }
 
+        assert client.get("/v1/recovery").status_code == 401
+        recovery = client.get("/v1/recovery", headers=HEADERS)
+        assert recovery.status_code == 200
+        payload = recovery.json()
+        assert payload["trash"] == []
+        assert {
+            (event["entity_type"], event["label"], event["authority"])
+            for event in payload["recent_activity"]
+        } == {
+            ("area", "Synthetic Area", "direct"),
+            ("goal", "Synthetic Goal", "direct"),
+        }
+
 
 def test_task_relationship_route_uses_the_complete_desired_pair(tmp_path):
     settings = Settings(data_dir=tmp_path)

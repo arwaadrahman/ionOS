@@ -11,6 +11,7 @@ import {
   workspaces,
 } from "./navigation";
 import { ProjectsWorkspace } from "./ProjectsWorkspace";
+import { RecoveryWorkspace } from "./RecoveryWorkspace";
 import { StartupData, loadStartupData } from "./startup";
 import { TaskWorkspace } from "./TaskWorkspace";
 import { TodayWorkspace } from "./TodayWorkspace";
@@ -146,6 +147,10 @@ export function OrganizerShell({
       chooseWorkspace(item.action.workspace);
       return;
     }
+    if (item.action.type === "recovery") {
+      chooseWorkspace("recovery");
+      return;
+    }
     navigate(item.action.target);
   }
 
@@ -263,6 +268,14 @@ export function OrganizerShell({
           navigationTaskId={
             navigationTarget?.workspace === "tasks" ? navigationTarget.id : null
           }
+        />
+      ) : null}
+      {workspace === "recovery" ? (
+        <RecoveryWorkspace
+          onRestored={async () => {
+            await refresh();
+            markHomeDirty();
+          }}
         />
       ) : null}
     </main>

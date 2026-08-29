@@ -1,6 +1,7 @@
 import { CoreNode, HomeOutput } from "./home";
 
-export type Workspace = "home" | "today" | "areas" | "projects" | "tasks";
+export type Workspace =
+  "home" | "today" | "areas" | "projects" | "tasks" | "recovery";
 
 export type NavigationTarget =
   | { workspace: "areas"; entityType: "area" | "goal"; id: string }

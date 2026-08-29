@@ -215,6 +215,41 @@ class ActivityOutput(BaseModel):
     command_id: str
 
 
+RecoveryEntityType = Literal[
+    "area",
+    "goal",
+    "goal_milestone",
+    "project",
+    "project_milestone",
+    "task",
+]
+
+
+class RecoveryItemOutput(BaseModel):
+    entity_type: RecoveryEntityType
+    entity_id: str
+    label: str
+    lifecycle: str
+    revision: int
+    trashed_at: str
+    owner_label: str | None
+
+
+class RecoveryActivityOutput(BaseModel):
+    event_id: str
+    occurred_at: str
+    entity_type: RecoveryEntityType
+    entity_id: str
+    label: str
+    action: str
+    authority: Literal["direct"]
+
+
+class RecoveryOutput(BaseModel):
+    trash: list[RecoveryItemOutput]
+    recent_activity: list[RecoveryActivityOutput]
+
+
 class ProjectDetail(BaseModel):
     project: ProjectOutput
     summary: ProjectSummary

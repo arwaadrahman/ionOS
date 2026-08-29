@@ -20,6 +20,7 @@ pub fn run() {
             service::restore_task,
             service::set_task_relationships,
             organizer::list_areas,
+            organizer::get_recovery,
             organizer::get_area,
             organizer::create_area,
             organizer::update_area,

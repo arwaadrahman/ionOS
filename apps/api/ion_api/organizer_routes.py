@@ -37,6 +37,7 @@ from ion_api.organizer_contracts import (
     ProjectOutput,
     ProjectStateInput,
     ProjectUpdateInput,
+    RecoveryOutput,
     ReorderMilestonesInput,
     RevisionInput,
 )
@@ -77,6 +78,10 @@ def _call(operation: Callable):
 
 def organizer_router(service: OrganizerService) -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["organizer"])
+
+    @router.get("/recovery", response_model=RecoveryOutput)
+    def get_recovery():
+        return _call(service.get_recovery)
 
     @router.get("/areas", response_model=list[AreaOutput])
     def list_areas(view: ListView = "active"):

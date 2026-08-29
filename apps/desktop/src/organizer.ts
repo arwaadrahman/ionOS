@@ -127,7 +127,9 @@ export type ProjectDetail = {
   recent_activity: Activity[];
 };
 
-const revision = (item: Canonical) => ({ expected_revision: item.revision });
+const revision = (item: Pick<Canonical, "revision">) => ({
+  expected_revision: item.revision,
+});
 
 export const areaClient = {
   list: (view: ListView = "all") => invoke<Area[]>("list_areas", { view }),
@@ -146,7 +148,7 @@ export const areaClient = {
     invoke<Area>("unarchive_area", { areaId: area.id, input: revision(area) }),
   trash: (area: Area) =>
     invoke<Area>("trash_area", { areaId: area.id, input: revision(area) }),
-  restore: (area: Area) =>
+  restore: (area: Pick<Area, "id" | "revision">) =>
     invoke<Area>("restore_area", { areaId: area.id, input: revision(area) }),
 };
 
@@ -184,7 +186,7 @@ export const goalClient = {
     invoke<Goal>("unarchive_goal", { goalId: goal.id, input: revision(goal) }),
   trash: (goal: Goal) =>
     invoke<Goal>("trash_goal", { goalId: goal.id, input: revision(goal) }),
-  restore: (goal: Goal) =>
+  restore: (goal: Pick<Goal, "id" | "revision">) =>
     invoke<Goal>("restore_goal", { goalId: goal.id, input: revision(goal) }),
 };
 
@@ -232,7 +234,7 @@ export const projectClient = {
       projectId: project.id,
       input: revision(project),
     }),
-  restore: (project: Project) =>
+  restore: (project: Pick<Project, "id" | "revision">) =>
     invoke<Project>("restore_project", {
       projectId: project.id,
       input: revision(project),
@@ -275,7 +277,7 @@ export const goalMilestoneClient = {
       milestoneId: milestone.id,
       input: revision(milestone),
     }),
-  restore: (milestone: GoalMilestone) =>
+  restore: (milestone: Pick<GoalMilestone, "id" | "revision">) =>
     invoke<GoalMilestone>("restore_goal_milestone", {
       milestoneId: milestone.id,
       input: revision(milestone),
@@ -313,7 +315,7 @@ export const projectMilestoneClient = {
       milestoneId: milestone.id,
       input: revision(milestone),
     }),
-  restore: (milestone: ProjectMilestone) =>
+  restore: (milestone: Pick<ProjectMilestone, "id" | "revision">) =>
     invoke<ProjectMilestone>("restore_project_milestone", {
       milestoneId: milestone.id,
       input: revision(milestone),

@@ -9,25 +9,27 @@ import {
 
 export type CommandAction =
   | { type: "workspace"; workspace: Workspace }
+  | { type: "recovery" }
   | { type: "record"; target: NavigationTarget };
 
 export type CommandItem = {
   id: string;
   label: string;
   description: string;
-  category: "destination" | CoreEntityType;
+  category: "command" | "destination" | CoreEntityType;
   action: CommandAction;
   searchText: string;
 };
 
 const categoryOrder: Record<CommandItem["category"], number> = {
-  destination: 0,
-  area: 1,
-  goal: 2,
-  goal_milestone: 3,
-  project: 4,
-  project_milestone: 5,
-  task: 6,
+  command: 0,
+  destination: 1,
+  area: 2,
+  goal: 3,
+  goal_milestone: 4,
+  project: 5,
+  project_milestone: 6,
+  task: 7,
 };
 const combiningMarks = /[\u0300-\u036f]/g;
 const whitespace = /\s+/g;
@@ -79,7 +81,18 @@ export function buildCommandItems(home: HomeOutput): CommandItem[] {
       },
     ];
   });
-  return [...destinations, ...records];
+  return [
+    {
+      id: "command:recovery",
+      label: "Recovery",
+      description: "Open Trash and recent history",
+      category: "command",
+      action: { type: "recovery" },
+      searchText: normalizeSearchText("recovery trash restore history audit"),
+    },
+    ...destinations,
+    ...records,
+  ];
 }
 
 function lexicalScore(item: CommandItem, query: string) {

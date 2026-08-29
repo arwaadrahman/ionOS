@@ -10,14 +10,15 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 1 — Ion Core Personal Organizer
-- **Milestone:** Phase 1E — Deterministic Command Search
-- **In scope:** a compact local `⌘K` command palette, deterministic lexical
-  ranking over current destinations and the existing Home/Core record
-  projection, direct canonical navigation, and the inherited organizer/runtime.
+- **Milestone:** Phase 1F — Recovery & History UX
+- **In scope:** a bounded local Recovery workspace over existing Trash and
+  compact direct-human audit metadata, explicit entity-specific restore, clear
+  direct blocker/recovery context, and the inherited organizer/runtime.
 - **Out of scope:** integrations, AI, scheduling, Calendar/free-busy,
   FocusSession, DailyReview, WeeklyPlan, semantic/conversational search,
-  persisted search indexes/history, inferred relationships, final Core Explore
-  modes, mobile, and remote/LAN access.
+  persisted search indexes/history, generic Undo/version history, automatic
+  purge, inferred relationships, final Core Explore modes, mobile, and
+  remote/LAN access.
 
 ## Proposed stack baseline — subject to prototyping
 
@@ -44,8 +45,9 @@ actions as authoritative.
 `PROFILE-ION` is a calm operational system with one unmistakable Core:
 dark-first, near-black and neutral-dominant, with restrained violet energy and
 a premium technical/editorial tone. Phase 1D established the first operational
-Core baseline; Phase 1E adds the canonical compact command-search pattern while
-later Explore, semantic search, and AI modes remain deferred.
+Core baseline; Phase 1E adds the canonical compact command-search pattern and
+Phase 1F adds contextual recovery/history while later Explore, semantic search,
+and AI modes remain deferred.
 
 Design/motion ladder: process guidance (`IMPECCABLE`, `EMIL-MOTION`); CSS for
 simple motion; Motion for React for normal stateful UI; Three.js only for a
@@ -71,7 +73,7 @@ performance-conscious.
 - [Task router](agent/taskRouter.md)
 - [Approved Ion reference snapshot](references/approvedReferences.md)
 - [Decision index](decisions/README.md)
-- [Active phase](phases/PHASE_1E.md)
+- [Active phase](phases/PHASE_1F.md)
 
 The approved-reference snapshot derives from `projectReference.md` version
 **1.1.0** (updated 2026-08-27). Project-local decisions override it.

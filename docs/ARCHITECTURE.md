@@ -111,6 +111,21 @@ TypeScript. The database, Python service, and Rust command surface gain no
 search table, index, endpoint, or mutation. SQLite FTS, persisted recents,
 semantic/vector retrieval, QMD, conversational search, and AI remain deferred.
 
+## Phase 1F recovery and history path
+
+Phase 1F adds one fixed authenticated `get_recovery` command and read-only
+`GET /v1/recovery` projection. Python reads the existing canonical organizer
+tables and append-only audit metadata to return bounded Trash and recent
+direct-human action summaries; it performs no mutation or audit write. Rust
+continues to own the authenticated request. The renderer dispatches an explicit
+selected-record restore only through the existing entity-specific commands and
+never receives a port, credential, generic HTTP capability, filesystem, or
+shell access.
+
+Recovery is contextual through the existing command palette, preserving the
+Home-first five-destination primary navigation. Generic Undo, event sourcing,
+snapshots, version history, automatic purge, and cascades remain deferred.
+
 ## TBD
 
 See ADRs [0004](decisions/0004-macos-local-trust-boundary.md),

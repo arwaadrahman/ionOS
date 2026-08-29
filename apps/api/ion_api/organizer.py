@@ -32,6 +32,9 @@ from ion_api.organizer_contracts import (
     ProjectStateInput,
     ProjectSummary,
     ProjectUpdateInput,
+    RecoveryActivityOutput,
+    RecoveryItemOutput,
+    RecoveryOutput,
     ReorderMilestonesInput,
 )
 from ion_api.schema import (
@@ -103,6 +106,16 @@ def _audit(
     )
 
 
+def _recovery_lifecycle(entity_type: str, row) -> str:
+    if entity_type == "area":
+        return "archived" if row.archived_at is not None else "active"
+    if entity_type == "goal":
+        return "archived" if row.archived_at is not None else row.state
+    if entity_type == "project":
+        return row.state
+    return row.state
+
+
 class OrganizerService:
     def __init__(self, engine: Engine):
         self.engine = engine
@@ -157,6 +170,87 @@ class OrganizerService:
             command_id=command_id,
         )
         return self._row(connection, table, entity_id)
+
+    def get_recovery(self) -> RecoveryOutput:
+        """Return a bounded read-only view of existing Trash and audit metadata."""
+        table_specs = (
+            ("area", areas, "name", None),
+            ("goal", goals, "title", ("area_id", areas, "name")),
+            ("goal_milestone", milestones, "title", ("goal_id", goals, "title")),
+            ("project", projects, "title", ("goal_id", goals, "title")),
+            (
+                "project_milestone",
+                project_milestones,
+                "title",
+                ("project_id", projects, "title"),
+            ),
+            ("task", tasks, "title", None),
+        )
+        with self.engine.connect() as connection:
+            labels: dict[tuple[str, str], str] = {}
+            trash: list[RecoveryItemOutput] = []
+            for entity_type, table, label_column, owner_spec in table_specs:
+                owner_labels: dict[str, str] = {}
+                if owner_spec:
+                    owner_column, owner_table, owner_label_column = owner_spec
+                    owner_labels = {
+                        row.id: getattr(row, owner_label_column)
+                        for row in connection.execute(select(owner_table)).all()
+                    }
+                rows = connection.execute(select(table)).all()
+                for row in rows:
+                    label = getattr(row, label_column)
+                    labels[(entity_type, row.id)] = label
+                    if row.trashed_at is not None:
+                        owner_label = (
+                            owner_labels.get(getattr(row, owner_spec[0]))
+                            if owner_spec
+                            else None
+                        )
+                        trash.append(
+                            RecoveryItemOutput(
+                                entity_type=entity_type,
+                                entity_id=row.id,
+                                label=label,
+                                lifecycle=_recovery_lifecycle(entity_type, row),
+                                revision=row.revision,
+                                trashed_at=row.trashed_at,
+                                owner_label=owner_label,
+                            )
+                        )
+            events = connection.execute(
+                select(audit_events)
+                .where(
+                    audit_events.c.entity_type.in_([spec[0] for spec in table_specs]),
+                    audit_events.c.actor_kind == "human",
+                    audit_events.c.authority == "direct",
+                )
+                .order_by(
+                    audit_events.c.occurred_at.desc(), audit_events.c.event_id.desc()
+                )
+                .limit(12)
+            ).all()
+        trash.sort(
+            key=lambda item: (item.trashed_at, item.entity_type, item.entity_id),
+            reverse=True,
+        )
+        return RecoveryOutput(
+            trash=trash[:100],
+            recent_activity=[
+                RecoveryActivityOutput(
+                    event_id=event.event_id,
+                    occurred_at=event.occurred_at,
+                    entity_type=event.entity_type,
+                    entity_id=event.entity_id,
+                    label=labels.get(
+                        (event.entity_type, event.entity_id), "Organizer record"
+                    ),
+                    action=event.action,
+                    authority="direct",
+                )
+                for event in events
+            ],
+        )
 
     def _available_parent(self, connection, table: Table, parent_id: str):
         row = connection.execute(

@@ -408,3 +408,24 @@ test("opens Command-K search and navigates directly to a canonical record", asyn
     }),
   );
 });
+
+test("opens the contextual Recovery surface from the command palette", async () => {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "get_home") return home;
+    if (command === "get_recovery") return { trash: [], recent_activity: [] };
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  render(<OrganizerShell initialData={data} />);
+
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  fireEvent.change(
+    screen.getByRole("combobox", { name: "Search commands and records" }),
+    { target: { value: "recovery" } },
+  );
+  fireEvent.click(await screen.findByRole("option", { name: /Recovery/ }));
+
+  expect(
+    await screen.findByRole("heading", { name: "Recovery" }),
+  ).toBeInTheDocument();
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("get_recovery"));
+});

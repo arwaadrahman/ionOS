@@ -7,7 +7,7 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 ## Status
 
 Current phase: **Phase 1 — Ion Core Personal Organizer**
-Current milestone: **Phase 1E — Deterministic Command Search**
+Current milestone: **Phase 1F — Recovery & History UX**
 
 Phase 0 established the secure local runtime. Phase 1A added the canonical
 organizer schema and Task vertical slice. Phase 1B makes Areas, Goals, Projects,
@@ -19,13 +19,16 @@ projection, and introduces a deterministic raw Three.js Ion Core without graph
 persistence or expanded renderer authority. Phase 1E adds a compact local
 `⌘K` command palette over current destinations and canonical organizer records
 without a stored index, new dependency, or trust-boundary change.
+Phase 1F adds a bounded contextual Recovery workspace for current Trash and
+concise direct-human organizer history, using only existing entity-specific
+restore operations without Undo, snapshots, or cascades.
 
 ## Start here
 
 - [Agent guide](AGENTS.md)
 - [Project context](docs/projectContext.md)
 - [Master Specification](docs/PRODUCT_SPEC.md)
-- [Phase 1E](docs/phases/PHASE_1E.md)
+- [Phase 1F](docs/phases/PHASE_1F.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decision index](docs/decisions/README.md)
 

@@ -78,7 +78,7 @@ export const taskClient = {
       taskId: task.id,
       input: { expected_revision: task.revision },
     }),
-  restore: (task: Task) =>
+  restore: (task: Pick<Task, "id" | "revision">) =>
     invoke<Task>("restore_task", {
       taskId: task.id,
       input: { expected_revision: task.revision },

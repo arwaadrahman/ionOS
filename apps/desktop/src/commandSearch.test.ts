@@ -68,14 +68,18 @@ const home: HomeOutput = {
 
 test("builds commands from destinations and the canonical Home projection", () => {
   const items = buildCommandItems(home);
-  expect(items.slice(0, 5).map((item) => item.label)).toEqual([
+  expect(items.slice(1, 6).map((item) => item.label)).toEqual([
     "Home",
     "Today",
     "Areas & Goals",
     "Projects",
     "Tasks",
   ]);
-  expect(items).toHaveLength(10);
+  expect(items).toHaveLength(11);
+  expect(searchCommands(items, "recovery")[0]).toMatchObject({
+    id: "command:recovery",
+    action: { type: "recovery" },
+  });
   expect(
     items.find((item) => item.label === "Finish practice module")?.action,
   ).toEqual({

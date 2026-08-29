@@ -34,6 +34,7 @@ remain proposed until intentionally accepted.
 - [0013 Today planning and pre-Calendar boundary](0013-today-planning-and-pre-calendar-boundary.md)
 - [0014 Ion Core rendering and Phase 1D Home boundary](0014-ion-core-rendering-and-phase-1d-home-boundary.md)
 - [0015 Deterministic command-search projection](0015-deterministic-command-search-projection.md)
+- [0016 Recovery and history projection](0016-recovery-and-history-projection.md)
 
 ## Decision Backlog
 

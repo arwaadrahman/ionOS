@@ -184,6 +184,34 @@ pub struct Activity {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RecoveryItem {
+    pub entity_type: String,
+    pub entity_id: String,
+    pub label: String,
+    pub lifecycle: String,
+    pub revision: i64,
+    pub trashed_at: String,
+    pub owner_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RecoveryActivity {
+    pub event_id: String,
+    pub occurred_at: String,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub label: String,
+    pub action: String,
+    pub authority: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RecoveryOutput {
+    pub trash: Vec<RecoveryItem>,
+    pub recent_activity: Vec<RecoveryActivity>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProjectDetail {
     pub project: Project,
     pub summary: ProjectSummary,
@@ -282,6 +310,11 @@ macro_rules! list_command {
 list_command!(list_areas, "/v1/areas", Area);
 list_command!(list_goals, "/v1/goals", Goal);
 list_command!(list_projects, "/v1/projects", Project);
+
+#[tauri::command]
+pub async fn get_recovery(state: State<'_, ServiceState>) -> Result<RecoveryOutput, ProductError> {
+    product_request::<(), RecoveryOutput>(&state, reqwest::Method::GET, "/v1/recovery", None).await
+}
 
 macro_rules! create_command {
     ($name:ident, $route:literal, $input:ty, $output:ty) => {
