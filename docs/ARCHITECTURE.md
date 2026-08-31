@@ -248,6 +248,34 @@ visible but do not fabricate timed occupancy. Today Tasks keep their existing
 planning semantics and are never converted to, or implied to be,
 CalendarBlocks. Cached Calendar content stays visible when Google is offline.
 
+## Phase 2C accepted two-way write boundary
+
+The Phase 2C architecture/security gate is accepted, but no write code, schema,
+or OAuth expansion is implemented yet. A future fixed Tauri Calendar command
+first commits direct-human canonical intent and a durable Python/SQLite outbox
+transaction. Only then may Rust use its existing token and Google HTTPS
+ownership to dispatch an allowlisted event request and return a sanitized
+outcome for Python reconciliation. React never receives provider request
+authority, and Python never receives a token or calls Google.
+
+Google remains authoritative for last-confirmed provider fields. Existing
+edits use durable desired overlays rather than silently rewriting that base;
+new Google-backed blocks remain visibly unconfirmed until provider
+reconciliation. Every initial ETag mismatch is an explicit conflict. Creates
+use a stable deterministic provider event ID, and ambiguous results reconcile
+before retry. Recurring instances resolve through the master and original-start
+union; generated occurrences remain derived.
+
+The accepted initial provider boundary is attendee-free ordinary events on
+`writer` or `owner` calendars, with no provider lock and an account that has
+explicitly re-consented to Calendar Events write access. Attendee/invite
+events, `writerWithoutPrivateAccess`, special event types, automatic conflict
+merges, arbitrary RRULE, and `this and following` remain outside Phase 2C.
+Successful outbox rows may be pruned after 30 days; unresolved work remains
+until explicit resolution. See
+[ADR 0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md) and the
+[Phase 2C gate](phases/PHASE_2C.md).
+
 ## TBD
 
 See ADRs [0004](decisions/0004-macos-local-trust-boundary.md),

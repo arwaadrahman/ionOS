@@ -1,13 +1,13 @@
 # Integration Boundaries
 
-## Status: Google Calendar Phase 2B read-only interface active; other integrations deferred
+## Status: Phase 2B read-only runtime active; Phase 2C write gate accepted but not implemented
 
 Integrations are adapters around Ion's local authority; they do not become its
 primary storage. Google Calendar is the first active adapter under ADR 0018.
 
 | Integration                                    | Target phase/status                 |
 | ---------------------------------------------- | ----------------------------------- |
-| Google Calendar                                | Phase 2B read-only interface        |
+| Google Calendar                                | Phase 2C write gate accepted        |
 | Canvas                                         | Phase 3, deferred                   |
 | Local AI                                       | Phase 4, deferred                   |
 | Gmail                                          | Phase 5, deferred                   |
@@ -75,6 +75,34 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   Revisioned category/subtype and hide/restore commands update only Ion-local SQLite
   fields. Google selection, subscription, visibility, and event content remain
   untouched.
+
+## Phase 2C accepted write contract — not implemented
+
+- Accepted scopes: keep `calendar.calendarlist.readonly` and replace
+  `calendar.events.readonly` with `calendar.events` only after deliberate
+  re-consent in an authorized implementation step. `calendar.events.owned` is
+  not used because legitimate shared calendars with writer authority are in
+  scope. Broad `calendar` and unrelated scopes remain forbidden.
+- Eligibility: initial writes require `writer` or `owner`, ordinary/default
+  event type, no provider lock, no attendees, and the accepted account scope.
+  Attendee/invite events remain entirely read-only.
+- Dispatch: Python/SQLite persists canonical direct-human intent and a durable
+  typed outbox before Rust sends an allowlisted Google request. Rust remains the
+  only Google/OAuth/token owner; React and Python gain no provider authority.
+- Concurrency: every initial ETag mismatch is an explicit conflict with Keep
+  Google, Apply Ion, or Review differences. No automatic merge or silent
+  last-write-wins exists.
+- Idempotency/recovery: Ion-created events use stable deterministic provider
+  IDs; ambiguous requests reconcile before retry; retries are bounded and
+  restart-safe.
+- Recurrence: one occurrence and whole series are the only accepted scopes.
+  Arbitrary RRULE and `this and following` remain deferred.
+- Retention: unresolved, failed, conflict, and ambiguous intents remain until
+  explicit resolution. Successfully completed intent rows may be pruned after
+  30 days while compact audit remains durable.
+
+See [ADR 0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md)
+and the [Phase 2C gate](phases/PHASE_2C.md).
 
 Authoritative provider references:
 

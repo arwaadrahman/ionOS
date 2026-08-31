@@ -23,6 +23,14 @@ All notable repository changes are documented here.
 
 ### Added
 
+- Accepted Phase 2C two-way Calendar architecture/security gate and ADR 0021,
+  defining a Rust-owned provider-write boundary, Python/SQLite durable outbox,
+  deterministic create idempotency, ETag conflicts, offline/reconnect recovery,
+  bounded recurrence writes, minimum OAuth expansion, audit evidence, explicit
+  owner decisions, 30-day successful-intent retention, and independently
+  testable substeps. No code, migration, dependency, OAuth scope, or provider
+  write was added.
+
 - Documentation checkpoint accepting the narrow external Developer Agent
   Bridge boundary, evidence-based local progress observation, strict separation
   from Deep Ask credentials, first-class performance/resource policy, and

@@ -2,7 +2,8 @@
 
 ## Status
 
-**Accepted invariants with Phase 2A Google credential implementation.**
+**Accepted invariants with Phase 2A Google credential implementation and the
+not-yet-implemented Phase 2C write gate.**
 
 - Ion is local-first. The public repository contains no real personal Ion data.
 - Tests, demos, screenshots, and fixtures use clearly synthetic records only.
@@ -63,6 +64,38 @@ data and prevents a second desktop process from starting another sidecar.
 - Repository tests and examples use synthetic identifiers and fake token-store
   behavior. Real account data and configuration remain in Application Support,
   Keychain, and the runtime database outside Git.
+
+## Phase 2C accepted write gate — not implemented
+
+- The accepted future OAuth set is exactly CalendarList read-only plus Calendar
+  Events read/write. It replaces Events read-only after deliberate account
+  re-consent. Broad Calendar, Gmail, Tasks, ACL/sharing, calendar management,
+  Meet/conference, and reminder authority remain forbidden.
+- This documentation acceptance does not change current requested scopes.
+  Existing accounts remain read-only until a separately authorized consent
+  flow confirms the exact accepted grant.
+- Initial provider writes require `writer` or `owner`, ordinary/default event
+  type, no provider lock, no attendees, and the accepted account scope.
+  Attendee/invite events and `writerWithoutPrivateAccess` remain read-only.
+- React write commands use Ion IDs and fixed typed contracts; they cannot
+  provide provider IDs, ETags, arbitrary bodies, URLs, methods, or headers as
+  request authority. Rust constructs the allowlisted Google request.
+- Python commits canonical intent and a durable outbox before any provider
+  request. The outbox contains no token, credential, attendee address, raw
+  provider resource, or audit payload snapshot.
+- Every initial ETag mismatch stops as an explicit conflict. Wildcard
+  `If-Match: *`, silent last-write-wins, and automatic merge are forbidden.
+- Provider errors and audit retain only allowlisted status/reason, operation,
+  recurrence scope, internal IDs, revisions, and timestamps. Event content,
+  account email, attendee identity, authorization material, and raw response
+  bodies are excluded.
+- Successful intent rows may be pruned after 30 days by bounded,
+  deterministic, restart-safe cleanup. Unresolved, failed, conflict, and
+  ambiguous rows remain until explicit resolution.
+
+See accepted ADR
+[0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md) and the
+[Phase 2C gate](phases/PHASE_2C.md).
 
 ## Phase 0B local development details
 
