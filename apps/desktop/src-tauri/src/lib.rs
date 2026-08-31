@@ -16,6 +16,8 @@ pub fn run() {
             google_calendar::get_google_calendar_status,
             google_calendar::get_calendar_write_foundation,
             google_calendar::connect_google_calendar,
+            google_calendar::enable_google_calendar_writes,
+            google_calendar::create_google_calendar_event,
             google_calendar::set_google_calendar_enabled,
             google_calendar::set_google_calendar_hidden,
             google_calendar::set_calendar_block_category,

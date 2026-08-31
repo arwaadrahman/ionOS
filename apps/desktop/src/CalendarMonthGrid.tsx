@@ -1,4 +1,5 @@
 import { memo, useMemo } from "react";
+import { CalendarCreateSeed } from "./calendar";
 import {
   CalendarOccurrence,
   CalendarRange,
@@ -19,6 +20,7 @@ export const CalendarMonthGrid = memo(function CalendarMonthGrid({
   localTimeZone,
   today,
   onSelect,
+  onCreate,
 }: {
   range: CalendarRange;
   anchor: string;
@@ -26,6 +28,7 @@ export const CalendarMonthGrid = memo(function CalendarMonthGrid({
   localTimeZone: string;
   today: string;
   onSelect(occurrence: CalendarOccurrence): void;
+  onCreate(seed: CalendarCreateSeed): void;
 }) {
   const days = useMemo(
     () =>
@@ -52,6 +55,19 @@ export const CalendarMonthGrid = memo(function CalendarMonthGrid({
               key={date}
               aria-label={date}
             >
+              <button
+                className="calendar-month-create-target"
+                type="button"
+                aria-label={`Create all-day event on ${date}`}
+                onClick={() =>
+                  onCreate({
+                    date,
+                    allDay: true,
+                    startTime: null,
+                    endTime: null,
+                  })
+                }
+              />
               <div className="calendar-month-date">
                 <span>{dayNumber(date)}</span>
                 {date === today ? <strong>Today</strong> : null}

@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from test_migrations import migration_config
 
 from ion_api.calendar import CalendarService, CalendarValidationError
@@ -22,10 +22,14 @@ from ion_api.calendar_contracts import (
     SyncPageInput,
 )
 from ion_api.calendar_write_contracts import (
+    BeginWriteAttemptInput,
+    CreateProviderEventInput,
     ProviderWriteValues,
     PruneWriteIntentsInput,
     QueueProviderWriteIntentInput,
     ReadyWriteIntentsInput,
+    ReconcileProviderCreateInput,
+    RecordProviderWriteResultInput,
     RecoverWriteIntentsInput,
     WriteIntentTransitionInput,
 )
@@ -38,8 +42,13 @@ from ion_api.db import create_database_engine
 from ion_api.main import create_production_app
 from ion_api.migrations import upgrade_to_head
 from ion_api.schema import (
+    audit_events,
+    calendar_blocks,
     calendar_provider_write_audit,
     calendar_provider_write_intents,
+    google_accounts,
+    google_calendars,
+    google_event_links,
 )
 from ion_api.settings import Settings
 
@@ -132,6 +141,21 @@ def _transition(writes, intent, target, *, result=None, next_attempt_at=None):
     )
 
 
+def _create(writes, calendar, *, command_id=None, **overrides):
+    values = {
+        "command_id": command_id or str(uuid4()),
+        "calendar_id": calendar.status().calendars[0].id,
+        "title": "Synthetic owner-created event",
+        "date": "2030-01-02",
+        "all_day": False,
+        "start_time": "09:00",
+        "end_time": "10:00",
+        "timezone": "America/Los_Angeles",
+    }
+    values.update(overrides)
+    return writes.create(CreateProviderEventInput(**values))
+
+
 def test_deterministic_google_event_id_is_stable_160_bit_base32hex():
     block_id = "11111111-1111-4111-8111-111111111111"
     first = deterministic_google_event_id(block_id)
@@ -152,6 +176,263 @@ def test_full_jitter_is_deterministic_bounded_and_has_no_rapid_floor():
         full_jitter_delay_seconds(6, 0.5)
     with pytest.raises(CalendarValidationError):
         full_jitter_delay_seconds(1, 1)
+
+
+def test_local_first_create_is_atomic_idempotent_pending_and_content_safe(tmp_path):
+    engine, calendar, writes, _ = _connected(tmp_path)
+    command_id = str(uuid4())
+    created = _create(writes, calendar, command_id=command_id)
+    repeated = _create(writes, calendar, command_id=command_id)
+    assert repeated.id == created.id
+    assert created.state == "ready"
+    status = calendar.status()
+    pending = next(
+        block for block in status.blocks if block.id == created.calendar_block_id
+    )
+    assert pending.provider_write_state == "pending"
+    assert pending.provider_write_detail == "ready"
+    assert pending.title == "Synthetic owner-created event"
+    assert pending.start_at == "2030-01-02T09:00:00-08:00"
+    assert pending.end_at == "2030-01-02T10:00:00-08:00"
+
+    with engine.connect() as connection:
+        link = connection.execute(
+            select(google_event_links).where(
+                google_event_links.c.calendar_block_id == pending.id
+            )
+        ).one()
+        assert link.link_state == "pending_create"
+        assert link.provider_event_id == deterministic_google_event_id(pending.id)
+        assert link.provider_etag is None
+        assert connection.execute(
+            select(calendar_blocks.c.id).where(calendar_blocks.c.id == pending.id)
+        ).all() == [(pending.id,)]
+        compact = connection.execute(
+            select(calendar_provider_write_audit).where(
+                calendar_provider_write_audit.c.intent_id == created.id
+            )
+        ).all()
+        canonical = connection.execute(
+            select(audit_events).where(audit_events.c.command_id == command_id)
+        ).all()
+    assert [row.action for row in compact] == [
+        "write_intent_queued",
+        "write_intent_ready",
+    ]
+    assert [row.action for row in canonical] == ["create_requested"]
+    audit_text = json.dumps(
+        [row._asdict() for row in compact] + [row._asdict() for row in canonical]
+    )
+    assert "Synthetic owner-created event" not in audit_text
+
+    restarted = CalendarWriteService(engine)
+    plans = restarted.ready(ReadyWriteIntentsInput(now="2030-01-02T00:00:00Z"))
+    assert [plan.id for plan in plans] == [created.id]
+    assert plans[0].provider_event_id == link.provider_event_id
+
+
+def test_all_day_and_dst_create_semantics_are_preserved(tmp_path):
+    _, calendar, writes, _ = _connected(tmp_path)
+    all_day = _create(
+        writes,
+        calendar,
+        title="Synthetic all-day event",
+        date="2030-02-14",
+        all_day=True,
+        start_time=None,
+        end_time=None,
+        timezone=None,
+    )
+    all_day_plan = next(
+        item
+        for item in writes.ready(ReadyWriteIntentsInput(now="2030-01-01T00:00:00Z"))
+        if item.id == all_day.id
+    )
+    assert all_day_plan.desired_values.start == ProviderDateTime(date="2030-02-14")
+    assert all_day_plan.desired_values.end == ProviderDateTime(date="2030-02-15")
+    block = next(
+        item
+        for item in calendar.status().blocks
+        if item.id == all_day.calendar_block_id
+    )
+    assert block.temporal_kind == "all_day"
+    assert block.start_date == "2030-02-14"
+    assert block.end_date == "2030-02-15"
+    assert block.start_at is None
+
+    with pytest.raises(CalendarValidationError, match="skipped DST"):
+        _create(
+            writes,
+            calendar,
+            date="2030-03-10",
+            start_time="02:15",
+            end_time="03:15",
+        )
+    with pytest.raises(CalendarValidationError, match="ambiguous"):
+        _create(
+            writes,
+            calendar,
+            date="2030-11-03",
+            start_time="01:15",
+            end_time="02:15",
+        )
+
+
+def test_duplicate_and_restart_ambiguity_reconcile_the_same_provider_identity(tmp_path):
+    engine, calendar, writes, _ = _connected(tmp_path)
+    created = _create(writes, calendar)
+    attempting = writes.begin_attempt(
+        created.id,
+        BeginWriteAttemptInput(
+            expected_state="ready", executor_provenance="direct_human"
+        ),
+    )
+    assert attempting.attempt_count == 1
+    ambiguous = writes.record_result(
+        created.id,
+        RecordProviderWriteResultInput(
+            stage="insert",
+            result_class="duplicate_or_ambiguous_create",
+            safe_reason="duplicate_id",
+        ),
+    )
+    assert ambiguous.state == "ambiguous"
+
+    restarted = CalendarWriteService(engine)
+    plans = restarted.ready(ReadyWriteIntentsInput(now="2030-01-02T00:00:00Z"))
+    assert len(plans) == 1
+    assert plans[0].state == "ambiguous"
+    lookup = restarted.begin_attempt(
+        created.id,
+        BeginWriteAttemptInput(
+            expected_state="ambiguous", executor_provenance="recovery"
+        ),
+    )
+    assert lookup.attempt_count == 2
+    completed = restarted.reconcile_create(
+        created.id,
+        ReconcileProviderCreateInput(
+            resolution_kind="identity_lookup",
+            event=ProviderEventInput(
+                provider_event_id=plans[0].provider_event_id,
+                ical_uid="synthetic-created@example.invalid",
+                provider_etag='"synthetic-created-etag"',
+                provider_updated_at="2030-01-02T17:00:00Z",
+                title="Synthetic owner-created event",
+                start=ProviderDateTime(
+                    date_time="2030-01-02T09:00:00-08:00",
+                    timezone="America/Los_Angeles",
+                ),
+                end=ProviderDateTime(
+                    date_time="2030-01-02T10:00:00-08:00",
+                    timezone="America/Los_Angeles",
+                ),
+            ),
+        ),
+    )
+    assert completed.state == "completed"
+    block = next(
+        item
+        for item in calendar.status().blocks
+        if item.id == created.calendar_block_id
+    )
+    assert block.provider_write_state == "synced"
+    assert block.provider_write_detail == "confirmed"
+    with engine.connect() as connection:
+        assert (
+            connection.execute(
+                select(google_event_links.c.link_state).where(
+                    google_event_links.c.calendar_block_id == block.id
+                )
+            ).scalar_one()
+            == "confirmed"
+        )
+        assert connection.execute(
+            select(calendar_blocks.c.id).where(calendar_blocks.c.id == block.id)
+        ).all() == [(block.id,)]
+
+
+def test_absent_ambiguous_create_retries_same_id_then_obeys_ceiling(tmp_path):
+    _, calendar, writes, _ = _connected(tmp_path)
+    writes.random_fraction = lambda: 0.5
+    created = _create(writes, calendar)
+    plan = writes.ready(ReadyWriteIntentsInput(now="2030-01-02T00:00:00Z"))[0]
+    provider_id = plan.provider_event_id
+    writes.begin_attempt(
+        created.id,
+        BeginWriteAttemptInput(
+            expected_state="ready", executor_provenance="direct_human"
+        ),
+    )
+    writes.record_result(
+        created.id,
+        RecordProviderWriteResultInput(
+            stage="insert",
+            result_class="retryable_transport",
+            safe_reason="transport_ambiguous",
+        ),
+    )
+    writes.begin_attempt(
+        created.id,
+        BeginWriteAttemptInput(
+            expected_state="ambiguous", executor_provenance="recovery"
+        ),
+    )
+    retry = writes.record_result(
+        created.id,
+        RecordProviderWriteResultInput(
+            stage="identity_lookup",
+            result_class="provider_not_found",
+            safe_reason="confirmed_absent",
+        ),
+    )
+    assert retry.state == "retry_wait"
+    assert retry.next_attempt_at is not None
+    writes.recover(RecoverWriteIntentsInput(now="2100-01-01T00:00:00Z"))
+    retried_plan = writes.ready(ReadyWriteIntentsInput(now="2100-01-01T00:00:00Z"))[0]
+    assert retried_plan.provider_event_id == provider_id
+
+
+@pytest.mark.parametrize(
+    ("mutation", "state", "reason"),
+    [
+        ("calendar_read_only", "failed", "access_role_read_only"),
+        ("calendar_deleted", "failed", "calendar_deleted"),
+        ("account_read_only", "failed", "account_read_only"),
+        ("reauth", "reauth_required", "reauth_required"),
+    ],
+)
+def test_dispatch_rechecks_destination_and_account_capability(
+    tmp_path, mutation, state, reason
+):
+    engine, calendar, writes, _ = _connected(tmp_path)
+    created = _create(writes, calendar)
+    with engine.begin() as connection:
+        if mutation == "calendar_read_only":
+            connection.execute(update(google_calendars).values(access_role="reader"))
+        elif mutation == "calendar_deleted":
+            connection.execute(
+                update(google_calendars).values(
+                    provider_deleted=True, enabled_in_ion=False
+                )
+            )
+        elif mutation == "account_read_only":
+            connection.execute(
+                update(google_accounts).values(calendar_write_scope_state="read_only")
+            )
+        else:
+            connection.execute(
+                update(google_accounts).values(
+                    auth_state="reauth_required",
+                    calendar_write_scope_state="reauth_required",
+                )
+            )
+    blocked = writes.begin_attempt(
+        created.id,
+        BeginWriteAttemptInput(expected_state="ready", executor_provenance="recovery"),
+    )
+    assert blocked.state == state
+    assert blocked.failure_reason == reason
 
 
 def test_capability_is_backend_derived_and_existing_read_grants_stay_read_only(

@@ -101,9 +101,10 @@ The package is not yet implemented as a standalone design-system package.
   interaction.
 
 - Event details should remain keyboard-focusable and accessible through a
-  read-only provider inspector while Phase 2B preserves the Google read-only
-  boundary. Ion-owned presentation metadata may be edited locally where
-  explicitly supported.
+  provider-field read-only inspector. Phase 2C-2 adds a separate compact,
+  local-first create surface and explicit account capability state; existing
+  Google events remain view-only. Ion-owned presentation metadata may be
+  edited locally where explicitly supported.
 
 ## Motion ownership ladder
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarFilterDrawer } from "./CalendarFilterDrawer";
 import { CalendarInspector } from "./CalendarInspector";
+import { CalendarCreatePanel } from "./CalendarCreatePanel";
 import { CalendarMonthGrid } from "./CalendarMonthGrid";
 import { CalendarSidebar } from "./CalendarSidebar";
 import { CalendarTimeGrid } from "./CalendarTimeGrid";
@@ -11,6 +12,8 @@ import {
   CalendarDrawerMode,
   CalendarCategorySubtype,
   CalendarFilterCategory,
+  CalendarCreateDraft,
+  CalendarCreateSeed,
   calendarFilterCategories,
   calendarSubtypeDefinitions,
   asGoogleError,
@@ -100,6 +103,7 @@ export function CalendarWorkspace({
     CalendarCategorySubtype[]
   >(() => calendarSubtypeDefinitions.map((item) => item.value));
   const [selected, setSelected] = useState<CalendarOccurrence | null>(null);
+  const [createSeed, setCreateSeed] = useState<CalendarCreateSeed | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const stageRef = useRef<HTMLElement | null>(null);
@@ -148,6 +152,9 @@ export function CalendarWorkspace({
   );
   const needsReauthentication = status.accounts.some(
     (account) => account.auth_state === "reauth_required",
+  );
+  const eligibleCalendars = status.calendars.filter(
+    (calendar) => calendar.provider_write_eligible,
   );
 
   useEffect(() => {
@@ -229,6 +236,78 @@ export function CalendarWorkspace({
       setPending(null);
     }
   }, [onStatus, pending]);
+
+  const enableWrites = useCallback(
+    async (
+      account: Parameters<typeof googleCalendarClient.enableWrites>[0],
+    ) => {
+      if (pending) return;
+      setPending(`write-access:${account.id}`);
+      setFeedback(null);
+      try {
+        onStatus(await googleCalendarClient.enableWrites(account));
+        setFeedback(
+          "Calendar writing is enabled for this account. Existing events remain view-only.",
+        );
+      } catch (reason) {
+        const error = asGoogleError(reason);
+        setFeedback(errorCopy[error.code] ?? errorCopy.unavailable);
+      } finally {
+        setPending(null);
+      }
+    },
+    [onStatus, pending],
+  );
+
+  const openCreate = useCallback(
+    (seed: CalendarCreateSeed) => {
+      if (eligibleCalendars.length === 0) {
+        setFeedback(
+          "Enable Calendar writing for an account with an active writer or owner calendar before creating an event.",
+        );
+        setDrawerMode("calendars");
+        return;
+      }
+      setSelected(null);
+      setFeedback(null);
+      setCreateSeed(seed);
+    },
+    [eligibleCalendars.length],
+  );
+
+  const createEvent = useCallback(
+    async (draft: CalendarCreateDraft) => {
+      if (pending) return;
+      setPending("create");
+      setFeedback(null);
+      const previousIds = new Set(status.blocks.map((block) => block.id));
+      try {
+        const next = await googleCalendarClient.create(draft);
+        onStatus(next);
+        setCreateSeed(null);
+        const block = next.blocks.find((item) => !previousIds.has(item.id));
+        if (block?.provider_write_state === "synced") {
+          setFeedback("Event created and confirmed by Google.");
+        } else if (block?.provider_write_detail === "reauth_required") {
+          setFeedback(
+            "Event saved locally. Reconnect Google to finish syncing it.",
+          );
+        } else if (block?.provider_write_state === "failed") {
+          setFeedback(
+            "Event saved locally, but Google sync failed. Its status remains visible on the event.",
+          );
+        } else {
+          setFeedback("Event saved locally and pending Google confirmation.");
+        }
+      } catch (reason) {
+        const error = asGoogleError(reason);
+        setFeedback(errorCopy[error.code] ?? errorCopy.unavailable);
+      } finally {
+        setPending(null);
+      }
+    },
+    [onStatus, pending, status.blocks],
+  );
 
   const toggleCategory = useCallback(
     (category: CalendarFilterCategory, visible: boolean) => {
@@ -328,7 +407,7 @@ export function CalendarWorkspace({
       ) : null}
 
       <div
-        className={`calendar-interface ${drawerMode ? "" : "is-sidebar-collapsed"} ${selected ? "has-inspector" : ""}`}
+        className={`calendar-interface ${drawerMode ? "" : "is-sidebar-collapsed"} ${selected || createSeed ? "has-inspector" : ""}`}
       >
         {drawerMode ? (
           <aside className="calendar-sidebar" aria-label="Calendar sidebar">
@@ -365,6 +444,7 @@ export function CalendarWorkspace({
                 status={status}
                 pending={pending}
                 onConnect={() => void connect()}
+                onEnableWrites={(account) => void enableWrites(account)}
                 onToggle={toggleCalendar}
                 onHidden={setCalendarHidden}
                 onDisconnect={disconnect}
@@ -395,7 +475,7 @@ export function CalendarWorkspace({
             <CalendarToolbar
               view={view}
               range={range}
-              inspectorOpen={Boolean(selected)}
+              inspectorOpen={Boolean(selected || createSeed)}
               density={density}
               syncPending={pending === "sync"}
               syncDisabled={Boolean(pending)}
@@ -450,6 +530,7 @@ export function CalendarWorkspace({
                     localTimeZone={localTimeZone}
                     today={today}
                     onSelect={setSelected}
+                    onCreate={openCreate}
                   />
                 ) : (
                   <CalendarTimeGrid
@@ -460,6 +541,7 @@ export function CalendarWorkspace({
                     now={now}
                     density={density}
                     onSelect={setSelected}
+                    onCreate={openCreate}
                   />
                 )}
                 {enabledCalendars.length > 0 &&
@@ -471,7 +553,16 @@ export function CalendarWorkspace({
               </div>
             </main>
 
-            {selected ? (
+            {createSeed ? (
+              <CalendarCreatePanel
+                seed={createSeed}
+                calendars={eligibleCalendars}
+                localTimeZone={localTimeZone}
+                pending={pending === "create"}
+                onSubmit={(draft) => void createEvent(draft)}
+                onClose={() => setCreateSeed(null)}
+              />
+            ) : selected ? (
               <CalendarInspector
                 occurrence={selected}
                 localTimeZone={localTimeZone}
@@ -492,9 +583,9 @@ export function CalendarWorkspace({
         </section>
       </div>
       <p className="calendar-readonly-note">
-        Ion reads cached Google Calendar data here. Phase 2B provides no event
-        create, edit, move, resize, delete, attendee, reminder, or
-        provider-write action.
+        Ion can create ordinary attendee-free events only after explicit write
+        consent. Edit, move, resize, delete, attendee, reminder, recurrence,
+        attachment, and conferencing actions remain unavailable.
       </p>
       {connected.length === 0 &&
       !needsReauthentication &&

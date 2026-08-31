@@ -50,6 +50,18 @@ function categoryDraftSubtype(
   return currentSubtype ?? calendarSubtypesFor(category)[0]?.value ?? null;
 }
 
+function providerWriteLabel(
+  state: CalendarOccurrence["block"]["provider_write_state"],
+  detail: CalendarOccurrence["block"]["provider_write_detail"],
+) {
+  if (state === "synced") return "Confirmed by Google";
+  if (state === "conflict") return "Needs review";
+  if (state === "failed") return "Google sync failed";
+  if (detail === "reauth_required") return "Reconnect Google to finish";
+  if (detail === "syncing") return "Syncing with Google";
+  return "Saved locally · pending Google";
+}
+
 export function CalendarInspector({
   occurrence,
   localTimeZone,
@@ -216,6 +228,18 @@ export function CalendarInspector({
             {occurrence.block.transparency === "transparent"
               ? " · does not mark time busy"
               : " · occupies calendar time"}
+          </dd>
+        </div>
+        <div>
+          <dt>Google write state</dt>
+          <dd>
+            {providerWriteLabel(
+              occurrence.block.provider_write_state,
+              occurrence.block.provider_write_detail,
+            )}
+            <small>
+              Ion never retries by creating a different provider identity.
+            </small>
           </dd>
         </div>
       </dl>

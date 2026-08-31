@@ -311,6 +311,18 @@ class CalendarBlockOutput(CalendarModel):
     provider_deleted_at: str | None
     revision: int
     provider_write_capability: ProviderWriteCapabilityOutput
+    provider_write_state: Literal["pending", "synced", "failed", "conflict"]
+    provider_write_detail: Literal[
+        "queued",
+        "ready",
+        "syncing",
+        "retry_wait",
+        "reauth_required",
+        "ambiguous",
+        "failed",
+        "conflict",
+        "confirmed",
+    ]
 
 
 class CalendarStatusOutput(CalendarModel):

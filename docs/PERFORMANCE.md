@@ -101,6 +101,11 @@ not each accumulate independent uncoordinated timers. Prefer event-driven
 updates where practical and use centralized scheduling with sensible refresh
 intervals where polling is necessary.
 
+Phase 2C-2 Calendar create adds no polling timer or background loop. Each
+explicit create, sync, re-consent, or startup recovery trigger drains at most
+10 ready write plans after a bounded recovery pass; retry timestamps remain
+durable until a later trigger.
+
 ### Child processes
 
 External applications own their own lifecycle. Ion may later expose narrow,

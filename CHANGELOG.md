@@ -23,6 +23,14 @@ All notable repository changes are documented here.
 
 ### Added
 
+- Phase 2C-2 idempotent Google Calendar create: explicit selected-account
+  Calendar Events write re-consent, compact click/drag create UI, atomic
+  local-first CalendarBlock/outbox persistence, attendee-free `events.insert`,
+  deterministic-ID ambiguity lookup, bounded restart-safe retry, visible
+  pending/reauth/failure state, and synthetic provider execution tests. No
+  migration was needed beyond accepted migration `0007`; all later mutation
+  operations remain unavailable.
+
 - Phase 2C-1 Google Calendar write foundation: migration `0007` adds safe
   account/event capability evidence, a typed durable provider-write outbox and
   separate compact audit; Python adds fixed enqueue/ready/transition/recovery/

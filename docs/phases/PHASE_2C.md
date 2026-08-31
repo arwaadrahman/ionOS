@@ -2,14 +2,16 @@
 
 ## Status
 
-**Architecture/security gate accepted; Phase 2C-1 foundation implemented and
-pending owner acceptance.** The owner accepted ADR 0021 and the seven decisions
+**Architecture/security gate accepted; Phase 2C-2 idempotent create implemented
+and pending owner real-write acceptance.** The owner accepted ADR 0021 and the seven decisions
 in this gate on 2026-08-30, then separately authorized the bounded 2C-1
 foundation. Migration `0007`, the typed Python outbox/state API, safe
 capability projection, deterministic ID/retry/recovery/audit helpers, one
 read-only Tauri foundation command, and unsent Rust provider request/result
-helpers are now present. No Calendar write UI, automatic re-consent, or real
-Google event mutation is enabled.
+helpers are now present. Phase 2C-2 adds explicit selected-account re-consent,
+local-first create UI, `events.insert`, and deterministic-ID `events.get`
+reconciliation. No real OAuth or Calendar mutation was used during automated
+verification.
 
 ## Objective
 
@@ -593,6 +595,9 @@ exclusions are frozen in [Phase 2C-1 Contract](PHASE_2C_1_CONTRACT.md).
   boundary unchanged.
 
 ### 2C-2 — Create
+
+**Implemented; owner real-write acceptance pending.** Migration `0007` was
+reviewed and found sufficient, so no schema change was introduced.
 
 - Add bounded create draft and attendee-free ordinary Google event insertion.
 - Implement deterministic base32hex ID, ambiguous-result get/retry, duplicate

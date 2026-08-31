@@ -1,5 +1,16 @@
-import { memo, useEffect, useMemo, useRef, type CSSProperties } from "react";
-import { CalendarDensity, calendarDensityHeights } from "./calendar";
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  type CSSProperties,
+  type PointerEvent,
+} from "react";
+import {
+  CalendarCreateSeed,
+  CalendarDensity,
+  calendarDensityHeights,
+} from "./calendar";
 import {
   CalendarOccurrence,
   CalendarRange,
@@ -21,6 +32,12 @@ function dayLabel(date: string) {
   }).format(new Date(`${date}T12:00:00Z`));
 }
 
+function clockTime(minutes: number) {
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
 export const CalendarTimeGrid = memo(function CalendarTimeGrid({
   range,
   occurrences,
@@ -29,6 +46,7 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
   now = new Date(),
   density,
   onSelect,
+  onCreate,
 }: {
   range: CalendarRange;
   occurrences: CalendarOccurrence[];
@@ -37,9 +55,11 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
   now?: Date;
   density: CalendarDensity;
   onSelect(occurrence: CalendarOccurrence): void;
+  onCreate(seed: CalendarCreateSeed): void;
 }) {
   const hourHeight = calendarDensityHeights[density];
   const grid = useRef<HTMLElement>(null);
+  const dragStart = useRef<{ date: string; minute: number } | null>(null);
   useEffect(() => {
     const stage = grid.current?.closest<HTMLElement>(".calendar-stage");
     if (stage) stage.scrollTop = 7 * hourHeight;
@@ -57,6 +77,22 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
       }),
     [localTimeZone, occurrences, range.days],
   );
+  const minuteAt = (event: PointerEvent<HTMLElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const raw = ((event.clientY - bounds.top) / bounds.height) * 24 * 60;
+    return Math.max(0, Math.min(23 * 60 + 45, Math.round(raw / 15) * 15));
+  };
+  const finishCreate = (date: string, start: number, finish: number) => {
+    const first = Math.min(start, finish);
+    const last = Math.max(start, finish);
+    const end = Math.min(23 * 60 + 59, last === first ? first + 60 : last);
+    onCreate({
+      date,
+      allDay: false,
+      startTime: clockTime(first),
+      endTime: clockTime(end),
+    });
+  };
 
   return (
     <section
@@ -86,6 +122,19 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
           {dayLayouts.map(({ allDay, date }) => {
             return (
               <div className={date === today ? "is-today" : ""} key={date}>
+                <button
+                  className="calendar-all-day-create-target"
+                  type="button"
+                  aria-label={`Create all-day event on ${date}`}
+                  onClick={() =>
+                    onCreate({
+                      date,
+                      allDay: true,
+                      startTime: null,
+                      endTime: null,
+                    })
+                  }
+                />
                 {allDay.map((occurrence) => (
                   <EventButton
                     key={occurrence.key}
@@ -121,6 +170,28 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
                 className={`calendar-time-column ${date === today ? "is-today" : ""}`}
                 key={date}
               >
+                <button
+                  className="calendar-time-create-target"
+                  type="button"
+                  aria-label={`Create timed event on ${date}`}
+                  onPointerDown={(event) => {
+                    if (event.button !== 0) return;
+                    dragStart.current = { date, minute: minuteAt(event) };
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                  }}
+                  onPointerUp={(event) => {
+                    const start = dragStart.current;
+                    dragStart.current = null;
+                    if (!start || start.date !== date) return;
+                    finishCreate(date, start.minute, minuteAt(event));
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      finishCreate(date, 9 * 60, 10 * 60);
+                    }
+                  }}
+                />
                 {date === today ? (
                   <div
                     className="calendar-now-line"
@@ -202,10 +273,28 @@ export const EventButton = memo(function EventButton({
       }
       aria-label={`${occurrence.block.title}, ${time}`}
       title={`${occurrence.block.title} · ${time}`}
-      onClick={() => onSelect(occurrence)}
+      data-write-state={occurrence.block.provider_write_state}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect(occurrence);
+      }}
     >
       <strong>{occurrence.block.title}</strong>
       {detail === "time" || detail === "full" ? <span>{time}</span> : null}
+      {occurrence.block.provider_write_state !== "synced" ? (
+        <small className="calendar-event-write-state">
+          {occurrence.block.provider_write_detail === "syncing"
+            ? "Syncing"
+            : occurrence.block.provider_write_state === "failed"
+              ? "Google sync failed"
+              : occurrence.block.provider_write_state === "conflict"
+                ? "Needs review"
+                : occurrence.block.provider_write_detail === "reauth_required"
+                  ? "Reconnect Google"
+                  : "Pending Google"}
+        </small>
+      ) : null}
     </button>
   );
 });

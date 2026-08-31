@@ -245,6 +245,24 @@ export type CalendarWriteFoundation = {
   pending: ProviderWriteIntentSummary[];
 };
 
+export type CalendarCreateSeed = {
+  date: string;
+  allDay: boolean;
+  startTime: string | null;
+  endTime: string | null;
+};
+
+export type CalendarCreateDraft = {
+  command_id: string;
+  calendar_id: string;
+  title: string;
+  date: string;
+  all_day: boolean;
+  start_time: string | null;
+  end_time: string | null;
+  timezone: string | null;
+};
+
 export type CalendarBlock = {
   id: string;
   calendar_id: string;
@@ -278,6 +296,17 @@ export type CalendarBlock = {
   provider_deleted_at: string | null;
   revision: number;
   provider_write_capability: ProviderWriteCapability;
+  provider_write_state: "pending" | "synced" | "failed" | "conflict";
+  provider_write_detail:
+    | "queued"
+    | "ready"
+    | "syncing"
+    | "retry_wait"
+    | "reauth_required"
+    | "ambiguous"
+    | "failed"
+    | "conflict"
+    | "confirmed";
 };
 
 export type CalendarStatus = {
@@ -315,6 +344,12 @@ export const googleCalendarClient = {
   writeFoundation: () =>
     invoke<CalendarWriteFoundation>("get_calendar_write_foundation"),
   connect: () => invoke<CalendarStatus>("connect_google_calendar"),
+  enableWrites: (account: GoogleAccount) =>
+    invoke<CalendarStatus>("enable_google_calendar_writes", {
+      accountId: account.id,
+    }),
+  create: (draft: CalendarCreateDraft) =>
+    invoke<CalendarStatus>("create_google_calendar_event", { draft }),
   setEnabled: (calendar: GoogleCalendar, enabled: boolean) =>
     invoke<CalendarStatus>("set_google_calendar_enabled", {
       calendarId: calendar.id,

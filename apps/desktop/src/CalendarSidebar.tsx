@@ -12,6 +12,7 @@ export const CalendarSidebar = memo(function CalendarSidebar({
   status,
   pending,
   onConnect,
+  onEnableWrites,
   onToggle,
   onHidden,
   onDisconnect,
@@ -19,6 +20,7 @@ export const CalendarSidebar = memo(function CalendarSidebar({
   status: CalendarStatus;
   pending: string | null;
   onConnect(): void;
+  onEnableWrites(account: GoogleAccount): void;
   onToggle(calendar: GoogleCalendar, enabled: boolean): void;
   onHidden(calendar: GoogleCalendar, hidden: boolean): void;
   onDisconnect(account: GoogleAccount): void;
@@ -62,6 +64,10 @@ export const CalendarSidebar = memo(function CalendarSidebar({
             const blockCount = status.blocks.filter((block) =>
               calendars.some((calendar) => calendar.id === block.calendar_id),
             ).length;
+            const writeEnabled =
+              account.calendar_write_scope_state === "write_granted";
+            const writeReauthentication =
+              account.calendar_write_scope_state === "reauth_required";
             return (
               <details className="calendar-source-group" key={account.id} open>
                 <summary>
@@ -132,18 +138,53 @@ export const CalendarSidebar = memo(function CalendarSidebar({
                     );
                   })}
                 </ul>
+                <div className="calendar-write-capability">
+                  <span>
+                    <strong>
+                      {writeEnabled ? "Calendar writing enabled" : "Read only"}
+                    </strong>
+                    <small>
+                      {writeEnabled
+                        ? "Ion can create ordinary attendee-free events in eligible calendars."
+                        : "Creating Google events requires a separate, explicit permission step."}
+                    </small>
+                  </span>
+                  {!writeEnabled ? (
+                    <button
+                      type="button"
+                      disabled={
+                        Boolean(pending) ||
+                        !status.configured ||
+                        account.auth_state === "disconnected"
+                      }
+                      onClick={() => onEnableWrites(account)}
+                    >
+                      {pending === `write-access:${account.id}`
+                        ? "Waiting for Google…"
+                        : writeReauthentication
+                          ? "Reconnect Calendar writing"
+                          : "Enable Calendar writing"}
+                    </button>
+                  ) : null}
+                </div>
                 {account.auth_state === "reauth_required" ? (
                   <div className="calendar-reauth-action">
                     <span>
-                      Google access expired or was revoked. Saved events remain
-                      available.
+                      Google access expired or was revoked. Saved events and
+                      pending creates remain available.
                     </span>
                     <button
                       type="button"
                       disabled={Boolean(pending) || !status.configured}
-                      onClick={onConnect}
+                      onClick={() =>
+                        writeReauthentication
+                          ? onEnableWrites(account)
+                          : onConnect()
+                      }
                     >
-                      Reconnect Google account
+                      {writeReauthentication
+                        ? "Reconnect Calendar writing"
+                        : "Reconnect Google account"}
                     </button>
                   </div>
                 ) : null}
@@ -198,8 +239,9 @@ export const CalendarSidebar = memo(function CalendarSidebar({
       </div>
       <footer className="calendar-sidebar-footer">
         <p className="context-note">
-          Calendar visibility is local to Ion. Google is read-only; provider
-          subscriptions and event fields are never changed.
+          Calendar visibility is local to Ion. Only explicitly write-enabled
+          accounts can create ordinary events; existing event fields remain
+          view-only.
         </p>
         <div className="calendar-sidebar-actions">
           <button

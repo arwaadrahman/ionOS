@@ -10,25 +10,27 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 2 — Calendar
-- **Milestone:** Phase 2C-1 write foundation implemented; owner acceptance
-  pending
-- **In scope:** a primary read-only Calendar over cached canonical
+- **Milestone:** Phase 2C-2 idempotent Google Calendar create implemented;
+  owner real-write acceptance pending
+- **In scope:** a primary Calendar over cached canonical
   CalendarBlocks; Day, consecutive 3 Day, Monday-first Week, rolling Next 7
   Days, and Monday-first Month views; bounded recurrence/exception projection;
   unified multi-account rendering; progressive calendar management with local
   hide/restore;
   Ion-owned event categories, semantic colors/filters, adaptive event detail,
   local vertical density and pane-width responsive view selection; mutually
-  exclusive source/filter drawers; a provider-read-only event inspector; and
+  exclusive source/filter drawers; a provider-field read-only event inspector;
+  explicit account-scoped Calendar write re-consent; local-first creation of
+  ordinary attendee-free events in eligible calendars; and
   truthful CalendarBlock occupancy/free gaps in Today.
-- **Foundation scope:** migration `0007` now provides the durable typed outbox,
+- **Write scope:** migration `0007` provides the durable typed outbox,
   safe capability evidence, deterministic create ID, retry/restart state,
-  compact audit, fixed local routes, one read-only Tauri capability command,
-  and unsent Rust provider-request/classification helpers. Existing accounts
-  remain read-only and no Google event mutation is reachable.
-- **Out of scope:** Google event writes/deletes, Google Tasks, Gmail,
-  push/webhooks, Phase 2C create/edit/delete UI or provider mutation, OAuth
-  re-consent execution until separately authorized, Task auto-scheduling, AI, provider free/busy
+  compact audit, and fixed local routes. Phase 2C-2 adds explicit write
+  re-consent plus `events.insert`/deterministic `events.get` reconciliation
+  only. Existing accounts remain read-only until re-consent.
+- **Out of scope:** Google event edit/move/resize/delete, Google Tasks, Gmail,
+  push/webhooks, attendee/reminder/recurrence/conferencing/attachment writes,
+  Task auto-scheduling, AI, provider free/busy
   planning, FocusSession, DailyReview, WeeklyPlan, semantic/conversational search,
   persisted search indexes/history, generic Undo/version history, automatic
   purge, inferred relationships, global shortcuts requiring a new plugin,
@@ -67,8 +69,9 @@ Core baseline; Phases 1E and 1F add compact command search and contextual
 recovery/history; Phase 1G adds a quiet native menu-bar presence and focused
 Task capture; Phase 1H hardens the complete Phase 1 flow. Phase 2A adds a
 restrained Calendar read-sync foundation. Phase 2B adds the primary read-only
-Calendar and truthful CalendarBlock occupancy in Today while provider writes,
-Task scheduling, Explore, semantic search, and AI remain deferred.
+Calendar and truthful CalendarBlock occupancy in Today. Phase 2C-2 adds the
+first explicit, local-first create path while every later mutation, Task
+scheduling, Explore, semantic search, and AI remain deferred.
 
 Design/motion ladder: process guidance (`IMPECCABLE`, `EMIL-MOTION`); CSS for
 simple motion; Motion for React for normal stateful UI; Three.js only for a

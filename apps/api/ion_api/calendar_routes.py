@@ -21,13 +21,18 @@ from ion_api.calendar_contracts import (
     SyncPageInput,
 )
 from ion_api.calendar_write_contracts import (
+    BeginWriteAttemptInput,
     CalendarWriteFoundationOutput,
+    CreateProviderEventInput,
+    CreateProviderEventOutput,
     ProviderWriteIntentSummaryOutput,
     ProviderWritePlanOutput,
     PruneResultOutput,
     PruneWriteIntentsInput,
     QueueProviderWriteIntentInput,
     ReadyWriteIntentsInput,
+    ReconcileProviderCreateInput,
+    RecordProviderWriteResultInput,
     RecoverWriteIntentsInput,
     RecoveryResultOutput,
     WriteIntentTransitionInput,
@@ -65,6 +70,24 @@ def calendar_router(service: CalendarService) -> APIRouter:
     @router.get("/write-foundation", response_model=CalendarWriteFoundationOutput)
     def write_foundation() -> CalendarWriteFoundationOutput:
         return writes.foundation()
+
+    @router.post(
+        "/internal/write-intents/create",
+        response_model=CreateProviderEventOutput,
+    )
+    def create_write_intent(
+        input: CreateProviderEventInput,
+    ) -> CreateProviderEventOutput:
+        try:
+            return CreateProviderEventOutput(
+                intent=writes.create(input), status=service.status()
+            )
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
 
     @router.post(
         "/internal/write-intents",
@@ -121,6 +144,54 @@ def calendar_router(service: CalendarService) -> APIRouter:
     def prune_write_intents(input: PruneWriteIntentsInput) -> PruneResultOutput:
         try:
             return writes.prune(input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/{intent_id}/attempt",
+        response_model=ProviderWriteIntentSummaryOutput,
+    )
+    def begin_write_attempt(
+        intent_id: str, input: BeginWriteAttemptInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        try:
+            return writes.begin_attempt(intent_id, input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/{intent_id}/result",
+        response_model=ProviderWriteIntentSummaryOutput,
+    )
+    def record_write_result(
+        intent_id: str, input: RecordProviderWriteResultInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        try:
+            return writes.record_result(intent_id, input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/{intent_id}/reconcile-create",
+        response_model=ProviderWriteIntentSummaryOutput,
+    )
+    def reconcile_write_create(
+        intent_id: str, input: ReconcileProviderCreateInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        try:
+            return writes.reconcile_create(intent_id, input)
         except (
             CalendarNotFoundError,
             CalendarConflictError,

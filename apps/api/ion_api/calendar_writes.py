@@ -6,8 +6,10 @@ import base64
 import hashlib
 import json
 import math
-from datetime import UTC, datetime, timedelta
+import secrets
+from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import Engine, delete, func, insert, select, update
 
@@ -18,20 +20,26 @@ from ion_api.calendar import (
 )
 from ion_api.calendar_write_contracts import (
     AccountWriteCapabilityOutput,
+    BeginWriteAttemptInput,
     BlockWriteCapabilityOutput,
     CalendarWriteCapabilityOutput,
     CalendarWriteFoundationOutput,
+    CreateProviderEventInput,
     ProviderWriteIntentSummaryOutput,
     ProviderWritePlanOutput,
     PruneResultOutput,
     PruneWriteIntentsInput,
     QueueProviderWriteIntentInput,
     ReadyWriteIntentsInput,
+    ReconcileProviderCreateInput,
+    RecordProviderWriteResultInput,
     RecoverWriteIntentsInput,
     RecoveryResultOutput,
     WriteIntentTransitionInput,
 )
 from ion_api.schema import (
+    audit_events,
+    calendar_block_ion_metadata,
     calendar_blocks,
     calendar_provider_write_audit,
     calendar_provider_write_intents,
@@ -44,6 +52,7 @@ EVENT_ID_DOMAIN = b"ion:google-calendar:event-id:v1\0"
 COMPLETED_RETENTION_DAYS = 30
 MAX_AUTOMATIC_ATTEMPTS = 5
 MAX_BACKOFF_SECONDS = 300
+UNTITLED_EVENT = "Untitled event"
 TERMINAL_PREDECESSOR_STATES = ("completed", "cancelled")
 ALLOWED_TRANSITIONS = {
     "queued": frozenset(("ready", "cancelled")),
@@ -108,6 +117,77 @@ def full_jitter_delay_seconds(attempt_count: int, random_fraction: float) -> int
     return math.floor(ceiling * random_fraction)
 
 
+def _validated_zone(value: str) -> ZoneInfo:
+    try:
+        return ZoneInfo(value)
+    except ZoneInfoNotFoundError as error:
+        raise CalendarValidationError(
+            "timed create requires an IANA timezone"
+        ) from error
+
+
+def _resolved_wall_time(date_value: str, time_value: str, timezone: str) -> datetime:
+    civil = datetime.combine(
+        date.fromisoformat(date_value), time.fromisoformat(time_value)
+    )
+    zone = _validated_zone(timezone)
+    candidates: list[datetime] = []
+    for fold in (0, 1):
+        aware = civil.replace(tzinfo=zone, fold=fold)
+        round_trip = aware.astimezone(UTC).astimezone(zone)
+        if round_trip.replace(tzinfo=None) == civil and round_trip.fold == fold:
+            candidates.append(aware)
+    if not candidates:
+        raise CalendarValidationError("timed create falls in a skipped DST interval")
+    if len(candidates) == 2 and candidates[0].utcoffset() != candidates[1].utcoffset():
+        raise CalendarValidationError("timed create is ambiguous across a DST fold")
+    return candidates[0]
+
+
+def _create_temporal_values(
+    input: CreateProviderEventInput,
+) -> tuple[dict[str, str | None], dict[str, object]]:
+    if input.all_day:
+        start_date = date.fromisoformat(input.date)
+        end_date = start_date + timedelta(days=1)
+        return (
+            {
+                "temporal_kind": "all_day",
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "start_at": None,
+                "end_at": None,
+                "start_timezone": None,
+                "end_timezone": None,
+            },
+            {
+                "start": {"date": start_date.isoformat()},
+                "end": {"date": end_date.isoformat()},
+            },
+        )
+    start = _resolved_wall_time(input.date, input.start_time, input.timezone)
+    end = _resolved_wall_time(input.date, input.end_time, input.timezone)
+    if end <= start:
+        raise CalendarValidationError("timed create end must be after start")
+    start_at = start.isoformat(timespec="seconds")
+    end_at = end.isoformat(timespec="seconds")
+    return (
+        {
+            "temporal_kind": "timed",
+            "start_date": None,
+            "end_date": None,
+            "start_at": start_at,
+            "end_at": end_at,
+            "start_timezone": input.timezone,
+            "end_timezone": input.timezone,
+        },
+        {
+            "start": {"date_time": start_at, "timezone": input.timezone},
+            "end": {"date_time": end_at, "timezone": input.timezone},
+        },
+    )
+
+
 def _json(value) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -126,10 +206,10 @@ def _calendar_reason(account, calendar) -> str:
         return "reauth_required"
     if account.calendar_write_scope_state != "write_granted":
         return "account_read_only"
-    if not calendar.enabled_in_ion:
-        return "calendar_disabled"
     if calendar.provider_deleted:
         return "calendar_deleted"
+    if not calendar.enabled_in_ion:
+        return "calendar_disabled"
     if calendar.access_role not in ("writer", "owner"):
         return "access_role_read_only"
     return "eligible"
@@ -227,9 +307,85 @@ def _audit(
     )
 
 
+def _canonical_audit(
+    connection,
+    *,
+    block_id: str,
+    action: str,
+    command_id: str,
+    from_revision: int | None,
+    to_revision: int | None,
+) -> None:
+    connection.execute(
+        insert(audit_events).values(
+            event_id=str(uuid4()),
+            occurred_at=utc_now(),
+            entity_type="calendar_block",
+            entity_id=block_id,
+            action=action,
+            actor_kind="human" if action == "create_requested" else "integration",
+            authority="direct" if action == "create_requested" else "approved",
+            source="desktop" if action == "create_requested" else "google_calendar",
+            from_revision=from_revision,
+            to_revision=to_revision,
+            command_id=command_id,
+        )
+    )
+
+
+def _event_temporal_values(event) -> dict[str, str | None]:
+    if event.start.date is not None:
+        return {
+            "temporal_kind": "all_day",
+            "start_date": event.start.date,
+            "end_date": event.end.date,
+            "start_at": None,
+            "end_at": None,
+            "start_timezone": None,
+            "end_timezone": None,
+        }
+    return {
+        "temporal_kind": "timed",
+        "start_date": None,
+        "end_date": None,
+        "start_at": event.start.date_time,
+        "end_at": event.end.date_time,
+        "start_timezone": event.start.timezone,
+        "end_timezone": event.end.timezone,
+    }
+
+
+def _same_provider_time(left, right) -> bool:
+    if left.date is not None or right.date is not None:
+        return left.date == right.date and left.timezone == right.timezone
+    left_at = _parse_timestamp(left.date_time)
+    right_at = _parse_timestamp(right.date_time)
+    return left_at == right_at and left.timezone == right.timezone
+
+
+def _identity_lookup_matches(row, event) -> bool:
+    desired = json.loads(row.desired_values_json)
+    if event.title != desired.get("title"):
+        return False
+    if event.transparency != desired.get("transparency", "opaque"):
+        return False
+    expected_start = desired.get("start")
+    expected_end = desired.get("end")
+    if expected_start is None or expected_end is None:
+        return False
+    from ion_api.calendar_contracts import ProviderDateTime
+
+    return _same_provider_time(
+        event.start, ProviderDateTime.model_validate(expected_start)
+    ) and _same_provider_time(event.end, ProviderDateTime.model_validate(expected_end))
+
+
 class CalendarWriteService:
-    def __init__(self, engine: Engine):
+    def __init__(self, engine: Engine, random_fraction=None):
         self.engine = engine
+        self.random_fraction = random_fraction or (
+            lambda: secrets.randbelow(1_000_000) / 1_000_000
+        )
 
     @staticmethod
     def _required_row(connection, table, identifier: str, column=None):
@@ -313,6 +469,171 @@ class CalendarWriteService:
             ],
             pending=[_summary(row) for row in pending_rows],
         )
+
+    def create(
+        self, input: CreateProviderEventInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        title = input.title.strip()
+        if not title:
+            raise CalendarValidationError("create title must be present")
+        temporal, provider_temporal = _create_temporal_values(input)
+        now = utc_now()
+        with self.engine.begin() as connection:
+            existing = connection.execute(
+                select(calendar_provider_write_intents).where(
+                    calendar_provider_write_intents.c.command_id == input.command_id
+                )
+            ).one_or_none()
+            if existing is not None:
+                if existing.operation != "create":
+                    raise CalendarConflictError(input.command_id)
+                return _summary(existing)
+
+            calendar = self._required_row(
+                connection, google_calendars, input.calendar_id
+            )
+            account = self._required_row(
+                connection, google_accounts, calendar.account_id
+            )
+            reason = _calendar_reason(account, calendar)
+            if reason != "eligible":
+                raise CalendarValidationError(reason)
+
+            block_id = str(uuid4())
+            intent_id = str(uuid4())
+            provider_event_id = deterministic_google_event_id(block_id)
+            changed_fields = ["title", "transparency", "temporal"]
+            changed_fields_json = _json(changed_fields)
+            desired_values_json = _json(
+                {
+                    "schema_version": 1,
+                    "title": title,
+                    "transparency": "opaque",
+                    **provider_temporal,
+                }
+            )
+            connection.execute(
+                insert(calendar_blocks).values(
+                    id=block_id,
+                    source_kind="google",
+                    title=title,
+                    description=None,
+                    location=None,
+                    status="confirmed",
+                    transparency="opaque",
+                    recurrence_kind="single",
+                    recurrence_rules=None,
+                    recurrence_master_block_id=None,
+                    provider_deleted_at=None,
+                    created_at=now,
+                    updated_at=now,
+                    revision=1,
+                    trashed_at=None,
+                    **temporal,
+                )
+            )
+            connection.execute(
+                insert(calendar_block_ion_metadata).values(
+                    calendar_block_id=block_id,
+                    flexibility="locked",
+                    notes=None,
+                    category=None,
+                    category_subtype=None,
+                    created_at=now,
+                    updated_at=now,
+                    revision=1,
+                )
+            )
+            connection.execute(
+                insert(google_event_links).values(
+                    calendar_block_id=block_id,
+                    account_id=account.id,
+                    calendar_id=calendar.id,
+                    provider_event_id=provider_event_id,
+                    ical_uid=None,
+                    provider_etag=None,
+                    provider_updated_at=None,
+                    recurring_event_id=None,
+                    original_start_kind="none",
+                    original_start_date=None,
+                    original_start_at=None,
+                    original_start_timezone=None,
+                    last_seen_sync_generation=None,
+                    link_state="pending_create",
+                    provider_event_type="default",
+                    provider_locked=False,
+                    has_attendees=False,
+                )
+            )
+            connection.execute(
+                insert(calendar_provider_write_intents).values(
+                    id=intent_id,
+                    command_id=input.command_id,
+                    calendar_block_id=block_id,
+                    account_id=account.id,
+                    calendar_id=calendar.id,
+                    provider_event_id=provider_event_id,
+                    sequence=1,
+                    predecessor_intent_id=None,
+                    operation="create",
+                    recurrence_scope="single",
+                    changed_fields_json=changed_fields_json,
+                    base_values_json=None,
+                    desired_values_json=desired_values_json,
+                    expected_provider_etag=None,
+                    source_block_revision=1,
+                    schema_version=1,
+                    state="queued",
+                    attempt_count=0,
+                    next_attempt_at=None,
+                    last_attempt_at=None,
+                    failure_class=None,
+                    failure_reason=None,
+                    created_at=now,
+                    updated_at=now,
+                    resolved_at=None,
+                    prune_after=None,
+                    provenance=input.provenance,
+                )
+            )
+            queued = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            _canonical_audit(
+                connection,
+                block_id=block_id,
+                action="create_requested",
+                command_id=input.command_id,
+                from_revision=None,
+                to_revision=1,
+            )
+            _audit(
+                connection,
+                queued,
+                action="write_intent_queued",
+                from_state=None,
+                to_state="queued",
+                occurred_at=now,
+                executor_provenance="direct_human",
+            )
+            connection.execute(
+                update(calendar_provider_write_intents)
+                .where(calendar_provider_write_intents.c.id == intent_id)
+                .values(state="ready", updated_at=now)
+            )
+            ready = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            _audit(
+                connection,
+                ready,
+                action="write_intent_ready",
+                from_state="queued",
+                to_state="ready",
+                occurred_at=now,
+                executor_provenance="direct_human",
+            )
+            return _summary(ready)
 
     def queue(
         self, input: QueueProviderWriteIntentInput
@@ -445,7 +766,8 @@ class CalendarWriteService:
             return _summary(queued)
 
     def ready(self, input: ReadyWriteIntentsInput) -> list[ProviderWritePlanOutput]:
-        _canonical_timestamp(input.now)
+        if input.now is not None:
+            _canonical_timestamp(input.now)
         with self.engine.connect() as connection:
             active_accounts = set(
                 connection.execute(
@@ -456,8 +778,11 @@ class CalendarWriteService:
             )
             rows = connection.execute(
                 select(calendar_provider_write_intents)
-                .where(calendar_provider_write_intents.c.state == "ready")
+                .where(
+                    calendar_provider_write_intents.c.state.in_(("ambiguous", "ready"))
+                )
                 .order_by(
+                    calendar_provider_write_intents.c.state != "ambiguous",
                     calendar_provider_write_intents.c.created_at,
                     calendar_provider_write_intents.c.id,
                 )
@@ -481,6 +806,357 @@ class CalendarWriteService:
                 if len(selected) == input.limit:
                     break
         return selected
+
+    def begin_attempt(
+        self, intent_id: str, input: BeginWriteAttemptInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        now = utc_now()
+        with self.engine.begin() as connection:
+            row = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            if row.state != input.expected_state:
+                raise CalendarConflictError(intent_id)
+            if row.operation != "create":
+                raise CalendarValidationError("Phase 2C-2 dispatch accepts create only")
+            block = self._required_row(
+                connection, calendar_blocks, row.calendar_block_id
+            )
+            link = self._required_row(
+                connection,
+                google_event_links,
+                row.calendar_block_id,
+                google_event_links.c.calendar_block_id,
+            )
+            account = self._required_row(connection, google_accounts, row.account_id)
+            calendar = self._required_row(connection, google_calendars, row.calendar_id)
+            reason = _write_reason(
+                account, calendar, link, block, allow_pending_create=True
+            )
+            if reason != "eligible":
+                target = "reauth_required" if reason == "reauth_required" else "failed"
+                failure_class = (
+                    "reauthentication_required"
+                    if target == "reauth_required"
+                    else "provider_not_found"
+                    if reason == "calendar_deleted"
+                    else "terminal_provider_rejection"
+                )
+                connection.execute(
+                    update(calendar_provider_write_intents)
+                    .where(calendar_provider_write_intents.c.id == row.id)
+                    .values(
+                        state=target,
+                        failure_class=failure_class,
+                        failure_reason=reason,
+                        updated_at=now,
+                    )
+                )
+                blocked = self._required_row(
+                    connection, calendar_provider_write_intents, row.id
+                )
+                _audit(
+                    connection,
+                    blocked,
+                    action=(
+                        "write_reauthentication_required"
+                        if target == "reauth_required"
+                        else "write_failed_terminally"
+                    ),
+                    from_state=row.state,
+                    to_state=target,
+                    occurred_at=now,
+                    executor_provenance=input.executor_provenance,
+                )
+                return _summary(blocked)
+
+            if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS and row.state != "ambiguous":
+                raise CalendarValidationError("automatic attempt limit reached")
+            attempt_count = row.attempt_count
+            if attempt_count < MAX_AUTOMATIC_ATTEMPTS:
+                attempt_count += 1
+            connection.execute(
+                update(calendar_provider_write_intents)
+                .where(calendar_provider_write_intents.c.id == row.id)
+                .values(
+                    state="attempting",
+                    attempt_count=attempt_count,
+                    last_attempt_at=now,
+                    next_attempt_at=None,
+                    failure_class=None,
+                    failure_reason=None,
+                    updated_at=now,
+                )
+            )
+            attempting = self._required_row(
+                connection, calendar_provider_write_intents, row.id
+            )
+            _audit(
+                connection,
+                attempting,
+                action="write_attempt_started",
+                from_state=row.state,
+                to_state="attempting",
+                occurred_at=now,
+                executor_provenance=input.executor_provenance,
+            )
+            return _summary(attempting)
+
+    def record_result(
+        self, intent_id: str, input: RecordProviderWriteResultInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        now = utc_now()
+        with self.engine.begin() as connection:
+            row = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            if row.state != input.expected_state or row.operation != "create":
+                raise CalendarConflictError(intent_id)
+
+            result_class = input.result_class
+            stored_class = result_class
+            next_attempt_at = None
+            if result_class == "reauthentication_required":
+                target = "reauth_required"
+            elif input.stage == "insert" and result_class in (
+                "duplicate_or_ambiguous_create",
+                "retryable_transport",
+            ):
+                target = "ambiguous"
+            elif input.stage == "identity_lookup" and result_class in (
+                "duplicate_or_ambiguous_create",
+                "retryable_transport",
+            ):
+                target = (
+                    "failed"
+                    if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
+                    else "ambiguous"
+                )
+            elif (
+                input.stage == "identity_lookup"
+                and result_class == "provider_not_found"
+            ):
+                if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS:
+                    target = "failed"
+                else:
+                    target = "retry_wait"
+                    stored_class = "retryable_transport"
+            elif result_class in (
+                "retryable_backend",
+                "retryable_quota",
+            ):
+                target = (
+                    "failed"
+                    if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
+                    else "retry_wait"
+                )
+            else:
+                target = "failed"
+
+            if target == "retry_wait":
+                delay = full_jitter_delay_seconds(
+                    row.attempt_count, self.random_fraction()
+                )
+                next_attempt_at = (
+                    (datetime.now(UTC) + timedelta(seconds=delay))
+                    .isoformat(timespec="microseconds")
+                    .replace("+00:00", "Z")
+                )
+            if target == "reauth_required":
+                account = self._required_row(
+                    connection, google_accounts, row.account_id
+                )
+                connection.execute(
+                    update(google_accounts)
+                    .where(google_accounts.c.id == account.id)
+                    .values(
+                        auth_state="reauth_required",
+                        calendar_write_scope_state="reauth_required",
+                        updated_at=now,
+                        revision=account.revision + 1,
+                    )
+                )
+                connection.execute(
+                    update(google_calendars)
+                    .where(google_calendars.c.account_id == account.id)
+                    .values(sync_state="reauth_required", updated_at=now)
+                )
+
+            connection.execute(
+                update(calendar_provider_write_intents)
+                .where(calendar_provider_write_intents.c.id == row.id)
+                .values(
+                    state=target,
+                    next_attempt_at=next_attempt_at,
+                    failure_class=stored_class,
+                    failure_reason=input.safe_reason,
+                    updated_at=now,
+                )
+            )
+            changed = self._required_row(
+                connection, calendar_provider_write_intents, row.id
+            )
+            action = {
+                "ambiguous": "write_outcome_ambiguous",
+                "retry_wait": "write_retry_scheduled",
+                "reauth_required": "write_reauthentication_required",
+                "failed": "write_failed_terminally",
+            }[target]
+            _audit(
+                connection,
+                changed,
+                action=action,
+                from_state=row.state,
+                to_state=target,
+                occurred_at=now,
+                executor_provenance="recovery",
+            )
+            return _summary(changed)
+
+    def reconcile_create(
+        self, intent_id: str, input: ReconcileProviderCreateInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        now = utc_now()
+        event = input.event
+        with self.engine.begin() as connection:
+            row = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            if row.state != input.expected_state or row.operation != "create":
+                raise CalendarConflictError(intent_id)
+            block = self._required_row(
+                connection, calendar_blocks, row.calendar_block_id
+            )
+            self._required_row(
+                connection,
+                google_event_links,
+                row.calendar_block_id,
+                google_event_links.c.calendar_block_id,
+            )
+            valid_event = (
+                event.provider_event_id == row.provider_event_id
+                and bool(event.provider_etag)
+                and event.description is None
+                and event.location is None
+                and event.status == "confirmed"
+                and event.start is not None
+                and event.end is not None
+                and not event.recurrence
+                and event.recurring_event_id is None
+                and event.provider_event_type == "default"
+                and not event.provider_locked
+                and not event.has_attendees
+            )
+            if valid_event:
+                valid_event = _identity_lookup_matches(row, event)
+            if not valid_event:
+                connection.execute(
+                    update(calendar_provider_write_intents)
+                    .where(calendar_provider_write_intents.c.id == row.id)
+                    .values(
+                        state="conflict",
+                        failure_class="stale_precondition",
+                        failure_reason="deterministic_id_collision",
+                        updated_at=now,
+                    )
+                )
+                conflict = self._required_row(
+                    connection, calendar_provider_write_intents, row.id
+                )
+                _audit(
+                    connection,
+                    conflict,
+                    action="write_conflict_detected",
+                    from_state=row.state,
+                    to_state="conflict",
+                    occurred_at=now,
+                    executor_provenance="recovery",
+                )
+                return _summary(conflict)
+
+            provider_values = {
+                "title": event.title or UNTITLED_EVENT,
+                "description": event.description,
+                "location": event.location,
+                "status": event.status,
+                "transparency": event.transparency,
+                "recurrence_kind": "single",
+                "recurrence_rules": None,
+                "provider_deleted_at": None,
+                **_event_temporal_values(event),
+            }
+            changed_values = {
+                key: value
+                for key, value in provider_values.items()
+                if getattr(block, key) != value
+            }
+            revision = block.revision
+            if changed_values:
+                revision += 1
+                connection.execute(
+                    update(calendar_blocks)
+                    .where(calendar_blocks.c.id == block.id)
+                    .values(**changed_values, updated_at=now, revision=revision)
+                )
+            connection.execute(
+                update(google_event_links)
+                .where(google_event_links.c.calendar_block_id == block.id)
+                .values(
+                    ical_uid=event.ical_uid,
+                    provider_etag=event.provider_etag,
+                    provider_updated_at=event.provider_updated_at,
+                    recurring_event_id=None,
+                    original_start_kind="none",
+                    original_start_date=None,
+                    original_start_at=None,
+                    original_start_timezone=None,
+                    last_seen_sync_generation=row.command_id,
+                    link_state="confirmed",
+                    provider_event_type="default",
+                    provider_locked=False,
+                    has_attendees=False,
+                )
+            )
+            prune_after = (
+                (datetime.now(UTC) + timedelta(days=COMPLETED_RETENTION_DAYS))
+                .isoformat(timespec="microseconds")
+                .replace("+00:00", "Z")
+            )
+            connection.execute(
+                update(calendar_provider_write_intents)
+                .where(calendar_provider_write_intents.c.id == row.id)
+                .values(
+                    state="completed",
+                    failure_class="success",
+                    failure_reason="provider_confirmed",
+                    next_attempt_at=None,
+                    updated_at=now,
+                    resolved_at=now,
+                    prune_after=prune_after,
+                )
+            )
+            completed = self._required_row(
+                connection, calendar_provider_write_intents, row.id
+            )
+            _audit(
+                connection,
+                completed,
+                action="write_completed",
+                from_state=row.state,
+                to_state="completed",
+                occurred_at=now,
+                executor_provenance="recovery",
+                resulting_revision=revision,
+            )
+            _canonical_audit(
+                connection,
+                block_id=block.id,
+                action="provider_create_confirmed",
+                command_id=row.command_id,
+                from_revision=block.revision,
+                to_revision=revision,
+            )
+            return _summary(completed)
 
     def transition(
         self, intent_id: str, input: WriteIntentTransitionInput
@@ -596,9 +1272,10 @@ class CalendarWriteService:
             return _summary(changed)
 
     def recover(self, input: RecoverWriteIntentsInput) -> RecoveryResultOutput:
-        now = _canonical_timestamp(input.now)
+        now = _canonical_timestamp(input.now) if input.now is not None else utc_now()
         attempting_count = 0
         retry_count = 0
+        reauth_count = 0
         with self.engine.begin() as connection:
             attempting = connection.execute(
                 select(calendar_provider_write_intents)
@@ -665,9 +1342,51 @@ class CalendarWriteService:
                         executor_provenance="recovery",
                     )
                     retry_count += 1
+            remaining = input.limit - attempting_count - retry_count
+            if remaining > 0:
+                reauthorized = connection.execute(
+                    select(calendar_provider_write_intents)
+                    .join(
+                        google_accounts,
+                        google_accounts.c.id
+                        == calendar_provider_write_intents.c.account_id,
+                    )
+                    .where(
+                        calendar_provider_write_intents.c.state == "reauth_required",
+                        google_accounts.c.auth_state == "connected",
+                        google_accounts.c.calendar_write_scope_state == "write_granted",
+                    )
+                    .order_by(calendar_provider_write_intents.c.updated_at)
+                    .limit(remaining)
+                ).all()
+                for row in reauthorized:
+                    connection.execute(
+                        update(calendar_provider_write_intents)
+                        .where(calendar_provider_write_intents.c.id == row.id)
+                        .values(
+                            state="ready",
+                            failure_class=None,
+                            failure_reason=None,
+                            updated_at=now,
+                        )
+                    )
+                    promoted = self._required_row(
+                        connection, calendar_provider_write_intents, row.id
+                    )
+                    _audit(
+                        connection,
+                        promoted,
+                        action="write_intent_ready",
+                        from_state="reauth_required",
+                        to_state="ready",
+                        occurred_at=now,
+                        executor_provenance="recovery",
+                    )
+                    reauth_count += 1
         return RecoveryResultOutput(
             attempting_to_ambiguous=attempting_count,
             retry_wait_to_ready=retry_count,
+            reauth_required_to_ready=reauth_count,
         )
 
     def prune(self, input: PruneWriteIntentsInput) -> PruneResultOutput:

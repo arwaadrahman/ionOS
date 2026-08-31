@@ -2,8 +2,8 @@
 
 ## Status
 
-**Phase 2B runtime over the Phase 2A foundation; Phase 2C-1 durable write
-foundation implemented and pending owner acceptance.** The organizer schema begins in
+**Phase 2C-2 local-first create over the accepted Phase 2C-1 durable write
+foundation; owner real-write acceptance pending.** The organizer schema begins in
 `0002_organizer_foundation`; `0003_milestone_ordering` adds canonical
 owner-scoped positions to Goal and Project Milestones, and
 `0004_today_planning` adds human day-planning intent over canonical Tasks.
@@ -119,6 +119,11 @@ plus extensible subtype; existing rows migrate to visible and uncategorized.
   resources. Persisted `attempting` state repairs to `ambiguous` after restart
   before any future dispatch selection; retry timing and the five-attempt
   ceiling are durable.
+- Phase 2C-2 requires no migration: `0007` already atomically stores the new
+  CalendarBlock, Ion metadata, pending provider link, deterministic event ID,
+  direct-human command ID, create intent, and compact audit evidence. Provider
+  confirmation promotes the same link and block; it never creates a parallel
+  event owner.
 
 See [Architecture](ARCHITECTURE.md) and ADR
 [0001](decisions/0001-local-first-data-ownership.md), plus accepted ADR

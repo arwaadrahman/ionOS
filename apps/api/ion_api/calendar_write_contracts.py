@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from datetime import date, time
 from typing import Literal
 
 from pydantic import Field, model_validator
 
-from ion_api.calendar_contracts import CalendarModel, ProviderDateTime
+from ion_api.calendar_contracts import (
+    CalendarModel,
+    CalendarStatusOutput,
+    ProviderDateTime,
+    ProviderEventInput,
+)
 
 WriteOperation = Literal[
     "create", "patch", "cancel_occurrence", "delete_event", "delete_series"
@@ -116,6 +122,61 @@ class QueueProviderWriteIntentInput(CalendarModel):
         return self
 
 
+class CreateProviderEventInput(CalendarModel):
+    command_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    calendar_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    title: str = Field(min_length=1, max_length=512)
+    date: str
+    all_day: bool = False
+    start_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    end_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    timezone: str | None = Field(default=None, min_length=1, max_length=255)
+    provenance: Literal["direct_human"] = "direct_human"
+
+    @model_validator(mode="after")
+    def valid_create_shape(self):
+        date.fromisoformat(self.date)
+        if self.all_day:
+            if self.start_time is not None or self.end_time is not None:
+                raise ValueError("all-day create must not include clock times")
+            if self.timezone is not None:
+                raise ValueError("all-day create must preserve civil dates only")
+        else:
+            if self.start_time is None or self.end_time is None or not self.timezone:
+                raise ValueError("timed create requires start, end, and timezone")
+            time.fromisoformat(self.start_time)
+            time.fromisoformat(self.end_time)
+        return self
+
+
+class BeginWriteAttemptInput(CalendarModel):
+    expected_state: Literal["ready", "ambiguous"]
+    executor_provenance: Literal["direct_human", "recovery"]
+
+
+class RecordProviderWriteResultInput(CalendarModel):
+    expected_state: Literal["attempting"] = "attempting"
+    stage: Literal["insert", "identity_lookup"]
+    result_class: ProviderResultClass
+    safe_reason: str = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def failure_only(self):
+        if self.result_class == "success":
+            raise ValueError("provider success requires sanitized reconciliation")
+        return self
+
+
+class ReconcileProviderCreateInput(CalendarModel):
+    expected_state: Literal["attempting"] = "attempting"
+    resolution_kind: Literal["insert_response", "identity_lookup"]
+    event: ProviderEventInput
+
+
 class WriteIntentTransitionInput(CalendarModel):
     expected_state: WriteIntentState
     target_state: WriteIntentState
@@ -173,12 +234,12 @@ class WriteIntentTransitionInput(CalendarModel):
 
 
 class ReadyWriteIntentsInput(CalendarModel):
-    now: str = Field(max_length=128)
+    now: str | None = Field(default=None, max_length=128)
     limit: int = Field(default=50, ge=1, le=100)
 
 
 class RecoverWriteIntentsInput(CalendarModel):
-    now: str = Field(max_length=128)
+    now: str | None = Field(default=None, max_length=128)
     limit: int = Field(default=100, ge=1, le=500)
 
 
@@ -240,9 +301,15 @@ class CalendarWriteFoundationOutput(CalendarModel):
     pending: list[ProviderWriteIntentSummaryOutput]
 
 
+class CreateProviderEventOutput(CalendarModel):
+    intent: ProviderWriteIntentSummaryOutput
+    status: CalendarStatusOutput
+
+
 class RecoveryResultOutput(CalendarModel):
     attempting_to_ambiguous: int
     retry_wait_to_ready: int
+    reauth_required_to_ready: int
 
 
 class PruneResultOutput(CalendarModel):

@@ -34,6 +34,7 @@ from ion_api.schema import (
     audit_events,
     calendar_block_ion_metadata,
     calendar_blocks,
+    calendar_provider_write_intents,
     google_accounts,
     google_calendars,
     google_event_links,
@@ -149,10 +150,10 @@ def _calendar_output(row, *, account=None, internal: bool = False):
             )
             else "account_read_only"
             if not account or account.calendar_write_scope_state != "write_granted"
-            else "calendar_disabled"
-            if not row.enabled_in_ion
             else "calendar_deleted"
             if row.provider_deleted
+            else "calendar_disabled"
+            if not row.enabled_in_ion
             else "access_role_read_only"
             if row.access_role not in ("writer", "owner")
             else "eligible"
@@ -359,9 +360,21 @@ class CalendarService:
                 )
             ).all()
             accounts_by_id = {row.id: row for row in account_rows}
+            latest_write_state = (
+                select(calendar_provider_write_intents.c.state)
+                .where(
+                    calendar_provider_write_intents.c.calendar_block_id
+                    == calendar_blocks.c.id
+                )
+                .order_by(calendar_provider_write_intents.c.sequence.desc())
+                .limit(1)
+                .correlate(calendar_blocks)
+                .scalar_subquery()
+            )
             block_rows = connection.execute(
                 select(
                     calendar_blocks,
+                    latest_write_state.label("latest_write_state"),
                     calendar_block_ion_metadata.c.flexibility,
                     calendar_block_ion_metadata.c.notes,
                     calendar_block_ion_metadata.c.category,
@@ -441,6 +454,33 @@ class CalendarService:
 
     @staticmethod
     def _block_output(row) -> CalendarBlockOutput:
+        write_state = row.latest_write_state
+        provider_write_state = (
+            "failed"
+            if write_state == "failed"
+            else "conflict"
+            if write_state == "conflict"
+            else "pending"
+            if write_state
+            in (
+                "queued",
+                "ready",
+                "attempting",
+                "retry_wait",
+                "reauth_required",
+                "ambiguous",
+            )
+            or row.link_state == "pending_create"
+            else "synced"
+        )
+        provider_write_detail = {
+            "attempting": "syncing",
+            "completed": "confirmed",
+            "cancelled": "confirmed",
+            None: "confirmed",
+        }.get(write_state, write_state)
+        if provider_write_detail == "confirmed" and row.link_state == "pending_create":
+            provider_write_detail = "queued"
         return CalendarBlockOutput(
             id=row.id,
             calendar_id=row.calendar_id,
@@ -493,10 +533,10 @@ class CalendarService:
                     or row.calendar_write_scope_state == "reauth_required"
                     else "account_read_only"
                     if row.calendar_write_scope_state != "write_granted"
-                    else "calendar_disabled"
-                    if not bool(row.enabled_in_ion)
                     else "calendar_deleted"
                     if bool(row.provider_deleted)
+                    else "calendar_disabled"
+                    if not bool(row.enabled_in_ion)
                     else "access_role_read_only"
                     if row.access_role not in ("writer", "owner")
                     else "special_event"
@@ -512,6 +552,8 @@ class CalendarService:
                     else "eligible"
                 ),
             ),
+            provider_write_state=provider_write_state,
+            provider_write_detail=provider_write_detail,
         )
 
     def set_selection(

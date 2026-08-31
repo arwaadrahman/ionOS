@@ -122,6 +122,8 @@ function block(
       eligible: false,
       reason: "account_read_only",
     },
+    provider_write_state: "synced",
+    provider_write_detail: "confirmed",
     ...overrides,
   };
 }
@@ -229,6 +231,8 @@ test("Sync Now replaces Never synced with the returned successful projection", a
           eligible: false,
           reason: "account_read_only",
         },
+        provider_write_state: "synced",
+        provider_write_detail: "confirmed",
       },
     ],
   };
@@ -1295,6 +1299,119 @@ test("removes calendar zoom and keeps every active view inside one vertical scro
   expect(calendarStyles).not.toContain("calendar-zoom-control");
   expect(calendarStyles).not.toContain("--calendar-min-width");
   expect(calendarStyles).toMatch(/\.calendar-month \{[\s\S]*?min-width: 0;/);
+});
+
+test("requires an explicit account-scoped step before Google create is available", async () => {
+  const writeEnabled: CalendarStatus = {
+    ...connected,
+    accounts: [
+      {
+        ...account,
+        granted_scopes: [
+          "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+          "https://www.googleapis.com/auth/calendar.events",
+        ],
+        calendar_write_scope_state: "write_granted",
+      },
+    ],
+    calendars: [
+      {
+        ...calendar,
+        provider_write_eligible: true,
+        provider_write_reason: "eligible",
+      },
+    ],
+  };
+  vi.mocked(invoke).mockResolvedValue(writeEnabled);
+  render(
+    <CalendarWorkspace
+      status={connected}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+
+  expect(screen.getByText("Read only")).toBeInTheDocument();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Enable Calendar writing" }),
+  );
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("enable_google_calendar_writes", {
+      accountId: account.id,
+    }),
+  );
+});
+
+test("confirms a local-first attendee-free timed create with an eligible calendar", async () => {
+  const writableCalendar: GoogleCalendar = {
+    ...calendar,
+    provider_write_eligible: true,
+    provider_write_reason: "eligible",
+  };
+  const writable: CalendarStatus = {
+    ...connected,
+    accounts: [
+      {
+        ...account,
+        calendar_write_scope_state: "write_granted",
+      },
+    ],
+    calendars: [writableCalendar],
+  };
+  const pendingBlock = block(
+    "44444444-4444-4444-8444-444444444444",
+    "Synthetic harmless event",
+    {
+      calendar_id: writableCalendar.id,
+      provider_event_id: "ion2c2syntheticidentity",
+      start_at: "2030-01-02T09:00:00Z",
+      end_at: "2030-01-02T10:00:00Z",
+      provider_write_capability: { eligible: true, reason: "eligible" },
+      provider_write_state: "pending",
+      provider_write_detail: "ready",
+    },
+  );
+  vi.mocked(invoke).mockResolvedValue({ ...writable, blocks: [pendingBlock] });
+  render(
+    <CalendarWorkspace
+      status={writable}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+
+  fireEvent.keyDown(
+    screen.getByRole("button", {
+      name: "Create timed event on 2030-01-02",
+    }),
+    { key: "Enter" },
+  );
+  fireEvent.change(screen.getByLabelText("Title"), {
+    target: { value: "Synthetic harmless event" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Create event" }));
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("create_google_calendar_event", {
+      draft: {
+        command_id: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+        ),
+        calendar_id: writableCalendar.id,
+        title: "Synthetic harmless event",
+        date: "2030-01-02",
+        all_day: false,
+        start_time: "09:00",
+        end_time: "10:00",
+        timezone: "America/Los_Angeles",
+      },
+    }),
+  );
+  expect(
+    await screen.findByText(/saved locally and pending Google confirmation/i),
+  ).toBeInTheDocument();
 });
 
 test("sets a compact minimum desktop window that preserves a usable Day view", () => {

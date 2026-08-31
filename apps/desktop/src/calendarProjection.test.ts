@@ -100,6 +100,8 @@ function block(
       eligible: false,
       reason: "account_read_only",
     },
+    provider_write_state: "synced",
+    provider_write_detail: "confirmed",
     ...overrides,
   };
 }

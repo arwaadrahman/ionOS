@@ -248,15 +248,13 @@ visible but do not fabricate timed occupancy. Today Tasks keep their existing
 planning semantics and are never converted to, or implied to be,
 CalendarBlocks. Cached Calendar content stays visible when Google is offline.
 
-## Phase 2C two-way write boundary and implemented 2C-1 foundation
+## Phase 2C two-way write boundary and implemented 2C-2 create
 
-The Phase 2C architecture/security gate is accepted. Phase 2C-1 implements the
-provider-free foundation: one reviewed durable outbox/capability migration,
-typed Python state/recovery/audit routes, safe renderer capability evidence,
-one read-only Tauri foundation command, an explicit-but-uninvoked write-scope
-OAuth mode, and unsent typed Rust provider request/result helpers. A future
-fixed Tauri Calendar mutation command
-first commits direct-human canonical intent and a durable Python/SQLite outbox
+The Phase 2C architecture/security gate is accepted. Phase 2C-1 established
+the reviewed durable outbox/capability migration and typed boundaries. Phase
+2C-2 exposes one fixed create command and an explicit selected-account
+write-scope re-consent command. The create command first commits direct-human
+canonical intent and a durable Python/SQLite outbox
 transaction. Only then may Rust use its existing token and Google HTTPS
 ownership to dispatch an allowlisted event request and return a sanitized
 outcome for Python reconciliation. React never receives provider request
@@ -276,8 +274,11 @@ explicitly re-consented to Calendar Events write access. Attendee/invite
 events, `writerWithoutPrivateAccess`, special event types, automatic conflict
 merges, arbitrary RRULE, and `this and following` remain outside Phase 2C.
 Successful outbox rows may be pruned after 30 days only with confirmed linkage
-and compact audit; unresolved work remains until explicit resolution. No
-2C-1 code sends a Google mutation or automatically starts re-consent. See the
+and compact audit; unresolved work remains until explicit resolution. Phase
+2C-2 dispatches only `events.insert` and deterministic-ID `events.get`
+reconciliation. It has no timer or busy worker: dispatch is bounded after an
+explicit create, sync, re-consent, or app-start recovery call. Existing
+accounts remain read-only until the owner explicitly enables writing. See the
 [frozen 2C-1 contract](phases/PHASE_2C_1_CONTRACT.md),
 [ADR 0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md) and the
 [Phase 2C gate](phases/PHASE_2C.md).

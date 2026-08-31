@@ -38,6 +38,7 @@ const MAX_CALLBACK_BYTES: usize = 8_192;
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PROVIDER_ATTEMPTS: u32 = 3;
+const MAX_PROVIDER_WRITE_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 
 #[allow(dead_code)] // Write mode is deliberately unbound from a renderer command in 2C-1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,6 +270,8 @@ pub struct CalendarBlock {
     pub provider_deleted_at: Option<String>,
     pub revision: i64,
     pub provider_write_capability: ProviderWriteCapability,
+    pub provider_write_state: String,
+    pub provider_write_detail: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -318,7 +321,6 @@ pub struct CalendarWriteFoundation {
     pub pending: Vec<ProviderWriteIntentSummary>,
 }
 
-#[allow(dead_code)] // Fixed Rust-internal DTOs are activated by later 2C dispatch work.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct ProviderWriteValues {
     schema_version: i64,
@@ -330,6 +332,38 @@ struct ProviderWriteValues {
     end: Option<ProviderDateTime>,
     recurrence: Option<Vec<String>>,
     status: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateCalendarEventDraft {
+    command_id: String,
+    calendar_id: String,
+    title: String,
+    date: String,
+    all_day: bool,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    timezone: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreateProviderEventInput<'a> {
+    command_id: &'a str,
+    calendar_id: &'a str,
+    title: &'a str,
+    date: &'a str,
+    all_day: bool,
+    start_time: Option<&'a str>,
+    end_time: Option<&'a str>,
+    timezone: Option<&'a str>,
+    provenance: &'static str,
+}
+
+#[derive(Deserialize)]
+struct CreateProviderEventOutput {
+    intent: ProviderWriteIntentSummary,
+    status: CalendarStatus,
 }
 
 #[allow(dead_code)]
@@ -346,17 +380,13 @@ struct QueueProviderWriteIntentInput {
     provenance: String,
 }
 
-#[allow(dead_code)]
 #[derive(Serialize)]
 struct ReadyProviderWriteIntentsInput {
-    now: String,
     limit: u16,
 }
 
-#[allow(dead_code)]
 #[derive(Serialize)]
 struct RecoverProviderWriteIntentsInput {
-    now: String,
     limit: u16,
 }
 
@@ -380,6 +410,27 @@ struct TransitionProviderWriteIntentInput {
     resulting_revision: Option<i64>,
 }
 
+#[derive(Serialize)]
+struct BeginProviderWriteAttemptInput<'a> {
+    expected_state: &'a str,
+    executor_provenance: &'a str,
+}
+
+#[derive(Serialize)]
+struct RecordProviderWriteResultInput<'a> {
+    expected_state: &'static str,
+    stage: &'a str,
+    result_class: &'a str,
+    safe_reason: &'a str,
+}
+
+#[derive(Serialize)]
+struct ReconcileProviderCreateInput<'a> {
+    expected_state: &'static str,
+    resolution_kind: &'a str,
+    event: &'a ProviderEvent,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct ProviderWritePlan {
@@ -400,6 +451,7 @@ struct ProviderWritePlan {
 struct RecoveryResult {
     attempting_to_ambiguous: u16,
     retry_wait_to_ready: u16,
+    reauth_required_to_ready: u16,
 }
 
 #[allow(dead_code)]
@@ -795,6 +847,20 @@ fn provider_write_url(
     provider_calendar_id: &str,
     provider_event_id: Option<&str>,
 ) -> Result<Url, GoogleCommandError> {
+    provider_write_url_at(
+        CALENDAR_API,
+        method,
+        provider_calendar_id,
+        provider_event_id,
+    )
+}
+
+fn provider_write_url_at(
+    api_base: &str,
+    method: ProviderWriteMethod,
+    provider_calendar_id: &str,
+    provider_event_id: Option<&str>,
+) -> Result<Url, GoogleCommandError> {
     if provider_calendar_id.is_empty() {
         return Err(GoogleCommandError::new("provider_write_invalid"));
     }
@@ -803,7 +869,7 @@ fn provider_write_url(
         return Err(GoogleCommandError::new("provider_write_invalid"));
     }
     let mut url =
-        Url::parse(CALENDAR_API).map_err(|_| GoogleCommandError::new("provider_write_invalid"))?;
+        Url::parse(api_base).map_err(|_| GoogleCommandError::new("provider_write_invalid"))?;
     let mut segments = url
         .path_segments_mut()
         .map_err(|_| GoogleCommandError::new("provider_write_invalid"))?;
@@ -827,6 +893,34 @@ fn provider_write_request(
     access_token: &str,
     provider_calendar_id: &str,
     provider_event_id: Option<&str>,
+    expected_etag: Option<&str>,
+    body: Option<&AllowedProviderWriteBody>,
+) -> Result<reqwest::Request, GoogleCommandError> {
+    provider_write_request_at(
+        client,
+        method,
+        access_token,
+        ProviderWriteTarget {
+            api_base: CALENDAR_API,
+            provider_calendar_id,
+            provider_event_id,
+        },
+        expected_etag,
+        body,
+    )
+}
+
+struct ProviderWriteTarget<'a> {
+    api_base: &'a str,
+    provider_calendar_id: &'a str,
+    provider_event_id: Option<&'a str>,
+}
+
+fn provider_write_request_at(
+    client: &Client,
+    method: ProviderWriteMethod,
+    access_token: &str,
+    target: ProviderWriteTarget<'_>,
     expected_etag: Option<&str>,
     body: Option<&AllowedProviderWriteBody>,
 ) -> Result<reqwest::Request, GoogleCommandError> {
@@ -859,7 +953,12 @@ fn provider_write_request(
     let mut request = client
         .request(
             http_method,
-            provider_write_url(method, provider_calendar_id, provider_event_id)?,
+            provider_write_url_at(
+                target.api_base,
+                method,
+                target.provider_calendar_id,
+                target.provider_event_id,
+            )?,
         )
         .bearer_auth(access_token);
     if let Some(etag) = expected_etag {
@@ -887,6 +986,162 @@ enum ProviderWriteResultClass {
     ProviderNotFound,
     InvalidTarget,
     TerminalProviderRejection,
+}
+
+impl ProviderWriteResultClass {
+    fn contract_name(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::RetryableTransport => "retryable_transport",
+            Self::RetryableBackend => "retryable_backend",
+            Self::RetryableQuota => "retryable_quota",
+            Self::ReauthenticationRequired => "reauthentication_required",
+            Self::StalePrecondition => "stale_precondition",
+            Self::DuplicateOrAmbiguousCreate => "duplicate_or_ambiguous_create",
+            Self::ProviderNotFound => "provider_not_found",
+            Self::InvalidTarget => "invalid_target",
+            Self::TerminalProviderRejection => "terminal_provider_rejection",
+        }
+    }
+
+    fn safe_reason(self) -> &'static str {
+        match self {
+            Self::Success => "provider_confirmed",
+            Self::RetryableTransport => "transport_failure",
+            Self::RetryableBackend => "provider_unavailable",
+            Self::RetryableQuota => "provider_rate_limited",
+            Self::ReauthenticationRequired => "reauth_required",
+            Self::StalePrecondition => "stale_precondition",
+            Self::DuplicateOrAmbiguousCreate => "create_outcome_ambiguous",
+            Self::ProviderNotFound => "provider_event_absent",
+            Self::InvalidTarget => "provider_rejected_target",
+            Self::TerminalProviderRejection => "provider_permission_rejected",
+        }
+    }
+}
+
+fn create_provider_body(
+    plan: &ProviderWritePlan,
+) -> Result<AllowedProviderWriteBody, GoogleCommandError> {
+    if plan.summary.operation != "create"
+        || plan.summary.recurrence_scope != "single"
+        || plan.summary.changed_fields
+            != vec![
+                "title".to_owned(),
+                "transparency".to_owned(),
+                "temporal".to_owned(),
+            ]
+        || plan.expected_provider_etag.is_some()
+        || plan.schema_version != 1
+    {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    let desired = plan
+        .desired_values
+        .as_ref()
+        .ok_or_else(|| GoogleCommandError::new("provider_write_invalid"))?;
+    if desired.schema_version != 1
+        || !desired
+            .title
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        || desired.start.is_none()
+        || desired.end.is_none()
+        || desired.description.is_some()
+        || desired.location.is_some()
+        || desired.recurrence.is_some()
+        || desired.status.is_some()
+    {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    let convert_time = |value: &ProviderDateTime| AllowedWriteDateTime {
+        date: value.date.clone(),
+        date_time: value.date_time.clone(),
+        time_zone: value.timezone.clone(),
+    };
+    Ok(AllowedProviderWriteBody {
+        id: Some(plan.provider_event_id.clone()),
+        summary: desired.title.clone(),
+        description: None,
+        location: None,
+        transparency: desired.transparency.clone(),
+        start: desired.start.as_ref().map(convert_time),
+        end: desired.end.as_ref().map(convert_time),
+        recurrence: None,
+        status: None,
+    })
+}
+
+enum ProviderCreateCallOutcome {
+    Confirmed(Box<ProviderEvent>),
+    Failed(ProviderWriteResultClass),
+}
+
+struct ProviderCreateCall<'a> {
+    api_base: &'a str,
+    method: ProviderWriteMethod,
+    access_token: &'a str,
+    provider_calendar_id: &'a str,
+    provider_event_id: &'a str,
+    body: Option<&'a AllowedProviderWriteBody>,
+    fallback_timezone: &'a str,
+}
+
+async fn execute_provider_create_call(
+    client: &Client,
+    call: &ProviderCreateCall<'_>,
+) -> ProviderCreateCallOutcome {
+    let request = provider_write_request_at(
+        client,
+        call.method,
+        call.access_token,
+        ProviderWriteTarget {
+            api_base: call.api_base,
+            provider_calendar_id: call.provider_calendar_id,
+            provider_event_id: if call.method == ProviderWriteMethod::Insert {
+                None
+            } else {
+                Some(call.provider_event_id)
+            },
+        },
+        None,
+        call.body,
+    );
+    let Ok(request) = request else {
+        return ProviderCreateCallOutcome::Failed(ProviderWriteResultClass::InvalidTarget);
+    };
+    let response = match client.execute(request).await {
+        Ok(response) => response,
+        Err(_) => {
+            return ProviderCreateCallOutcome::Failed(classify_write_transport_failure(
+                call.method,
+            ));
+        }
+    };
+    let status = response.status();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_PROVIDER_WRITE_RESPONSE_BYTES)
+    {
+        return ProviderCreateCallOutcome::Failed(ProviderWriteResultClass::RetryableBackend);
+    }
+    let bytes = match response.bytes().await {
+        Ok(bytes) if bytes.len() as u64 <= MAX_PROVIDER_WRITE_RESPONSE_BYTES => bytes,
+        _ => {
+            return ProviderCreateCallOutcome::Failed(ProviderWriteResultClass::RetryableBackend);
+        }
+    };
+    let classification = classify_write_provider_result(call.method, status, &bytes);
+    if classification != ProviderWriteResultClass::Success {
+        return ProviderCreateCallOutcome::Failed(classification);
+    }
+    match serde_json::from_slice::<ProviderEventRaw>(&bytes) {
+        Ok(event) => ProviderCreateCallOutcome::Confirmed(Box::new(sanitize_event(
+            event,
+            call.fallback_timezone,
+        ))),
+        Err(_) => ProviderCreateCallOutcome::Failed(ProviderWriteResultClass::RetryableBackend),
+    }
 }
 
 #[allow(dead_code)]
@@ -1306,6 +1561,20 @@ async fn queue_provider_write_intent(
     .map_err(Into::into)
 }
 
+async fn create_provider_write_intent(
+    state: &ServiceState,
+    input: &CreateProviderEventInput<'_>,
+) -> Result<CreateProviderEventOutput, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/write-intents/create",
+        Some(input),
+    )
+    .await
+    .map_err(Into::into)
+}
+
 #[allow(dead_code)]
 async fn ready_provider_write_intents(
     state: &ServiceState,
@@ -1358,6 +1627,39 @@ async fn transition_provider_write_intent(
     input: &TransitionProviderWriteIntentInput,
 ) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
     let route = write_intent_backend_route(intent_id, "/transition")?;
+    product_request(state, reqwest::Method::POST, &route, Some(input))
+        .await
+        .map_err(Into::into)
+}
+
+async fn begin_provider_write_attempt(
+    state: &ServiceState,
+    intent_id: &str,
+    input: &BeginProviderWriteAttemptInput<'_>,
+) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
+    let route = write_intent_backend_route(intent_id, "/attempt")?;
+    product_request(state, reqwest::Method::POST, &route, Some(input))
+        .await
+        .map_err(Into::into)
+}
+
+async fn record_provider_write_result(
+    state: &ServiceState,
+    intent_id: &str,
+    input: &RecordProviderWriteResultInput<'_>,
+) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
+    let route = write_intent_backend_route(intent_id, "/result")?;
+    product_request(state, reqwest::Method::POST, &route, Some(input))
+        .await
+        .map_err(Into::into)
+}
+
+async fn reconcile_provider_create(
+    state: &ServiceState,
+    intent_id: &str,
+    input: &ReconcileProviderCreateInput<'_>,
+) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
+    let route = write_intent_backend_route(intent_id, "/reconcile-create")?;
     product_request(state, reqwest::Method::POST, &route, Some(input))
         .await
         .map_err(Into::into)
@@ -1423,13 +1725,25 @@ pub async fn get_calendar_write_foundation(
     .map_err(Into::into)
 }
 
-#[tauri::command]
-pub async fn connect_google_calendar<R: Runtime>(
-    app: AppHandle<R>,
-    service: State<'_, ServiceState>,
-    google: State<'_, GoogleState>,
+async fn authorize_google_calendar<R: Runtime>(
+    app: &AppHandle<R>,
+    service: &ServiceState,
+    google: &GoogleState,
+    scope_mode: OAuthScopeMode,
+    expected_account_id: Option<&str>,
 ) -> Result<CalendarStatus, GoogleCommandError> {
-    let config_path = oauth_config_path(&app)?;
+    let previous = internal_state(service).await?;
+    let expected_account = expected_account_id
+        .map(|account_id| {
+            validated_backend_id(account_id)?;
+            previous
+                .accounts
+                .iter()
+                .find(|account| account.account.id == account_id)
+                .ok_or_else(|| GoogleCommandError::new("local_state_not_found"))
+        })
+        .transpose()?;
+    let config_path = oauth_config_path(app)?;
     let config = load_oauth_config(&config_path)?;
     let client = google_client()?;
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -1441,7 +1755,6 @@ pub async fn connect_google_calendar<R: Runtime>(
     let redirect_uri = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
     let state_value = URL_SAFE_NO_PAD.encode(random_bytes::<32>()?);
     let (verifier, challenge) = pkce_pair()?;
-    let scope_mode = OAuthScopeMode::ReadOnly;
     let url = authorization_url(&config, &redirect_uri, &state_value, &challenge, scope_mode)?;
     open_system_browser(&url)?;
     let callback =
@@ -1466,7 +1779,11 @@ pub async fn connect_google_calendar<R: Runtime>(
         .summary
         .as_deref()
         .unwrap_or("Untitled Google calendar");
-    let previous = internal_state(&service).await?;
+    if expected_account
+        .is_some_and(|account| account.account.provider_account_id != primary.provider_calendar_id)
+    {
+        return Err(GoogleCommandError::new("oauth_account_mismatch"));
+    }
     let old_locator = previous
         .accounts
         .iter()
@@ -1486,7 +1803,7 @@ pub async fn connect_google_calendar<R: Runtime>(
         calendars: &calendars,
     };
     let connected = product_request::<ConnectAccountInput<'_>, CalendarStatus>(
-        &service,
+        service,
         reqwest::Method::POST,
         "/v1/calendar/accounts/connect",
         Some(&input),
@@ -1508,7 +1825,95 @@ pub async fn connect_google_calendar<R: Runtime>(
         .find(|account| account.provider_account_id == primary.provider_calendar_id)
         .ok_or_else(|| GoogleCommandError::new("local_state_invalid"))?;
     google.store_access_token(&account.id, token.access_token, token.expires_in);
-    Ok(configured_status(&app, status))
+    Ok(configured_status(app, status))
+}
+
+#[tauri::command]
+pub async fn connect_google_calendar<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+    google: State<'_, GoogleState>,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    authorize_google_calendar(&app, &service, &google, OAuthScopeMode::ReadOnly, None).await
+}
+
+#[tauri::command]
+pub async fn enable_google_calendar_writes<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+    google: State<'_, GoogleState>,
+    account_id: String,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    let status = authorize_google_calendar(
+        &app,
+        &service,
+        &google,
+        OAuthScopeMode::CalendarWriteReconsent,
+        Some(&account_id),
+    )
+    .await?;
+    let _ = dispatch_calendar_writes(&app, &service, &google, "recovery").await;
+    Ok(local_status(&service)
+        .await
+        .map(|latest| configured_status(&app, latest))
+        .unwrap_or(status))
+}
+
+#[tauri::command]
+pub async fn create_google_calendar_event<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+    google: State<'_, GoogleState>,
+    draft: CreateCalendarEventDraft,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    validated_backend_id(&draft.command_id)?;
+    validated_backend_id(&draft.calendar_id)?;
+    let title = draft.title.trim();
+    let valid_timed = !draft.all_day
+        && draft
+            .start_time
+            .as_deref()
+            .is_some_and(|value| value.len() == 5)
+        && draft
+            .end_time
+            .as_deref()
+            .is_some_and(|value| value.len() == 5)
+        && draft
+            .timezone
+            .as_deref()
+            .is_some_and(|value| !value.is_empty() && value.len() <= 255);
+    let valid_all_day = draft.all_day
+        && draft.start_time.is_none()
+        && draft.end_time.is_none()
+        && draft.timezone.is_none();
+    if title.is_empty()
+        || title.len() > 512
+        || draft.date.len() != 10
+        || (!valid_timed && !valid_all_day)
+    {
+        return Err(GoogleCommandError::new("local_state_invalid"));
+    }
+    let created = create_provider_write_intent(
+        &service,
+        &CreateProviderEventInput {
+            command_id: &draft.command_id,
+            calendar_id: &draft.calendar_id,
+            title,
+            date: &draft.date,
+            all_day: draft.all_day,
+            start_time: draft.start_time.as_deref(),
+            end_time: draft.end_time.as_deref(),
+            timezone: draft.timezone.as_deref(),
+            provenance: "direct_human",
+        },
+    )
+    .await?;
+    let _persisted_intent = &created.intent.id;
+    let _ = dispatch_calendar_writes(&app, &service, &google, "direct_human").await;
+    Ok(local_status(&service)
+        .await
+        .map(|latest| configured_status(&app, latest))
+        .unwrap_or_else(|_| configured_status(&app, created.status)))
 }
 
 #[tauri::command]
@@ -1986,6 +2391,216 @@ fn event_detail_readable(access_role: &str) -> bool {
     )
 }
 
+async fn refreshed_write_access_token(
+    client: &Client,
+    config: &OAuthConfig,
+    google: &GoogleState,
+    account: &InternalGoogleAccount,
+) -> Result<String, ProviderWriteResultClass> {
+    let refresh_token = SystemKeychain
+        .get(&account.keychain_locator)
+        .map_err(|_| ProviderWriteResultClass::ReauthenticationRequired)?;
+    let token = refresh_access_token(client, config, &refresh_token)
+        .await
+        .map_err(|failure| match failure {
+            ProviderFailure::Reauth => ProviderWriteResultClass::ReauthenticationRequired,
+            _ => ProviderWriteResultClass::RetryableBackend,
+        })?;
+    let value = token.access_token.clone();
+    google.store_access_token(&account.account.id, token.access_token, token.expires_in);
+    Ok(value)
+}
+
+async fn record_create_failure(
+    service: &ServiceState,
+    intent_id: &str,
+    stage: &str,
+    classification: ProviderWriteResultClass,
+) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
+    record_provider_write_result(
+        service,
+        intent_id,
+        &RecordProviderWriteResultInput {
+            expected_state: "attempting",
+            stage,
+            result_class: classification.contract_name(),
+            safe_reason: classification.safe_reason(),
+        },
+    )
+    .await
+}
+
+async fn dispatch_create_plan<R: Runtime>(
+    app: &AppHandle<R>,
+    service: &ServiceState,
+    google: &GoogleState,
+    client: &Client,
+    config: &OAuthConfig,
+    plan: &ProviderWritePlan,
+    executor_provenance: &str,
+) -> Result<(), GoogleCommandError> {
+    if plan.summary.operation != "create"
+        || !matches!(plan.summary.state.as_str(), "ready" | "ambiguous")
+    {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    let claimed = begin_provider_write_attempt(
+        service,
+        &plan.summary.id,
+        &BeginProviderWriteAttemptInput {
+            expected_state: &plan.summary.state,
+            executor_provenance,
+        },
+    )
+    .await?;
+    if claimed.state != "attempting" {
+        return Ok(());
+    }
+
+    let state = internal_state(service).await?;
+    let account = state
+        .accounts
+        .iter()
+        .find(|item| item.account.id == plan.account_id)
+        .ok_or_else(|| GoogleCommandError::new("local_state_not_found"))?;
+    let calendar = state
+        .calendars
+        .iter()
+        .find(|item| item.calendar.id == plan.calendar_id)
+        .ok_or_else(|| GoogleCommandError::new("local_state_not_found"))?;
+    let method = if plan.summary.state == "ambiguous" {
+        ProviderWriteMethod::Get
+    } else {
+        ProviderWriteMethod::Insert
+    };
+    let stage = if method == ProviderWriteMethod::Insert {
+        "insert"
+    } else {
+        "identity_lookup"
+    };
+    let body = if method == ProviderWriteMethod::Insert {
+        Some(create_provider_body(plan)?)
+    } else {
+        None
+    };
+    let access_token = if let Some(token) = google.cached_token(&account.account.id) {
+        Ok(token)
+    } else {
+        refreshed_write_access_token(client, config, google, account).await
+    };
+    let mut access_token = match access_token {
+        Ok(token) => token,
+        Err(classification) => {
+            record_create_failure(service, &plan.summary.id, stage, classification).await?;
+            return Ok(());
+        }
+    };
+    let fallback_timezone = calendar.calendar.timezone.as_deref().unwrap_or("UTC");
+    let mut outcome = execute_provider_create_call(
+        client,
+        &ProviderCreateCall {
+            api_base: CALENDAR_API,
+            method,
+            access_token: &access_token,
+            provider_calendar_id: &calendar.calendar.provider_calendar_id,
+            provider_event_id: &plan.provider_event_id,
+            body: body.as_ref(),
+            fallback_timezone,
+        },
+    )
+    .await;
+    if matches!(
+        outcome,
+        ProviderCreateCallOutcome::Failed(ProviderWriteResultClass::ReauthenticationRequired)
+    ) {
+        google.forget_account(&account.account.id);
+        match refreshed_write_access_token(client, config, google, account).await {
+            Ok(refreshed) => {
+                access_token = refreshed;
+                outcome = execute_provider_create_call(
+                    client,
+                    &ProviderCreateCall {
+                        api_base: CALENDAR_API,
+                        method,
+                        access_token: &access_token,
+                        provider_calendar_id: &calendar.calendar.provider_calendar_id,
+                        provider_event_id: &plan.provider_event_id,
+                        body: body.as_ref(),
+                        fallback_timezone,
+                    },
+                )
+                .await;
+            }
+            Err(classification) => {
+                outcome = ProviderCreateCallOutcome::Failed(classification);
+            }
+        }
+    }
+    match outcome {
+        ProviderCreateCallOutcome::Confirmed(event) => {
+            reconcile_provider_create(
+                service,
+                &plan.summary.id,
+                &ReconcileProviderCreateInput {
+                    expected_state: "attempting",
+                    resolution_kind: if method == ProviderWriteMethod::Insert {
+                        "insert_response"
+                    } else {
+                        "identity_lookup"
+                    },
+                    event: &event,
+                },
+            )
+            .await?;
+        }
+        ProviderCreateCallOutcome::Failed(classification) => {
+            let result =
+                record_create_failure(service, &plan.summary.id, stage, classification).await?;
+            if method == ProviderWriteMethod::Insert && result.state == "ambiguous" {
+                let mut lookup = plan.clone();
+                lookup.summary = result;
+                Box::pin(dispatch_create_plan(
+                    app, service, google, client, config, &lookup, "recovery",
+                ))
+                .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn dispatch_calendar_writes<R: Runtime>(
+    app: &AppHandle<R>,
+    service: &ServiceState,
+    google: &GoogleState,
+    executor_provenance: &str,
+) -> Result<(), GoogleCommandError> {
+    let _guard = google.begin_sync()?;
+    recover_provider_write_intents(service, &RecoverProviderWriteIntentsInput { limit: 100 })
+        .await?;
+    let plans =
+        ready_provider_write_intents(service, &ReadyProviderWriteIntentsInput { limit: 10 })
+            .await?;
+    if plans.is_empty() {
+        return Ok(());
+    }
+    let config = load_oauth_config(&oauth_config_path(app)?)?;
+    let client = google_client()?;
+    for plan in plans {
+        dispatch_create_plan(
+            app,
+            service,
+            google,
+            &client,
+            &config,
+            &plan,
+            executor_provenance,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn synchronize<R: Runtime>(
     app: &AppHandle<R>,
     service: &ServiceState,
@@ -2065,7 +2680,12 @@ pub async fn sync_google_calendars<R: Runtime>(
     service: State<'_, ServiceState>,
     google: State<'_, GoogleState>,
 ) -> Result<CalendarStatus, GoogleCommandError> {
-    synchronize(&app, &service, &google).await
+    let status = synchronize(&app, &service, &google).await?;
+    let _ = dispatch_calendar_writes(&app, &service, &google, "recovery").await;
+    Ok(local_status(&service)
+        .await
+        .map(|latest| configured_status(&app, latest))
+        .unwrap_or(status))
 }
 
 #[tauri::command]
@@ -2105,7 +2725,14 @@ pub async fn disconnect_google_calendar<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Mutex};
+    use std::{
+        collections::HashMap,
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{mpsc, Mutex},
+        thread,
+        time::Duration,
+    };
 
     use super::*;
 
@@ -2612,6 +3239,94 @@ maxResults=2500&showDeleted=true&singleEvents=false"
             classify_write_transport_failure(ProviderWriteMethod::Patch),
             ProviderWriteResultClass::RetryableTransport
         );
+    }
+
+    #[test]
+    fn synthetic_provider_insert_executes_only_the_allowlisted_create_shape() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (sent, received) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        request.extend_from_slice(&buffer[..count]);
+                        let header_end = request
+                            .windows(4)
+                            .position(|window| window == b"\r\n\r\n")
+                            .map(|index| index + 4);
+                        if let Some(header_end) = header_end {
+                            let headers = String::from_utf8_lossy(&request[..header_end]);
+                            let content_length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (name, value) = line.split_once(':')?;
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().ok())
+                                        .flatten()
+                                })
+                                .unwrap_or(0);
+                            if request.len() >= header_end + content_length {
+                                break;
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            sent.send(String::from_utf8_lossy(&request).into_owned())
+                .unwrap();
+            let response = r#"{"id":"0123456789abcdefghijklmnopqrstuv","iCalUID":"synthetic@example.invalid","etag":"synthetic-etag","updated":"2030-01-01T17:00:00Z","summary":"Synthetic event","status":"confirmed","transparency":"opaque","eventType":"default","start":{"dateTime":"2030-01-01T09:00:00-08:00","timeZone":"America/Los_Angeles"},"end":{"dateTime":"2030-01-01T10:00:00-08:00","timeZone":"America/Los_Angeles"}}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response.len(),
+                response
+            )
+            .unwrap();
+        });
+
+        let body = synthetic_write_body(Some("0123456789abcdefghijklmnopqrstuv"));
+        let outcome = tauri::async_runtime::block_on(execute_provider_create_call(
+            &Client::new(),
+            &ProviderCreateCall {
+                api_base: &format!("http://{address}/calendar/v3/"),
+                method: ProviderWriteMethod::Insert,
+                access_token: "synthetic-access-token",
+                provider_calendar_id: "synthetic/calendar@example.invalid",
+                provider_event_id: "0123456789abcdefghijklmnopqrstuv",
+                body: Some(&body),
+                fallback_timezone: "America/Los_Angeles",
+            },
+        ));
+        let ProviderCreateCallOutcome::Confirmed(event) = outcome else {
+            panic!("synthetic insert was not confirmed");
+        };
+        assert_eq!(event.provider_event_id, "0123456789abcdefghijklmnopqrstuv");
+        let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(request.starts_with(
+            "POST /calendar/v3/calendars/synthetic%2Fcalendar@example.invalid/events HTTP/1.1"
+        ));
+        assert!(request.contains("authorization: Bearer synthetic-access-token"));
+        assert!(request.contains("\"id\":\"0123456789abcdefghijklmnopqrstuv\""));
+        for forbidden in [
+            "attendees",
+            "reminders",
+            "conferenceData",
+            "attachments",
+            "recurrence",
+            "description",
+            "location",
+        ] {
+            assert!(!request.contains(forbidden));
+        }
     }
 
     #[test]

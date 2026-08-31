@@ -1,6 +1,6 @@
 # Integration Boundaries
 
-## Status: Phase 2B read-only runtime active; Phase 2C-1 provider-free write foundation implemented
+## Status: Phase 2C-2 bounded Google Calendar create implemented
 
 Integrations are adapters around Ion's local authority; they do not become its
 primary storage. Google Calendar is the first active adapter under ADR 0018.
@@ -76,7 +76,7 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   fields. Google selection, subscription, visibility, and event content remain
   untouched.
 
-## Phase 2C accepted write contract and implemented 2C-1 foundation
+## Phase 2C accepted write contract and implemented 2C-2 create
 
 - Accepted scopes: keep `calendar.calendarlist.readonly` and replace
   `calendar.events.readonly` with `calendar.events` only after deliberate
@@ -100,11 +100,15 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
 - Retention: unresolved, failed, conflict, and ambiguous intents remain until
   explicit resolution. Successfully completed intent rows may be pruned after
   30 days while compact audit remains durable.
-- Foundation: migration `0007`, fixed local state/recovery routes, safe
-  capability projection, one read-only Tauri foundation command, and unsent
-  Rust request construction/classification helpers implement only 2C-1.
-  Current connect remains read-only, re-consent is not triggered, and no Google
-  event mutation is reachable.
+- Create: migration `0007` is sufficient; no Phase 2C-2 migration is added.
+  Explicit selected-account re-consent requests exactly CalendarList read-only
+  plus Calendar Events write. A fixed local-first create command dispatches
+  only `events.insert`; ambiguous outcomes use `events.get` for the same
+  deterministic event ID before any same-ID retry. Existing account sessions
+  and the normal connect command remain read-only until explicit re-consent.
+- Exclusions: patch, update, move, delete, instances dispatch, recurrence,
+  attendee, reminder, conferencing, attachment, and special-event writes are
+  not reachable from the Phase 2C-2 command or renderer.
 
 See [ADR 0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md)
 and the [Phase 2C gate](phases/PHASE_2C.md).
