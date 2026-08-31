@@ -271,6 +271,8 @@ class ProviderWriteCapabilityOutput(CalendarModel):
         "attendees_present",
         "provider_deleted",
         "provider_unconfirmed",
+        "recurrence_unsupported",
+        "write_pending",
     ]
 
 

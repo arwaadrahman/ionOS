@@ -347,6 +347,22 @@ pub struct CreateCalendarEventDraft {
     timezone: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditCalendarEventDraft {
+    command_id: String,
+    calendar_block_id: String,
+    edit_kind: String,
+    expected_block_revision: i64,
+    title: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    timezone: Option<String>,
+    locked_confirmed: bool,
+}
+
 #[derive(Serialize)]
 struct CreateProviderEventInput<'a> {
     command_id: &'a str,
@@ -362,6 +378,28 @@ struct CreateProviderEventInput<'a> {
 
 #[derive(Deserialize)]
 struct CreateProviderEventOutput {
+    intent: ProviderWriteIntentSummary,
+    status: CalendarStatus,
+}
+
+#[derive(Serialize)]
+struct EditProviderEventInput<'a> {
+    command_id: &'a str,
+    calendar_block_id: &'a str,
+    edit_kind: &'a str,
+    expected_block_revision: i64,
+    title: Option<&'a str>,
+    start_date: Option<&'a str>,
+    end_date: Option<&'a str>,
+    start_time: Option<&'a str>,
+    end_time: Option<&'a str>,
+    timezone: Option<&'a str>,
+    locked_confirmed: bool,
+    provenance: &'static str,
+}
+
+#[derive(Deserialize)]
+struct EditProviderEventOutput {
     intent: ProviderWriteIntentSummary,
     status: CalendarStatus,
 }
@@ -426,6 +464,13 @@ struct RecordProviderWriteResultInput<'a> {
 
 #[derive(Serialize)]
 struct ReconcileProviderCreateInput<'a> {
+    expected_state: &'static str,
+    resolution_kind: &'a str,
+    event: &'a ProviderEvent,
+}
+
+#[derive(Serialize)]
+struct ReconcileProviderPatchInput<'a> {
     expected_state: &'static str,
     resolution_kind: &'a str,
     event: &'a ProviderEvent,
@@ -1072,6 +1117,84 @@ fn create_provider_body(
     })
 }
 
+fn patch_provider_body(
+    plan: &ProviderWritePlan,
+) -> Result<AllowedProviderWriteBody, GoogleCommandError> {
+    if plan.summary.operation != "patch"
+        || plan.summary.recurrence_scope != "single"
+        || plan.summary.changed_fields.is_empty()
+        || plan
+            .summary
+            .changed_fields
+            .iter()
+            .any(|field| !matches!(field.as_str(), "title" | "temporal"))
+        || plan.expected_provider_etag.as_deref().map_or(true, |etag| {
+            etag.is_empty() || etag == "*" || etag.len() > 4096
+        })
+        || plan.schema_version != 1
+        || plan.base_values.is_none()
+    {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    let desired = plan
+        .desired_values
+        .as_ref()
+        .ok_or_else(|| GoogleCommandError::new("provider_write_invalid"))?;
+    let changes_title = plan
+        .summary
+        .changed_fields
+        .iter()
+        .any(|field| field == "title");
+    let changes_temporal = plan
+        .summary
+        .changed_fields
+        .iter()
+        .any(|field| field == "temporal");
+    if desired.schema_version != 1
+        || desired.description.is_some()
+        || desired.location.is_some()
+        || desired.transparency.is_some()
+        || desired.recurrence.is_some()
+        || desired.status.is_some()
+    {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    if changes_title {
+        if !desired
+            .title
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(GoogleCommandError::new("provider_write_invalid"));
+        }
+    } else if desired.title.is_some() {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    if changes_temporal {
+        if desired.start.is_none() || desired.end.is_none() {
+            return Err(GoogleCommandError::new("provider_write_invalid"));
+        }
+    } else if desired.start.is_some() || desired.end.is_some() {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    let convert_time = |value: &ProviderDateTime| AllowedWriteDateTime {
+        date: value.date.clone(),
+        date_time: value.date_time.clone(),
+        time_zone: value.timezone.clone(),
+    };
+    Ok(AllowedProviderWriteBody {
+        id: None,
+        summary: desired.title.clone(),
+        description: None,
+        location: None,
+        transparency: None,
+        start: desired.start.as_ref().map(convert_time),
+        end: desired.end.as_ref().map(convert_time),
+        recurrence: None,
+        status: None,
+    })
+}
+
 enum ProviderCreateCallOutcome {
     Confirmed(Box<ProviderEvent>),
     Failed(ProviderWriteResultClass),
@@ -1083,6 +1206,7 @@ struct ProviderCreateCall<'a> {
     access_token: &'a str,
     provider_calendar_id: &'a str,
     provider_event_id: &'a str,
+    expected_etag: Option<&'a str>,
     body: Option<&'a AllowedProviderWriteBody>,
     fallback_timezone: &'a str,
 }
@@ -1104,7 +1228,7 @@ async fn execute_provider_create_call(
                 Some(call.provider_event_id)
             },
         },
-        None,
+        call.expected_etag,
         call.body,
     );
     let Ok(request) = request else {
@@ -1575,6 +1699,20 @@ async fn create_provider_write_intent(
     .map_err(Into::into)
 }
 
+async fn edit_provider_write_intent(
+    state: &ServiceState,
+    input: &EditProviderEventInput<'_>,
+) -> Result<EditProviderEventOutput, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/write-intents/edit",
+        Some(input),
+    )
+    .await
+    .map_err(Into::into)
+}
+
 #[allow(dead_code)]
 async fn ready_provider_write_intents(
     state: &ServiceState,
@@ -1674,6 +1812,17 @@ async fn internal_state(state: &ServiceState) -> Result<InternalCalendarState, G
     )
     .await
     .map_err(Into::into)
+}
+
+async fn reconcile_provider_patch(
+    state: &ServiceState,
+    intent_id: &str,
+    input: &ReconcileProviderPatchInput<'_>,
+) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
+    let route = write_intent_backend_route(intent_id, "/reconcile-patch")?;
+    product_request(state, reqwest::Method::POST, &route, Some(input))
+        .await
+        .map_err(Into::into)
 }
 
 async fn local_status(state: &ServiceState) -> Result<CalendarStatus, GoogleCommandError> {
@@ -1914,6 +2063,62 @@ pub async fn create_google_calendar_event<R: Runtime>(
         .await
         .map(|latest| configured_status(&app, latest))
         .unwrap_or_else(|_| configured_status(&app, created.status)))
+}
+
+#[tauri::command]
+pub async fn edit_google_calendar_event<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+    google: State<'_, GoogleState>,
+    draft: EditCalendarEventDraft,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    validated_backend_id(&draft.command_id)?;
+    validated_backend_id(&draft.calendar_block_id)?;
+    if !matches!(draft.edit_kind.as_str(), "edit" | "move" | "resize")
+        || draft.expected_block_revision < 1
+        || draft
+            .title
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty() || value.len() > 512)
+        || [draft.start_date.as_ref(), draft.end_date.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|value| value.len() != 10)
+        || [draft.start_time.as_ref(), draft.end_time.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|value| value.len() != 5)
+        || draft
+            .timezone
+            .as_ref()
+            .is_some_and(|value| value.is_empty() || value.len() > 255)
+    {
+        return Err(GoogleCommandError::new("local_state_invalid"));
+    }
+    let edited = edit_provider_write_intent(
+        &service,
+        &EditProviderEventInput {
+            command_id: &draft.command_id,
+            calendar_block_id: &draft.calendar_block_id,
+            edit_kind: &draft.edit_kind,
+            expected_block_revision: draft.expected_block_revision,
+            title: draft.title.as_deref().map(str::trim),
+            start_date: draft.start_date.as_deref(),
+            end_date: draft.end_date.as_deref(),
+            start_time: draft.start_time.as_deref(),
+            end_time: draft.end_time.as_deref(),
+            timezone: draft.timezone.as_deref(),
+            locked_confirmed: draft.locked_confirmed,
+            provenance: "direct_human",
+        },
+    )
+    .await?;
+    let _persisted_intent = &edited.intent.id;
+    let _ = dispatch_calendar_writes(&app, &service, &google, "direct_human").await;
+    Ok(local_status(&service)
+        .await
+        .map(|latest| configured_status(&app, latest))
+        .unwrap_or_else(|_| configured_status(&app, edited.status)))
 }
 
 #[tauri::command]
@@ -2504,6 +2709,7 @@ async fn dispatch_create_plan<R: Runtime>(
             access_token: &access_token,
             provider_calendar_id: &calendar.calendar.provider_calendar_id,
             provider_event_id: &plan.provider_event_id,
+            expected_etag: None,
             body: body.as_ref(),
             fallback_timezone,
         },
@@ -2525,6 +2731,7 @@ async fn dispatch_create_plan<R: Runtime>(
                         access_token: &access_token,
                         provider_calendar_id: &calendar.calendar.provider_calendar_id,
                         provider_event_id: &plan.provider_event_id,
+                        expected_etag: None,
                         body: body.as_ref(),
                         fallback_timezone,
                     },
@@ -2569,6 +2776,149 @@ async fn dispatch_create_plan<R: Runtime>(
     Ok(())
 }
 
+async fn dispatch_patch_plan<R: Runtime>(
+    app: &AppHandle<R>,
+    service: &ServiceState,
+    google: &GoogleState,
+    client: &Client,
+    config: &OAuthConfig,
+    plan: &ProviderWritePlan,
+    executor_provenance: &str,
+) -> Result<(), GoogleCommandError> {
+    if plan.summary.operation != "patch"
+        || !matches!(plan.summary.state.as_str(), "ready" | "ambiguous")
+    {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    let patch_body = patch_provider_body(plan)?;
+    let claimed = begin_provider_write_attempt(
+        service,
+        &plan.summary.id,
+        &BeginProviderWriteAttemptInput {
+            expected_state: &plan.summary.state,
+            executor_provenance,
+        },
+    )
+    .await?;
+    if claimed.state != "attempting" {
+        return Ok(());
+    }
+
+    let state = internal_state(service).await?;
+    let account = state
+        .accounts
+        .iter()
+        .find(|item| item.account.id == plan.account_id)
+        .ok_or_else(|| GoogleCommandError::new("local_state_not_found"))?;
+    let calendar = state
+        .calendars
+        .iter()
+        .find(|item| item.calendar.id == plan.calendar_id)
+        .ok_or_else(|| GoogleCommandError::new("local_state_not_found"))?;
+    let method = if plan.summary.state == "ambiguous" {
+        ProviderWriteMethod::Get
+    } else {
+        ProviderWriteMethod::Patch
+    };
+    let stage = if method == ProviderWriteMethod::Patch {
+        "patch"
+    } else {
+        "identity_lookup"
+    };
+    let body = (method == ProviderWriteMethod::Patch).then_some(&patch_body);
+    let expected_etag = if method == ProviderWriteMethod::Patch {
+        plan.expected_provider_etag.as_deref()
+    } else {
+        None
+    };
+    let access_token = if let Some(token) = google.cached_token(&account.account.id) {
+        Ok(token)
+    } else {
+        refreshed_write_access_token(client, config, google, account).await
+    };
+    let mut access_token = match access_token {
+        Ok(token) => token,
+        Err(classification) => {
+            record_create_failure(service, &plan.summary.id, stage, classification).await?;
+            return Ok(());
+        }
+    };
+    let fallback_timezone = calendar.calendar.timezone.as_deref().unwrap_or("UTC");
+    let mut outcome = execute_provider_create_call(
+        client,
+        &ProviderCreateCall {
+            api_base: CALENDAR_API,
+            method,
+            access_token: &access_token,
+            provider_calendar_id: &calendar.calendar.provider_calendar_id,
+            provider_event_id: &plan.provider_event_id,
+            expected_etag,
+            body,
+            fallback_timezone,
+        },
+    )
+    .await;
+    if matches!(
+        outcome,
+        ProviderCreateCallOutcome::Failed(ProviderWriteResultClass::ReauthenticationRequired)
+    ) {
+        google.forget_account(&account.account.id);
+        match refreshed_write_access_token(client, config, google, account).await {
+            Ok(refreshed) => {
+                access_token = refreshed;
+                outcome = execute_provider_create_call(
+                    client,
+                    &ProviderCreateCall {
+                        api_base: CALENDAR_API,
+                        method,
+                        access_token: &access_token,
+                        provider_calendar_id: &calendar.calendar.provider_calendar_id,
+                        provider_event_id: &plan.provider_event_id,
+                        expected_etag,
+                        body,
+                        fallback_timezone,
+                    },
+                )
+                .await;
+            }
+            Err(classification) => {
+                outcome = ProviderCreateCallOutcome::Failed(classification);
+            }
+        }
+    }
+    match outcome {
+        ProviderCreateCallOutcome::Confirmed(event) => {
+            reconcile_provider_patch(
+                service,
+                &plan.summary.id,
+                &ReconcileProviderPatchInput {
+                    expected_state: "attempting",
+                    resolution_kind: if method == ProviderWriteMethod::Patch {
+                        "patch_response"
+                    } else {
+                        "identity_lookup"
+                    },
+                    event: &event,
+                },
+            )
+            .await?;
+        }
+        ProviderCreateCallOutcome::Failed(classification) => {
+            let result =
+                record_create_failure(service, &plan.summary.id, stage, classification).await?;
+            if method == ProviderWriteMethod::Patch && result.state == "ambiguous" {
+                let mut lookup = plan.clone();
+                lookup.summary = result;
+                Box::pin(dispatch_patch_plan(
+                    app, service, google, client, config, &lookup, "recovery",
+                ))
+                .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn dispatch_calendar_writes<R: Runtime>(
     app: &AppHandle<R>,
     service: &ServiceState,
@@ -2587,16 +2937,33 @@ async fn dispatch_calendar_writes<R: Runtime>(
     let config = load_oauth_config(&oauth_config_path(app)?)?;
     let client = google_client()?;
     for plan in plans {
-        dispatch_create_plan(
-            app,
-            service,
-            google,
-            &client,
-            &config,
-            &plan,
-            executor_provenance,
-        )
-        .await?;
+        match plan.summary.operation.as_str() {
+            "create" => {
+                dispatch_create_plan(
+                    app,
+                    service,
+                    google,
+                    &client,
+                    &config,
+                    &plan,
+                    executor_provenance,
+                )
+                .await?;
+            }
+            "patch" => {
+                dispatch_patch_plan(
+                    app,
+                    service,
+                    google,
+                    &client,
+                    &config,
+                    &plan,
+                    executor_provenance,
+                )
+                .await?;
+            }
+            _ => return Err(GoogleCommandError::new("provider_write_invalid")),
+        }
     }
     Ok(())
 }
@@ -3066,6 +3433,48 @@ maxResults=2500&showDeleted=true&singleEvents=false"
         }
     }
 
+    fn synthetic_patch_plan(
+        changed_fields: Vec<String>,
+        desired: ProviderWriteValues,
+    ) -> ProviderWritePlan {
+        ProviderWritePlan {
+            summary: ProviderWriteIntentSummary {
+                id: "11111111-1111-4111-8111-111111111111".into(),
+                calendar_block_id: "22222222-2222-4222-8222-222222222222".into(),
+                operation: "patch".into(),
+                recurrence_scope: "single".into(),
+                changed_fields,
+                state: "ready".into(),
+                attempt_count: 0,
+                next_attempt_at: None,
+                failure_class: None,
+                failure_reason: None,
+                created_at: "2030-01-01T00:00:00Z".into(),
+                updated_at: "2030-01-01T00:00:00Z".into(),
+                resolved_at: None,
+                provenance: "direct_human".into(),
+            },
+            account_id: "33333333-3333-4333-8333-333333333333".into(),
+            calendar_id: "44444444-4444-4444-8444-444444444444".into(),
+            provider_event_id: "synthetic-event".into(),
+            expected_provider_etag: Some("\"synthetic-etag\"".into()),
+            base_values: Some(ProviderWriteValues {
+                schema_version: 1,
+                title: Some("Synthetic event".into()),
+                description: None,
+                location: None,
+                transparency: None,
+                start: None,
+                end: None,
+                recurrence: None,
+                status: None,
+            }),
+            desired_values: Some(desired),
+            source_block_revision: 1,
+            schema_version: 1,
+        }
+    }
+
     #[test]
     fn write_method_inventory_is_exact_and_excludes_broad_operations() {
         for (name, expected) in [
@@ -3165,6 +3574,69 @@ maxResults=2500&showDeleted=true&singleEvents=false"
             .url()
             .path()
             .ends_with("/synthetic-series/instances"));
+    }
+
+    #[test]
+    fn patch_body_uses_only_the_persisted_changed_field_mask() {
+        let title_plan = synthetic_patch_plan(
+            vec!["title".into()],
+            ProviderWriteValues {
+                schema_version: 1,
+                title: Some("Synthetic revised title".into()),
+                description: None,
+                location: None,
+                transparency: None,
+                start: None,
+                end: None,
+                recurrence: None,
+                status: None,
+            },
+        );
+        let title_body = patch_provider_body(&title_plan).unwrap();
+        let title_json = serde_json::to_string(&title_body).unwrap();
+        assert_eq!(title_json, r#"{"summary":"Synthetic revised title"}"#);
+
+        let time_plan = synthetic_patch_plan(
+            vec!["temporal".into()],
+            ProviderWriteValues {
+                schema_version: 1,
+                title: None,
+                description: None,
+                location: None,
+                transparency: None,
+                start: Some(ProviderDateTime {
+                    date: None,
+                    date_time: Some("2030-01-02T09:00:00-08:00".into()),
+                    timezone: Some("America/Los_Angeles".into()),
+                }),
+                end: Some(ProviderDateTime {
+                    date: None,
+                    date_time: Some("2030-01-02T10:00:00-08:00".into()),
+                    timezone: Some("America/Los_Angeles".into()),
+                }),
+                recurrence: None,
+                status: None,
+            },
+        );
+        let time_json = serde_json::to_string(&patch_provider_body(&time_plan).unwrap()).unwrap();
+        assert!(!time_json.contains("summary"));
+        assert!(time_json.contains("start"));
+        assert!(time_json.contains("end"));
+        for forbidden in [
+            "attendees",
+            "reminders",
+            "conferenceData",
+            "recurrence",
+            "status",
+            "description",
+            "location",
+        ] {
+            assert!(!time_json.contains(forbidden));
+        }
+
+        let mut wildcard = title_plan;
+        wildcard.expected_provider_etag = Some("*".into());
+        assert!(patch_provider_body(&wildcard).is_err());
     }
 
     #[test]
@@ -3302,6 +3774,7 @@ maxResults=2500&showDeleted=true&singleEvents=false"
                 access_token: "synthetic-access-token",
                 provider_calendar_id: "synthetic/calendar@example.invalid",
                 provider_event_id: "0123456789abcdefghijklmnopqrstuv",
+                expected_etag: None,
                 body: Some(&body),
                 fallback_timezone: "America/Los_Angeles",
             },

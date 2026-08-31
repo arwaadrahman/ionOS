@@ -25,6 +25,7 @@ from ion_api.calendar_write_contracts import (
     CalendarWriteCapabilityOutput,
     CalendarWriteFoundationOutput,
     CreateProviderEventInput,
+    EditProviderEventInput,
     ProviderWriteIntentSummaryOutput,
     ProviderWritePlanOutput,
     PruneResultOutput,
@@ -32,6 +33,7 @@ from ion_api.calendar_write_contracts import (
     QueueProviderWriteIntentInput,
     ReadyWriteIntentsInput,
     ReconcileProviderCreateInput,
+    ReconcileProviderPatchInput,
     RecordProviderWriteResultInput,
     RecoverWriteIntentsInput,
     RecoveryResultOutput,
@@ -237,6 +239,12 @@ def _write_reason(
         allow_pending_create and link.link_state == "pending_create"
     ):
         return "provider_unconfirmed"
+    if link.link_state == "confirmed" and (
+        not link.provider_etag or link.provider_etag == "*"
+    ):
+        return "provider_unconfirmed"
+    if block is not None and block.recurrence_kind != "single":
+        return "recurrence_unsupported"
     return "eligible"
 
 
@@ -316,6 +324,7 @@ def _canonical_audit(
     from_revision: int | None,
     to_revision: int | None,
 ) -> None:
+    human_requested = action.endswith("_requested")
     connection.execute(
         insert(audit_events).values(
             event_id=str(uuid4()),
@@ -323,9 +332,9 @@ def _canonical_audit(
             entity_type="calendar_block",
             entity_id=block_id,
             action=action,
-            actor_kind="human" if action == "create_requested" else "integration",
-            authority="direct" if action == "create_requested" else "approved",
-            source="desktop" if action == "create_requested" else "google_calendar",
+            actor_kind="human" if human_requested else "integration",
+            authority="direct" if human_requested else "approved",
+            source="desktop" if human_requested else "google_calendar",
             from_revision=from_revision,
             to_revision=to_revision,
             command_id=command_id,
@@ -353,6 +362,43 @@ def _event_temporal_values(event) -> dict[str, str | None]:
         "start_timezone": event.start.timezone,
         "end_timezone": event.end.timezone,
     }
+
+
+def _block_temporal_contract(block) -> dict[str, object]:
+    if block.temporal_kind == "all_day":
+        return {
+            "start": {"date": block.start_date},
+            "end": {"date": block.end_date},
+        }
+    return {
+        "start": {
+            "date_time": block.start_at,
+            "timezone": block.start_timezone,
+        },
+        "end": {
+            "date_time": block.end_at,
+            "timezone": block.end_timezone,
+        },
+    }
+
+
+def _event_matches_changed_values(row, event) -> bool:
+    desired = json.loads(row.desired_values_json)
+    changed = set(json.loads(row.changed_fields_json))
+    if "title" in changed and (event.title or UNTITLED_EVENT) != desired.get("title"):
+        return False
+    if "temporal" in changed:
+        from ion_api.calendar_contracts import ProviderDateTime
+
+        expected_start = ProviderDateTime.model_validate(desired.get("start"))
+        expected_end = ProviderDateTime.model_validate(desired.get("end"))
+        if not event.start or not event.end:
+            return False
+        if not _same_provider_time(event.start, expected_start):
+            return False
+        if not _same_provider_time(event.end, expected_end):
+            return False
+    return True
 
 
 def _same_provider_time(left, right) -> bool:
@@ -423,6 +469,19 @@ class CalendarWriteService:
                 .order_by(calendar_provider_write_intents.c.created_at)
                 .limit(bounded_limit)
             ).all()
+        pending_block_ids = {row.calendar_block_id for row in pending_rows}
+
+        def block_reason(link) -> str:
+            reason = _write_reason(
+                account_by_id[link.account_id],
+                calendar_by_id[link.calendar_id],
+                link,
+                block_by_id[link.calendar_block_id],
+            )
+            if reason == "eligible" and link.calendar_block_id in pending_block_ids:
+                return "write_pending"
+            return reason
+
         return CalendarWriteFoundationOutput(
             accounts=[
                 AccountWriteCapabilityOutput(
@@ -449,21 +508,8 @@ class CalendarWriteService:
             blocks=[
                 BlockWriteCapabilityOutput(
                     calendar_block_id=link.calendar_block_id,
-                    eligible=(
-                        _write_reason(
-                            account_by_id[link.account_id],
-                            calendar_by_id[link.calendar_id],
-                            link,
-                            block_by_id[link.calendar_block_id],
-                        )
-                        == "eligible"
-                    ),
-                    reason=_write_reason(
-                        account_by_id[link.account_id],
-                        calendar_by_id[link.calendar_id],
-                        link,
-                        block_by_id[link.calendar_block_id],
-                    ),
+                    eligible=block_reason(link) == "eligible",
+                    reason=block_reason(link),
                 )
                 for link in links
             ],
@@ -606,6 +652,218 @@ class CalendarWriteService:
                 command_id=input.command_id,
                 from_revision=None,
                 to_revision=1,
+            )
+            _audit(
+                connection,
+                queued,
+                action="write_intent_queued",
+                from_state=None,
+                to_state="queued",
+                occurred_at=now,
+                executor_provenance="direct_human",
+            )
+            connection.execute(
+                update(calendar_provider_write_intents)
+                .where(calendar_provider_write_intents.c.id == intent_id)
+                .values(state="ready", updated_at=now)
+            )
+            ready = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            _audit(
+                connection,
+                ready,
+                action="write_intent_ready",
+                from_state="queued",
+                to_state="ready",
+                occurred_at=now,
+                executor_provenance="direct_human",
+            )
+            return _summary(ready)
+
+    def edit(self, input: EditProviderEventInput) -> ProviderWriteIntentSummaryOutput:
+        now = utc_now()
+        with self.engine.begin() as connection:
+            existing_command = connection.execute(
+                select(calendar_provider_write_intents).where(
+                    calendar_provider_write_intents.c.command_id == input.command_id
+                )
+            ).one_or_none()
+            if existing_command is not None:
+                if existing_command.operation != "patch":
+                    raise CalendarConflictError(input.command_id)
+                return _summary(existing_command)
+
+            block = self._required_row(
+                connection, calendar_blocks, input.calendar_block_id
+            )
+            if block.revision != input.expected_block_revision:
+                raise CalendarConflictError(input.calendar_block_id)
+            link = self._required_row(
+                connection,
+                google_event_links,
+                block.id,
+                google_event_links.c.calendar_block_id,
+            )
+            account = self._required_row(connection, google_accounts, link.account_id)
+            calendar = self._required_row(
+                connection, google_calendars, link.calendar_id
+            )
+            reason = _write_reason(account, calendar, link, block)
+            if reason != "eligible":
+                raise CalendarValidationError(reason)
+            metadata = self._required_row(
+                connection,
+                calendar_block_ion_metadata,
+                block.id,
+                calendar_block_ion_metadata.c.calendar_block_id,
+            )
+            if metadata.flexibility == "locked" and not input.locked_confirmed:
+                raise CalendarValidationError("locked_confirmation_required")
+
+            latest = connection.execute(
+                select(calendar_provider_write_intents)
+                .where(calendar_provider_write_intents.c.calendar_block_id == block.id)
+                .order_by(calendar_provider_write_intents.c.sequence.desc())
+                .limit(1)
+            ).one_or_none()
+            if latest is not None and latest.state not in TERMINAL_PREDECESSOR_STATES:
+                raise CalendarValidationError("write_pending")
+
+            changed_fields: list[str] = []
+            base: dict[str, object] = {"schema_version": 1}
+            desired: dict[str, object] = {"schema_version": 1}
+            if input.title is not None:
+                title = input.title.strip()
+                if not title:
+                    raise CalendarValidationError("edit title must be present")
+                if title != block.title:
+                    changed_fields.append("title")
+                    base["title"] = block.title
+                    desired["title"] = title
+
+            temporal_requested = (
+                input.start_date is not None or input.end_date is not None
+            )
+            if input.edit_kind in ("move", "resize") and block.temporal_kind != "timed":
+                raise CalendarValidationError("timed operation requires a timed event")
+            if temporal_requested:
+                base_temporal = _block_temporal_contract(block)
+                if block.temporal_kind == "all_day":
+                    if input.edit_kind != "edit" or any(
+                        value is not None
+                        for value in (input.start_time, input.end_time, input.timezone)
+                    ):
+                        raise CalendarValidationError(
+                            "all-day conversion and direct manipulation are unsupported"
+                        )
+                    start_date = date.fromisoformat(input.start_date)
+                    end_date = date.fromisoformat(input.end_date)
+                    if end_date <= start_date:
+                        raise CalendarValidationError(
+                            "all-day end must be after start and remains end-exclusive"
+                        )
+                    desired_temporal = {
+                        "start": {"date": start_date.isoformat()},
+                        "end": {"date": end_date.isoformat()},
+                    }
+                else:
+                    if (
+                        not input.timezone
+                        or input.timezone != block.start_timezone
+                        or input.timezone != block.end_timezone
+                    ):
+                        raise CalendarValidationError(
+                            "timed edit must preserve the confirmed IANA timezone"
+                        )
+                    if input.edit_kind == "move":
+                        start = _resolved_wall_time(
+                            input.start_date, input.start_time, input.timezone
+                        )
+                        duration = _parse_timestamp(block.end_at) - _parse_timestamp(
+                            block.start_at
+                        )
+                        end = (start.astimezone(UTC) + duration).astimezone(
+                            _validated_zone(input.timezone)
+                        )
+                    elif input.edit_kind == "resize":
+                        start = datetime.fromisoformat(block.start_at)
+                        end = _resolved_wall_time(
+                            input.end_date, input.end_time, input.timezone
+                        )
+                    else:
+                        start = _resolved_wall_time(
+                            input.start_date, input.start_time, input.timezone
+                        )
+                        end = _resolved_wall_time(
+                            input.end_date, input.end_time, input.timezone
+                        )
+                    if end <= start:
+                        raise CalendarValidationError(
+                            "timed edit end must be after start"
+                        )
+                    desired_temporal = {
+                        "start": {
+                            "date_time": start.isoformat(timespec="seconds"),
+                            "timezone": input.timezone,
+                        },
+                        "end": {
+                            "date_time": end.isoformat(timespec="seconds"),
+                            "timezone": input.timezone,
+                        },
+                    }
+                if desired_temporal != base_temporal:
+                    changed_fields.append("temporal")
+                    base.update(base_temporal)
+                    desired.update(desired_temporal)
+
+            if not changed_fields:
+                raise CalendarValidationError("edit does not change a supported field")
+
+            intent_id = str(uuid4())
+            sequence = 1 if latest is None else latest.sequence + 1
+            changed_fields_json = _json(changed_fields)
+            connection.execute(
+                insert(calendar_provider_write_intents).values(
+                    id=intent_id,
+                    command_id=input.command_id,
+                    calendar_block_id=block.id,
+                    account_id=link.account_id,
+                    calendar_id=link.calendar_id,
+                    provider_event_id=link.provider_event_id,
+                    sequence=sequence,
+                    predecessor_intent_id=None,
+                    operation="patch",
+                    recurrence_scope="single",
+                    changed_fields_json=changed_fields_json,
+                    base_values_json=_json(base),
+                    desired_values_json=_json(desired),
+                    expected_provider_etag=link.provider_etag,
+                    source_block_revision=block.revision,
+                    schema_version=1,
+                    state="queued",
+                    attempt_count=0,
+                    next_attempt_at=None,
+                    last_attempt_at=None,
+                    failure_class=None,
+                    failure_reason=None,
+                    created_at=now,
+                    updated_at=now,
+                    resolved_at=None,
+                    prune_after=None,
+                    provenance=input.provenance,
+                )
+            )
+            queued = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            _canonical_audit(
+                connection,
+                block_id=block.id,
+                action=f"{input.edit_kind}_requested",
+                command_id=input.command_id,
+                from_revision=block.revision,
+                to_revision=block.revision,
             )
             _audit(
                 connection,
@@ -817,8 +1075,10 @@ class CalendarWriteService:
             )
             if row.state != input.expected_state:
                 raise CalendarConflictError(intent_id)
-            if row.operation != "create":
-                raise CalendarValidationError("Phase 2C-2 dispatch accepts create only")
+            if row.operation not in ("create", "patch"):
+                raise CalendarValidationError(
+                    "Phase 2C-3 dispatch accepts create and single-event patch only"
+                )
             block = self._required_row(
                 connection, calendar_blocks, row.calendar_block_id
             )
@@ -831,7 +1091,11 @@ class CalendarWriteService:
             account = self._required_row(connection, google_accounts, row.account_id)
             calendar = self._required_row(connection, google_calendars, row.calendar_id)
             reason = _write_reason(
-                account, calendar, link, block, allow_pending_create=True
+                account,
+                calendar,
+                link,
+                block,
+                allow_pending_create=row.operation == "create",
             )
             if reason != "eligible":
                 target = "reauth_required" if reason == "reauth_required" else "failed"
@@ -869,6 +1133,42 @@ class CalendarWriteService:
                     executor_provenance=input.executor_provenance,
                 )
                 return _summary(blocked)
+
+            if row.operation == "patch" and (
+                row.recurrence_scope != "single"
+                or not row.expected_provider_etag
+                or row.expected_provider_etag == "*"
+            ):
+                raise CalendarValidationError(
+                    "patch requires a bounded non-wildcard ETag"
+                )
+            if (
+                row.operation == "patch"
+                and link.provider_etag != row.expected_provider_etag
+            ):
+                connection.execute(
+                    update(calendar_provider_write_intents)
+                    .where(calendar_provider_write_intents.c.id == row.id)
+                    .values(
+                        state="conflict",
+                        failure_class="stale_precondition",
+                        failure_reason="provider_etag_changed",
+                        updated_at=now,
+                    )
+                )
+                conflict = self._required_row(
+                    connection, calendar_provider_write_intents, row.id
+                )
+                _audit(
+                    connection,
+                    conflict,
+                    action="write_conflict_detected",
+                    from_state=row.state,
+                    to_state="conflict",
+                    occurred_at=now,
+                    executor_provenance=input.executor_provenance,
+                )
+                return _summary(conflict)
 
             if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS and row.state != "ambiguous":
                 raise CalendarValidationError("automatic attempt limit reached")
@@ -910,7 +1210,10 @@ class CalendarWriteService:
             row = self._required_row(
                 connection, calendar_provider_write_intents, intent_id
             )
-            if row.state != input.expected_state or row.operation != "create":
+            if row.state != input.expected_state or row.operation not in (
+                "create",
+                "patch",
+            ):
                 raise CalendarConflictError(intent_id)
 
             result_class = input.result_class
@@ -918,40 +1221,70 @@ class CalendarWriteService:
             next_attempt_at = None
             if result_class == "reauthentication_required":
                 target = "reauth_required"
-            elif input.stage == "insert" and result_class in (
-                "duplicate_or_ambiguous_create",
-                "retryable_transport",
-            ):
-                target = "ambiguous"
-            elif input.stage == "identity_lookup" and result_class in (
-                "duplicate_or_ambiguous_create",
-                "retryable_transport",
-            ):
-                target = (
-                    "failed"
-                    if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
-                    else "ambiguous"
-                )
-            elif (
-                input.stage == "identity_lookup"
-                and result_class == "provider_not_found"
-            ):
-                if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS:
-                    target = "failed"
-                else:
-                    target = "retry_wait"
-                    stored_class = "retryable_transport"
-            elif result_class in (
-                "retryable_backend",
-                "retryable_quota",
-            ):
-                target = (
-                    "failed"
-                    if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
-                    else "retry_wait"
-                )
             else:
-                target = "failed"
+                if row.operation == "create":
+                    if input.stage == "insert" and result_class in (
+                        "duplicate_or_ambiguous_create",
+                        "retryable_transport",
+                    ):
+                        target = "ambiguous"
+                    elif input.stage == "identity_lookup" and result_class in (
+                        "duplicate_or_ambiguous_create",
+                        "retryable_transport",
+                    ):
+                        target = (
+                            "failed"
+                            if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
+                            else "ambiguous"
+                        )
+                    elif (
+                        input.stage == "identity_lookup"
+                        and result_class == "provider_not_found"
+                    ):
+                        if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS:
+                            target = "failed"
+                        else:
+                            target = "retry_wait"
+                            stored_class = "retryable_transport"
+                    elif result_class in (
+                        "retryable_backend",
+                        "retryable_quota",
+                    ):
+                        target = (
+                            "failed"
+                            if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
+                            else "retry_wait"
+                        )
+                    else:
+                        target = "failed"
+                else:
+                    if input.stage == "patch" and result_class == "retryable_transport":
+                        target = "ambiguous"
+                    elif input.stage == "identity_lookup" and result_class in (
+                        "retryable_transport",
+                        "retryable_backend",
+                    ):
+                        target = (
+                            "failed"
+                            if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
+                            else "ambiguous"
+                        )
+                    elif result_class in (
+                        "stale_precondition",
+                        "provider_not_found",
+                    ):
+                        target = "conflict"
+                    elif result_class in (
+                        "retryable_backend",
+                        "retryable_quota",
+                    ):
+                        target = (
+                            "failed"
+                            if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
+                            else "retry_wait"
+                        )
+                    else:
+                        target = "failed"
 
             if target == "retry_wait":
                 delay = full_jitter_delay_seconds(
@@ -1000,6 +1333,7 @@ class CalendarWriteService:
                 "ambiguous": "write_outcome_ambiguous",
                 "retry_wait": "write_retry_scheduled",
                 "reauth_required": "write_reauthentication_required",
+                "conflict": "write_conflict_detected",
                 "failed": "write_failed_terminally",
             }[target]
             _audit(
@@ -1152,6 +1486,218 @@ class CalendarWriteService:
                 connection,
                 block_id=block.id,
                 action="provider_create_confirmed",
+                command_id=row.command_id,
+                from_revision=block.revision,
+                to_revision=revision,
+            )
+            return _summary(completed)
+
+    def reconcile_patch(
+        self, intent_id: str, input: ReconcileProviderPatchInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        now = utc_now()
+        event = input.event
+        with self.engine.begin() as connection:
+            row = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            if row.state != input.expected_state or row.operation != "patch":
+                raise CalendarConflictError(intent_id)
+            block = self._required_row(
+                connection, calendar_blocks, row.calendar_block_id
+            )
+            valid_event = (
+                event.provider_event_id == row.provider_event_id
+                and bool(event.provider_etag)
+                and event.provider_etag != "*"
+                and event.status != "cancelled"
+                and event.start is not None
+                and event.end is not None
+                and not event.recurrence
+                and event.recurring_event_id is None
+                and event.provider_event_type == "default"
+                and not event.provider_locked
+                and not event.has_attendees
+            )
+            if not valid_event:
+                connection.execute(
+                    update(calendar_provider_write_intents)
+                    .where(calendar_provider_write_intents.c.id == row.id)
+                    .values(
+                        state="conflict",
+                        failure_class="stale_precondition",
+                        failure_reason="provider_target_changed",
+                        updated_at=now,
+                    )
+                )
+                conflict = self._required_row(
+                    connection, calendar_provider_write_intents, row.id
+                )
+                _audit(
+                    connection,
+                    conflict,
+                    action="write_conflict_detected",
+                    from_state=row.state,
+                    to_state="conflict",
+                    occurred_at=now,
+                    executor_provenance="recovery",
+                )
+                return _summary(conflict)
+
+            desired_matches = _event_matches_changed_values(row, event)
+            if (
+                input.resolution_kind == "identity_lookup"
+                and event.provider_etag == row.expected_provider_etag
+                and not desired_matches
+            ):
+                target = (
+                    "failed"
+                    if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
+                    else "retry_wait"
+                )
+                next_attempt_at = None
+                if target == "retry_wait":
+                    delay = full_jitter_delay_seconds(
+                        row.attempt_count, self.random_fraction()
+                    )
+                    next_attempt_at = (
+                        (datetime.now(UTC) + timedelta(seconds=delay))
+                        .isoformat(timespec="microseconds")
+                        .replace("+00:00", "Z")
+                    )
+                connection.execute(
+                    update(calendar_provider_write_intents)
+                    .where(calendar_provider_write_intents.c.id == row.id)
+                    .values(
+                        state=target,
+                        next_attempt_at=next_attempt_at,
+                        failure_class="retryable_transport",
+                        failure_reason=(
+                            "ambiguous_patch_not_applied"
+                            if target == "retry_wait"
+                            else "automatic_attempt_limit"
+                        ),
+                        updated_at=now,
+                    )
+                )
+                changed = self._required_row(
+                    connection, calendar_provider_write_intents, row.id
+                )
+                _audit(
+                    connection,
+                    changed,
+                    action=(
+                        "write_retry_scheduled"
+                        if target == "retry_wait"
+                        else "write_failed_terminally"
+                    ),
+                    from_state=row.state,
+                    to_state=target,
+                    occurred_at=now,
+                    executor_provenance="recovery",
+                )
+                return _summary(changed)
+
+            conflict_detected = not desired_matches
+            provider_values = {
+                "title": event.title or UNTITLED_EVENT,
+                "description": event.description,
+                "location": event.location,
+                "status": event.status,
+                "transparency": event.transparency,
+                "recurrence_kind": "single",
+                "recurrence_rules": None,
+                "provider_deleted_at": None,
+                **_event_temporal_values(event),
+            }
+            changed_values = {
+                key: value
+                for key, value in provider_values.items()
+                if getattr(block, key) != value
+            }
+            revision = block.revision
+            if changed_values:
+                revision += 1
+                connection.execute(
+                    update(calendar_blocks)
+                    .where(calendar_blocks.c.id == block.id)
+                    .values(**changed_values, updated_at=now, revision=revision)
+                )
+            connection.execute(
+                update(google_event_links)
+                .where(google_event_links.c.calendar_block_id == block.id)
+                .values(
+                    ical_uid=event.ical_uid,
+                    provider_etag=event.provider_etag,
+                    provider_updated_at=event.provider_updated_at,
+                    link_state="confirmed",
+                    provider_event_type="default",
+                    provider_locked=False,
+                    has_attendees=False,
+                )
+            )
+
+            if conflict_detected:
+                connection.execute(
+                    update(calendar_provider_write_intents)
+                    .where(calendar_provider_write_intents.c.id == row.id)
+                    .values(
+                        state="conflict",
+                        failure_class="stale_precondition",
+                        failure_reason="provider_values_changed",
+                        updated_at=now,
+                    )
+                )
+                conflict = self._required_row(
+                    connection, calendar_provider_write_intents, row.id
+                )
+                _audit(
+                    connection,
+                    conflict,
+                    action="write_conflict_detected",
+                    from_state=row.state,
+                    to_state="conflict",
+                    occurred_at=now,
+                    executor_provenance="recovery",
+                    resulting_revision=revision,
+                )
+                return _summary(conflict)
+
+            prune_after = (
+                (datetime.now(UTC) + timedelta(days=COMPLETED_RETENTION_DAYS))
+                .isoformat(timespec="microseconds")
+                .replace("+00:00", "Z")
+            )
+            connection.execute(
+                update(calendar_provider_write_intents)
+                .where(calendar_provider_write_intents.c.id == row.id)
+                .values(
+                    state="completed",
+                    failure_class="success",
+                    failure_reason="provider_confirmed",
+                    next_attempt_at=None,
+                    updated_at=now,
+                    resolved_at=now,
+                    prune_after=prune_after,
+                )
+            )
+            completed = self._required_row(
+                connection, calendar_provider_write_intents, row.id
+            )
+            _audit(
+                connection,
+                completed,
+                action="write_completed",
+                from_state=row.state,
+                to_state="completed",
+                occurred_at=now,
+                executor_provenance="recovery",
+                resulting_revision=revision,
+            )
+            _canonical_audit(
+                connection,
+                block_id=block.id,
+                action="provider_patch_confirmed",
                 command_id=row.command_id,
                 from_revision=block.revision,
                 to_revision=revision,

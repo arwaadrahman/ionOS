@@ -2,7 +2,7 @@
 
 ## Status
 
-**Architecture/security gate accepted; Phase 2C-2 idempotent create implemented
+**Architecture/security gate accepted; Phase 2C-3 edit/move/resize implemented
 and pending owner real-write acceptance.** The owner accepted ADR 0021 and the seven decisions
 in this gate on 2026-08-30, then separately authorized the bounded 2C-1
 foundation. Migration `0007`, the typed Python outbox/state API, safe
@@ -10,8 +10,11 @@ capability projection, deterministic ID/retry/recovery/audit helpers, one
 read-only Tauri foundation command, and unsent Rust provider request/result
 helpers are now present. Phase 2C-2 adds explicit selected-account re-consent,
 local-first create UI, `events.insert`, and deterministic-ID `events.get`
-reconciliation. No real OAuth or Calendar mutation was used during automated
-verification.
+reconciliation. Phase 2C-3 adds durable desired overlays, explicit-save
+inspector editing, direct timed move/resize review, changed-field
+`events.patch` with exact `If-Match`, and bounded same-event reconciliation.
+No real OAuth or Calendar mutation was used during automated verification.
+Delete and recurring event writes remain unavailable.
 
 ## Objective
 
@@ -606,6 +609,11 @@ reviewed and found sufficient, so no schema change was introduced.
   appears synced; all-day/timed/DST invariants pass.
 
 ### 2C-3 — Edit, move, and resize
+
+**Implemented; owner real-write acceptance pending.** Migration `0007` was
+reviewed and found sufficient, so no schema change was introduced. Automated
+verification uses only synthetic provider data and does not initiate OAuth or
+Google mutations.
 
 - Add inspector edit plus direct-human timed move/resize and keyboard path.
 - Use bounded patches and `If-Match`; add locked confirmation and pending

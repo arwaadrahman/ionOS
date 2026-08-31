@@ -7,7 +7,7 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 ## Status
 
 Current phase: **Phase 2 — Calendar**
-Current milestone: **Phase 2B — Calendar Interface**
+Current milestone: **Phase 2C-3 — Google Calendar edit, move, and resize**
 
 Phase 0 established the secure local runtime. Phase 1A added the canonical
 organizer schema and Task vertical slice. Phase 1B makes Areas, Goals, Projects,
@@ -35,13 +35,17 @@ Phase 2B adds the primary read-only Day, 3 Day, Week, Next 7 Days, and Month Cal
 bounded recurrence/exception rendering, Ion-local categories and hide/restore,
 adaptive density, and truthful CalendarBlock occupancy and free gaps in Today
 without scheduling Tasks or writing Google data.
+Phase 2C-2 adds deliberate write re-consent and idempotent local-first event
+creation. Phase 2C-3 adds bounded explicit-save title/time editing and reviewed
+timed move/resize for eligible ordinary attendee-free events, with durable
+offline intent and explicit ETag conflicts.
 
 ## Start here
 
 - [Agent guide](AGENTS.md)
 - [Project context](docs/projectContext.md)
 - [Master Specification](docs/PRODUCT_SPEC.md)
-- [Phase 2B](docs/phases/PHASE_2B.md)
+- [Phase 2C](docs/phases/PHASE_2C.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decision index](docs/decisions/README.md)
 

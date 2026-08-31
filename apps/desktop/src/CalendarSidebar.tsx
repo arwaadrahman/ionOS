@@ -239,9 +239,9 @@ export const CalendarSidebar = memo(function CalendarSidebar({
       </div>
       <footer className="calendar-sidebar-footer">
         <p className="context-note">
-          Calendar visibility is local to Ion. Only explicitly write-enabled
-          accounts can create ordinary events; existing event fields remain
-          view-only.
+          Calendar visibility is local to Ion. Explicitly write-enabled accounts
+          can create and edit eligible ordinary events; attendees, recurring
+          events, and provider-managed events remain read-only.
         </p>
         <div className="calendar-sidebar-actions">
           <button

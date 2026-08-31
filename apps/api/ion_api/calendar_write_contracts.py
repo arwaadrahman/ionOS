@@ -153,6 +153,66 @@ class CreateProviderEventInput(CalendarModel):
         return self
 
 
+class EditProviderEventInput(CalendarModel):
+    command_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    calendar_block_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    edit_kind: Literal["edit", "move", "resize"]
+    expected_block_revision: int = Field(ge=1)
+    title: str | None = Field(default=None, max_length=512)
+    start_date: str | None = None
+    end_date: str | None = None
+    start_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    end_time: str | None = Field(default=None, pattern=r"^\d{2}:\d{2}$")
+    timezone: str | None = Field(default=None, min_length=1, max_length=255)
+    locked_confirmed: bool = False
+    provenance: Literal["direct_human"] = "direct_human"
+
+    @model_validator(mode="after")
+    def valid_edit_shape(self):
+        for value in (self.start_date, self.end_date):
+            if value is not None:
+                date.fromisoformat(value)
+        for value in (self.start_time, self.end_time):
+            if value is not None:
+                time.fromisoformat(value)
+        if self.edit_kind == "move":
+            if self.start_date is None or self.start_time is None or not self.timezone:
+                raise ValueError("timed move requires date, start time, and timezone")
+            if (
+                self.title is not None
+                or self.end_date is not None
+                or self.end_time is not None
+            ):
+                raise ValueError("move accepts only a target start")
+        elif self.edit_kind == "resize":
+            if self.end_date is None or self.end_time is None or not self.timezone:
+                raise ValueError(
+                    "timed resize requires end date, end time, and timezone"
+                )
+            if (
+                self.title is not None
+                or self.start_date is not None
+                or self.start_time is not None
+            ):
+                raise ValueError("resize accepts only a target end")
+        else:
+            timed_fields = (self.start_time, self.end_time, self.timezone)
+            has_timed = any(value is not None for value in timed_fields)
+            if has_timed and not all(value is not None for value in timed_fields):
+                raise ValueError("timed edit requires start, end, and timezone")
+            if has_timed and (self.start_date is None or self.end_date is None):
+                raise ValueError("timed edit requires start and end dates")
+            if not has_timed and (self.start_date is None) != (self.end_date is None):
+                raise ValueError("all-day edit requires both civil-date boundaries")
+            if self.title is None and self.start_date is None:
+                raise ValueError("edit requires a title or temporal value")
+        return self
+
+
 class BeginWriteAttemptInput(CalendarModel):
     expected_state: Literal["ready", "ambiguous"]
     executor_provenance: Literal["direct_human", "recovery"]
@@ -160,7 +220,7 @@ class BeginWriteAttemptInput(CalendarModel):
 
 class RecordProviderWriteResultInput(CalendarModel):
     expected_state: Literal["attempting"] = "attempting"
-    stage: Literal["insert", "identity_lookup"]
+    stage: Literal["insert", "patch", "identity_lookup"]
     result_class: ProviderResultClass
     safe_reason: str = Field(min_length=1, max_length=128)
 
@@ -174,6 +234,12 @@ class RecordProviderWriteResultInput(CalendarModel):
 class ReconcileProviderCreateInput(CalendarModel):
     expected_state: Literal["attempting"] = "attempting"
     resolution_kind: Literal["insert_response", "identity_lookup"]
+    event: ProviderEventInput
+
+
+class ReconcileProviderPatchInput(CalendarModel):
+    expected_state: Literal["attempting"] = "attempting"
+    resolution_kind: Literal["patch_response", "identity_lookup"]
     event: ProviderEventInput
 
 
@@ -302,6 +368,11 @@ class CalendarWriteFoundationOutput(CalendarModel):
 
 
 class CreateProviderEventOutput(CalendarModel):
+    intent: ProviderWriteIntentSummaryOutput
+    status: CalendarStatusOutput
+
+
+class EditProviderEventOutput(CalendarModel):
     intent: ProviderWriteIntentSummaryOutput
     status: CalendarStatusOutput
 

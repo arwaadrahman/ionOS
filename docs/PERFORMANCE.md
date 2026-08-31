@@ -101,10 +101,11 @@ not each accumulate independent uncoordinated timers. Prefer event-driven
 updates where practical and use centralized scheduling with sensible refresh
 intervals where polling is necessary.
 
-Phase 2C-2 Calendar create adds no polling timer or background loop. Each
-explicit create, sync, re-consent, or startup recovery trigger drains at most
-10 ready write plans after a bounded recovery pass; retry timestamps remain
-durable until a later trigger.
+Phase 2C-3 Calendar create/edit adds no polling timer or background loop. Each
+explicit save, sync, re-consent, or startup recovery trigger drains at most 10
+ready write plans after a bounded recovery pass; patch ambiguity may add one
+bounded same-event lookup. Retry timestamps remain durable until a later
+trigger.
 
 ### Child processes
 

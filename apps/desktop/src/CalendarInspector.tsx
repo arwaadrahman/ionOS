@@ -7,6 +7,8 @@ import {
 } from "./calendarProjection";
 import {
   CalendarCategory,
+  CalendarEditDraft,
+  CalendarEditSeed,
   calendarCategories,
   calendarCategoryDisplay,
   calendarCategoryLabels,
@@ -22,6 +24,24 @@ function formatDate(value: string) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(`${value}T12:00:00Z`));
+}
+
+function zonedParts(value: string, timezone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  return {
+    date: `${part("year")}-${part("month")}-${part("day")}`,
+    time: `${part("hour")}:${part("minute")}`,
+  };
 }
 
 function recurrenceLabel(occurrence: CalendarOccurrence) {
@@ -55,66 +75,295 @@ function providerWriteLabel(
   detail: CalendarOccurrence["block"]["provider_write_detail"],
 ) {
   if (state === "synced") return "Confirmed by Google";
-  if (state === "conflict") return "Needs review";
+  if (state === "conflict") return "Changed elsewhere · needs review";
   if (state === "failed") return "Google sync failed";
   if (detail === "reauth_required") return "Reconnect Google to finish";
   if (detail === "syncing") return "Syncing with Google";
+  if (detail === "retry_wait") return "Saved locally · retry waiting";
   return "Saved locally · pending Google";
 }
+
+const readOnlyReason: Record<string, string> = {
+  account_read_only: "Enable Calendar writing for this Google account.",
+  reauth_required: "Reconnect Google before editing this event.",
+  calendar_disabled: "This calendar is disabled in Ion.",
+  calendar_deleted: "This source calendar is no longer available.",
+  access_role_read_only: "Google exposes this calendar as read-only.",
+  special_event: "Google special event types remain read-only.",
+  provider_locked: "Google marks this event as provider-locked.",
+  attendees_present: "Events with attendees remain read-only.",
+  provider_deleted: "This provider event is no longer active.",
+  provider_unconfirmed: "Google has not confirmed a safe editable version yet.",
+  recurrence_unsupported: "Recurring-event changes are deferred to Phase 2C-5.",
+  write_pending: "Finish reviewing the current Google write state first.",
+};
 
 export function CalendarInspector({
   occurrence,
   localTimeZone,
   categoryPending,
+  editPending,
+  editSeed,
   onCategory,
+  onEdit,
   onClose,
 }: {
   occurrence: CalendarOccurrence;
   localTimeZone: string;
   categoryPending: boolean;
+  editPending: boolean;
+  editSeed: CalendarEditSeed | null;
   onCategory(category: CalendarCategory | null, subtype: string | null): void;
+  onEdit(draft: CalendarEditDraft): void;
   onClose(): void;
 }) {
-  const sourceTimeZone = occurrence.block.start_timezone;
+  const block = occurrence.block;
+  const sourceTimeZone = block.start_timezone;
   const differentTimeZone =
     !occurrence.allDay && sourceTimeZone && sourceTimeZone !== localTimeZone;
-  const category = occurrence.block.category;
-  const currentSubtype = occurrence.block.category_subtype;
+  const category = block.category;
+  const currentSubtype = block.category_subtype;
   const [draftCategory, setDraftCategory] = useState<CalendarCategory | null>(
     category,
   );
   const [draftSubtype, setDraftSubtype] = useState<string | null>(
     categoryDraftSubtype(category, currentSubtype),
   );
+  const [editing, setEditing] = useState(Boolean(editSeed));
+  const [commandId, setCommandId] = useState(() => crypto.randomUUID());
+  const [title, setTitle] = useState(block.title);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
+  const [lockedConfirmed, setLockedConfirmed] = useState(false);
+
   useEffect(() => {
     setDraftCategory(category);
     setDraftSubtype(categoryDraftSubtype(category, currentSubtype));
-  }, [category, currentSubtype, occurrence.block.id]);
+  }, [category, currentSubtype, block.id]);
+
+  useEffect(() => {
+    const timezone = block.start_timezone ?? localTimeZone;
+    const start =
+      block.temporal_kind === "timed" && block.start_at
+        ? zonedParts(block.start_at, timezone)
+        : { date: block.start_date ?? "", time: "" };
+    const end =
+      block.temporal_kind === "timed" && block.end_at
+        ? zonedParts(block.end_at, timezone)
+        : { date: block.end_date ?? "", time: "" };
+    setTitle(block.title);
+    setStartDate(editSeed?.startDate ?? start.date);
+    setStartTime(editSeed?.startTime ?? start.time);
+    setEndDate(editSeed?.endDate ?? end.date);
+    setEndTime(editSeed?.endTime ?? end.time);
+    setLockedConfirmed(false);
+    setCommandId(crypto.randomUUID());
+    setEditing(Boolean(editSeed));
+  }, [
+    block.end_at,
+    block.end_date,
+    block.id,
+    block.start_at,
+    block.start_date,
+    block.start_timezone,
+    block.temporal_kind,
+    block.title,
+    editSeed,
+    localTimeZone,
+  ]);
+
   const draftSubtypes = calendarSubtypesFor(draftCategory);
   const hasCustomDraftSubtype =
     draftSubtype !== null &&
     !draftSubtypes.some((item) => item.value === draftSubtype);
   const categoryChanged =
     draftCategory !== category || draftSubtype !== currentSubtype;
+  const eligible =
+    block.provider_write_capability.eligible &&
+    block.provider_write_state === "synced" &&
+    block.recurrence_kind === "single";
+  const temporalValid =
+    block.temporal_kind === "all_day"
+      ? startDate.length === 10 && endDate > startDate
+      : Boolean(sourceTimeZone) &&
+        startDate.length === 10 &&
+        endDate.length === 10 &&
+        startTime.length === 5 &&
+        endTime.length === 5 &&
+        `${endDate}T${endTime}` > `${startDate}T${startTime}`;
+  const formValid =
+    title.trim().length > 0 &&
+    temporalValid &&
+    (block.flexibility !== "locked" || lockedConfirmed);
+
   return (
     <aside className="calendar-inspector" aria-label="Event details">
       <div className="calendar-inspector-heading">
-        <p className="eyebrow">Read-only event</p>
+        <p className="eyebrow">
+          {eligible ? "Google event" : "Read-only event"}
+        </p>
         <button
           className="quiet-button"
           type="button"
           aria-label="Close event details"
-          autoFocus
+          autoFocus={!editSeed}
           onClick={onClose}
+          disabled={editPending}
         >
           Close
         </button>
       </div>
-      <h2>{occurrence.block.title}</h2>
+      <h2>{block.title}</h2>
+
+      {editing && eligible ? (
+        <form
+          className="calendar-create-form calendar-edit-form"
+          aria-label="Edit Google event"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!formValid) return;
+            const editKind = editSeed?.editKind ?? "edit";
+            onEdit({
+              command_id: commandId,
+              calendar_block_id: block.id,
+              edit_kind: editKind,
+              expected_block_revision: block.revision,
+              title: editKind === "edit" ? title.trim() : null,
+              start_date: editKind === "resize" ? null : startDate,
+              end_date: editKind === "move" ? null : endDate,
+              start_time:
+                block.temporal_kind === "timed" && editKind !== "resize"
+                  ? startTime
+                  : null,
+              end_time:
+                block.temporal_kind === "timed" && editKind !== "move"
+                  ? endTime
+                  : null,
+              timezone: block.temporal_kind === "timed" ? sourceTimeZone : null,
+              locked_confirmed: lockedConfirmed,
+            });
+          }}
+        >
+          <p className="context-note">
+            {editSeed?.editKind === "move"
+              ? "Review the moved start. Duration is preserved by Ion."
+              : editSeed?.editKind === "resize"
+                ? "Review the resized end before saving."
+                : "Edit only the provider fields below."}
+          </p>
+          {editSeed?.editKind !== "move" && editSeed?.editKind !== "resize" ? (
+            <label>
+              <span>Title</span>
+              <input
+                autoFocus
+                value={title}
+                maxLength={512}
+                onChange={(event) => setTitle(event.currentTarget.value)}
+              />
+            </label>
+          ) : null}
+          <div className="calendar-create-time-row">
+            {editSeed?.editKind !== "resize" ? (
+              <label>
+                <span>Starts</span>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(event) => setStartDate(event.currentTarget.value)}
+                />
+              </label>
+            ) : null}
+            {editSeed?.editKind !== "move" ? (
+              <label>
+                <span>Ends</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(event) => setEndDate(event.currentTarget.value)}
+                />
+              </label>
+            ) : null}
+          </div>
+          {block.temporal_kind === "timed" ? (
+            <>
+              <div className="calendar-create-time-row">
+                {editSeed?.editKind !== "resize" ? (
+                  <label>
+                    <span>Start time</span>
+                    <input
+                      type="time"
+                      value={startTime}
+                      onChange={(event) =>
+                        setStartTime(event.currentTarget.value)
+                      }
+                    />
+                  </label>
+                ) : null}
+                {editSeed?.editKind !== "move" ? (
+                  <label>
+                    <span>End time</span>
+                    <input
+                      type="time"
+                      value={endTime}
+                      onChange={(event) =>
+                        setEndTime(event.currentTarget.value)
+                      }
+                    />
+                  </label>
+                ) : null}
+              </div>
+              <small>Timezone preserved: {sourceTimeZone}</small>
+            </>
+          ) : (
+            <small>All-day end dates remain civil and end-exclusive.</small>
+          )}
+          {block.flexibility === "locked" ? (
+            <label className="calendar-create-check">
+              <input
+                type="checkbox"
+                checked={lockedConfirmed}
+                onChange={(event) =>
+                  setLockedConfirmed(event.currentTarget.checked)
+                }
+              />
+              <span>I confirm changing this Ion-locked event.</span>
+            </label>
+          ) : null}
+          <p className="context-note">
+            Save commits durable local intent first. Google is contacted only
+            after that transaction, using the last confirmed version.
+          </p>
+          <div className="calendar-create-actions">
+            <button
+              className="quiet-button"
+              type="button"
+              onClick={() => setEditing(false)}
+              disabled={editPending}
+            >
+              Cancel
+            </button>
+            <button type="submit" disabled={!formValid || editPending}>
+              {editPending ? "Saving…" : "Save change"}
+            </button>
+          </div>
+        </form>
+      ) : eligible ? (
+        <button type="button" onClick={() => setEditing(true)}>
+          Edit event
+        </button>
+      ) : (
+        <p className="context-note">
+          {readOnlyReason[block.provider_write_capability.reason] ??
+            "This event is not eligible for provider changes."}
+        </p>
+      )}
+
       <label className="calendar-category-editor">
         <span>Ion category</span>
         <select
-          aria-label={`${occurrence.block.title} Ion category`}
+          aria-label={`${block.title} Ion category`}
           value={draftCategory ?? ""}
           disabled={categoryPending}
           onChange={(event) => {
@@ -135,7 +384,7 @@ export function CalendarInspector({
         </select>
         {draftCategory && draftSubtypes.length > 0 ? (
           <select
-            aria-label={`${occurrence.block.title} Ion category subtype`}
+            aria-label={`${block.title} Ion category subtype`}
             value={draftSubtype ?? draftSubtypes[0].value}
             disabled={categoryPending}
             onChange={(event) => setDraftSubtype(event.currentTarget.value)}
@@ -202,10 +451,10 @@ export function CalendarInspector({
             </small>
           </dd>
         </div>
-        {occurrence.block.location ? (
+        {block.location ? (
           <div>
             <dt>Location</dt>
-            <dd>{occurrence.block.location}</dd>
+            <dd>{block.location}</dd>
           </div>
         ) : null}
         <div>
@@ -224,8 +473,8 @@ export function CalendarInspector({
         <div>
           <dt>Calendar state</dt>
           <dd>
-            {occurrence.block.status}
-            {occurrence.block.transparency === "transparent"
+            {block.status}
+            {block.transparency === "transparent"
               ? " · does not mark time busy"
               : " · occupies calendar time"}
           </dd>
@@ -234,25 +483,27 @@ export function CalendarInspector({
           <dt>Google write state</dt>
           <dd>
             {providerWriteLabel(
-              occurrence.block.provider_write_state,
-              occurrence.block.provider_write_detail,
+              block.provider_write_state,
+              block.provider_write_detail,
             )}
             <small>
-              Ion never retries by creating a different provider identity.
+              Provider changes use the confirmed event identity and version.
             </small>
           </dd>
         </div>
       </dl>
-      {occurrence.block.description ? (
+      {block.description ? (
         <section>
           <h3>Description</h3>
-          <p>{occurrence.block.description}</p>
+          <p>{block.description}</p>
         </section>
       ) : null}
-      <p className="context-note">
-        Provider event fields are view-only. This inspector cannot edit, move,
-        resize, or delete them; only Ion-owned category metadata can change.
-      </p>
+      {block.provider_write_state === "conflict" ? (
+        <p className="context-note">
+          Google changed this event elsewhere. Your bounded Ion intent remains
+          stored for later conflict review; Ion did not overwrite either side.
+        </p>
+      ) : null}
     </aside>
   );
 }

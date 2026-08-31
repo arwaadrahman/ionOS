@@ -4,11 +4,13 @@ import {
   useMemo,
   useRef,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type PointerEvent,
 } from "react";
 import {
   CalendarCreateSeed,
   CalendarDensity,
+  CalendarEditSeed,
   calendarDensityHeights,
 } from "./calendar";
 import {
@@ -47,6 +49,7 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
   density,
   onSelect,
   onCreate,
+  onEditSeed,
 }: {
   range: CalendarRange;
   occurrences: CalendarOccurrence[];
@@ -56,10 +59,15 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
   density: CalendarDensity;
   onSelect(occurrence: CalendarOccurrence): void;
   onCreate(seed: CalendarCreateSeed): void;
+  onEditSeed(occurrence: CalendarOccurrence, seed: CalendarEditSeed): void;
 }) {
   const hourHeight = calendarDensityHeights[density];
   const grid = useRef<HTMLElement>(null);
   const dragStart = useRef<{ date: string; minute: number } | null>(null);
+  const editDrag = useRef<{
+    occurrence: CalendarOccurrence;
+    kind: "move" | "resize";
+  } | null>(null);
   useEffect(() => {
     const stage = grid.current?.closest<HTMLElement>(".calendar-stage");
     if (stage) stage.scrollTop = 7 * hourHeight;
@@ -81,6 +89,16 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
     const bounds = event.currentTarget.getBoundingClientRect();
     const raw = ((event.clientY - bounds.top) / bounds.height) * 24 * 60;
     return Math.max(0, Math.min(23 * 60 + 45, Math.round(raw / 15) * 15));
+  };
+  const minuteAtDrop = (event: ReactDragEvent<HTMLElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const raw = ((event.clientY - bounds.top) / bounds.height) * 24 * 60;
+    return Math.max(0, Math.min(23 * 60 + 45, Math.round(raw / 15) * 15));
+  };
+  const addCivilDays = (value: string, amount: number) => {
+    const next = new Date(`${value}T12:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + amount);
+    return next.toISOString().slice(0, 10);
   };
   const finishCreate = (date: string, start: number, finish: number) => {
     const first = Math.min(start, finish);
@@ -169,6 +187,43 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
               <div
                 className={`calendar-time-column ${date === today ? "is-today" : ""}`}
                 key={date}
+                data-calendar-date={date}
+                onDragOver={(event) => {
+                  if (!editDrag.current) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={(event) => {
+                  const edit = editDrag.current;
+                  editDrag.current = null;
+                  if (!edit) return;
+                  event.preventDefault();
+                  const minute = minuteAtDrop(event);
+                  if (edit.kind === "move") {
+                    const duration = Math.max(
+                      15,
+                      Math.round(
+                        ((edit.occurrence.end?.valueOf() ?? 0) -
+                          (edit.occurrence.start?.valueOf() ?? 0)) /
+                          60_000,
+                      ),
+                    );
+                    const endMinute = minute + duration;
+                    onEditSeed(edit.occurrence, {
+                      editKind: "move",
+                      startDate: date,
+                      startTime: clockTime(minute),
+                      endDate: addCivilDays(date, Math.floor(endMinute / 1440)),
+                      endTime: clockTime(endMinute % 1440),
+                    });
+                  } else {
+                    onEditSeed(edit.occurrence, {
+                      editKind: "resize",
+                      endDate: date,
+                      endTime: clockTime(minute),
+                    });
+                  }
+                }}
               >
                 <button
                   className="calendar-time-create-target"
@@ -230,7 +285,46 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
                         localTimeZone={localTimeZone}
                         detail={detail}
                         onSelect={onSelect}
+                        draggable={
+                          segment.occurrence.block.provider_write_capability
+                            .eligible &&
+                          segment.occurrence.block.provider_write_state ===
+                            "synced" &&
+                          segment.occurrence.block.recurrence_kind ===
+                            "single" &&
+                          segment.occurrence.block.start_timezone ===
+                            localTimeZone
+                        }
+                        onDragStart={() => {
+                          editDrag.current = {
+                            occurrence: segment.occurrence,
+                            kind: "move",
+                          };
+                        }}
                       />
+                      {segment.occurrence.block.provider_write_capability
+                        .eligible &&
+                      segment.occurrence.block.provider_write_state ===
+                        "synced" &&
+                      segment.occurrence.block.recurrence_kind === "single" &&
+                      segment.occurrence.block.start_timezone ===
+                        localTimeZone ? (
+                        <button
+                          type="button"
+                          draggable
+                          className="calendar-event-resize-handle"
+                          aria-label={`Resize ${segment.occurrence.block.title}`}
+                          title="Drag to resize"
+                          onClick={(event) => event.stopPropagation()}
+                          onDragStart={(event) => {
+                            event.stopPropagation();
+                            editDrag.current = {
+                              occurrence: segment.occurrence,
+                              kind: "resize",
+                            };
+                          }}
+                        />
+                      ) : null}
                     </div>
                   );
                 })}
@@ -248,11 +342,15 @@ export const EventButton = memo(function EventButton({
   localTimeZone,
   detail,
   onSelect,
+  draggable = false,
+  onDragStart,
 }: {
   occurrence: CalendarOccurrence;
   localTimeZone: string;
   detail: "title" | "title-two-line" | "time" | "full";
   onSelect(occurrence: CalendarOccurrence): void;
+  draggable?: boolean;
+  onDragStart?(): void;
 }) {
   const color = categoryColor(
     occurrence.block.category,
@@ -274,6 +372,16 @@ export const EventButton = memo(function EventButton({
       aria-label={`${occurrence.block.title}, ${time}`}
       title={`${occurrence.block.title} · ${time}`}
       data-write-state={occurrence.block.provider_write_state}
+      draggable={draggable}
+      onDragStart={(event) => {
+        if (!draggable || !onDragStart) {
+          event.preventDefault();
+          return;
+        }
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", "ion-calendar-event");
+        onDragStart();
+      }}
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => {
         event.stopPropagation();

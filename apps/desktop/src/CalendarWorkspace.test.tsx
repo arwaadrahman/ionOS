@@ -5,6 +5,7 @@ import { useState } from "react";
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -1411,6 +1412,213 @@ test("confirms a local-first attendee-free timed create with an eligible calenda
   );
   expect(
     await screen.findByText(/saved locally and pending Google confirmation/i),
+  ).toBeInTheDocument();
+});
+
+function writableStatus(blocks: CalendarBlock[]): CalendarStatus {
+  return {
+    ...connected,
+    accounts: [
+      {
+        ...account,
+        calendar_write_scope_state: "write_granted",
+      },
+    ],
+    calendars: [
+      {
+        ...calendar,
+        timezone: "UTC",
+        provider_write_eligible: true,
+        provider_write_reason: "eligible",
+      },
+    ],
+    blocks,
+  };
+}
+
+test("edits an eligible title through explicit save and preserves locked confirmation", async () => {
+  const editable = block(
+    "55555555-5555-4555-8555-555555555555",
+    "Synthetic editable event",
+    {
+      provider_write_capability: { eligible: true, reason: "eligible" },
+    },
+  );
+  const writable = writableStatus([editable]);
+  vi.mocked(invoke).mockResolvedValue({
+    ...writable,
+    blocks: [
+      {
+        ...editable,
+        title: "Synthetic revised event",
+        provider_write_capability: {
+          eligible: false,
+          reason: "write_pending",
+        },
+        provider_write_state: "pending",
+        provider_write_detail: "ready",
+      },
+    ],
+  });
+  render(
+    <CalendarWorkspace
+      status={writable}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+
+  fireEvent.click(
+    screen.getByRole("button", { name: /^Synthetic editable event,/ }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Edit event" }));
+  fireEvent.change(screen.getByLabelText("Title"), {
+    target: { value: "Synthetic revised event" },
+  });
+  const save = screen.getByRole("button", { name: "Save change" });
+  expect(save).toBeDisabled();
+  fireEvent.click(
+    screen.getByRole("checkbox", {
+      name: /confirm changing this Ion-locked event/i,
+    }),
+  );
+  expect(save).toBeEnabled();
+  fireEvent.click(save);
+
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("edit_google_calendar_event", {
+      draft: {
+        command_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        calendar_block_id: editable.id,
+        edit_kind: "edit",
+        expected_block_revision: 1,
+        title: "Synthetic revised event",
+        start_date: "2030-01-02",
+        end_date: "2030-01-02",
+        start_time: "09:00",
+        end_time: "10:00",
+        timezone: "UTC",
+        locked_confirmed: true,
+      },
+    }),
+  );
+  expect(
+    await screen.findByText(/saved locally and pending Google confirmation/i),
+  ).toBeInTheDocument();
+});
+
+test("drag move and end resize open a review surface without pointer-time provider calls", () => {
+  const editable = block(
+    "66666666-6666-4666-8666-666666666666",
+    "Synthetic draggable event",
+    {
+      flexibility: "flexible",
+      provider_write_capability: { eligible: true, reason: "eligible" },
+    },
+  );
+  const { container } = render(
+    <CalendarWorkspace
+      status={writableStatus([editable])}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  const transfer = {
+    effectAllowed: "none",
+    dropEffect: "none",
+    setData: vi.fn(),
+  };
+  const eventButton = screen.getByRole("button", {
+    name: /^Synthetic draggable event,/,
+  });
+  const target = container.querySelector<HTMLElement>(
+    '.calendar-time-column[data-calendar-date="2030-01-03"]',
+  )!;
+  vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+    top: 0,
+    bottom: 1440,
+    left: 0,
+    right: 100,
+    width: 100,
+    height: 1440,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  });
+  fireEvent.dragStart(eventButton, { dataTransfer: transfer });
+  const moveDrop = createEvent.drop(target, { dataTransfer: transfer });
+  Object.defineProperty(moveDrop, "clientY", { value: 13 * 60 });
+  fireEvent(target, moveDrop);
+  expect(screen.getByText(/Review the moved start/i)).toBeInTheDocument();
+  expect(invoke).not.toHaveBeenCalledWith(
+    "edit_google_calendar_event",
+    expect.anything(),
+  );
+  expect(screen.getByLabelText("Starts")).toHaveValue("2030-01-03");
+  expect(screen.getByLabelText("Start time")).toHaveValue("13:00");
+
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: /^Synthetic draggable event,/ }),
+  );
+  const resize = screen.getByRole("button", {
+    name: "Resize Synthetic draggable event",
+  });
+  const sameDay = container.querySelector<HTMLElement>(
+    '.calendar-time-column[data-calendar-date="2030-01-02"]',
+  )!;
+  vi.spyOn(sameDay, "getBoundingClientRect").mockReturnValue({
+    top: 0,
+    bottom: 1440,
+    left: 0,
+    right: 100,
+    width: 100,
+    height: 1440,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  });
+  fireEvent.dragStart(resize, { dataTransfer: transfer });
+  const resizeDrop = createEvent.drop(sameDay, { dataTransfer: transfer });
+  Object.defineProperty(resizeDrop, "clientY", { value: 11 * 60 });
+  fireEvent(sameDay, resizeDrop);
+  expect(screen.getByText(/Review the resized end/i)).toBeInTheDocument();
+  expect(screen.getByLabelText("End time")).toHaveValue("11:00");
+  expect(invoke).not.toHaveBeenCalledWith(
+    "edit_google_calendar_event",
+    expect.anything(),
+  );
+});
+
+test("keeps attendee and recurring events visibly read-only", () => {
+  const attendee = block(
+    "77777777-7777-4777-8777-777777777770",
+    "Synthetic attendee event",
+    {
+      provider_write_capability: {
+        eligible: false,
+        reason: "attendees_present",
+      },
+    },
+  );
+  render(
+    <CalendarWorkspace
+      status={writableStatus([attendee])}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: /Synthetic attendee event/ }),
+  );
+  expect(
+    screen.queryByRole("button", { name: "Edit event" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByText(/Events with attendees remain read-only/i),
   ).toBeInTheDocument();
 });
 

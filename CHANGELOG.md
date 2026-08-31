@@ -23,6 +23,16 @@ All notable repository changes are documented here.
 
 ### Added
 
+- Phase 2C-3 Google Calendar edit, move, and resize: explicit-save inspector
+  editing, direct timed drag/resize review, atomic durable desired overlays,
+  changed-field-only `events.patch` with exact non-wildcard `If-Match`, bounded
+  ambiguity lookup, restart-safe retry, provider-refresh drift conflicts,
+  locked-event confirmation, civil all-day editing, and truthful pending,
+  syncing, reauthentication, failure, and conflict UI. Migration `0007`
+  remains sufficient; delete, recurring writes, timed/all-day conversion,
+  attendee/provider-managed writes, and non-patch mutation methods remain
+  unavailable.
+
 - Owner-directed product/roadmap documentation checkpoint: canonical Ion Tasks
   remain primary while Google Tasks is optional/deferred; future
   Aspirations/readiness and cross-cutting evidence-backed Skills are recorded

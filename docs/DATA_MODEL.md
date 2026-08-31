@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phase 2C-2 local-first create over the accepted Phase 2C-1 durable write
+**Phase 2C-3 local-first edit/move/resize over the accepted Phase 2C-1 durable write
 foundation; owner real-write acceptance pending.** The organizer schema begins in
 `0002_organizer_foundation`; `0003_milestone_ordering` adds canonical
 owner-scoped positions to Goal and Project Milestones, and
@@ -124,6 +124,13 @@ plus extensible subtype; existing rows migrate to visible and uncategorized.
   direct-human command ID, create intent, and compact audit evidence. Provider
   confirmation promotes the same link and block; it never creates a parallel
   event owner.
+- Phase 2C-3 also requires no migration. The confirmed provider fields and
+  last confirmed non-wildcard ETag remain the base while an unresolved outbox
+  row stores only the bounded desired title/temporal overlay and changed-field
+  mask. Pending projections apply that overlay without discarding the base.
+  Reconciliation either promotes a matching sanitized provider event or keeps
+  both base and intent as explicit conflict evidence; it never performs
+  last-write-wins.
 
 See [Architecture](ARCHITECTURE.md) and ADR
 [0001](decisions/0001-local-first-data-ownership.md), plus accepted ADR

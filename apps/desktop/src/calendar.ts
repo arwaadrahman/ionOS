@@ -167,7 +167,9 @@ export type ProviderWriteCapability = {
     | "provider_locked"
     | "attendees_present"
     | "provider_deleted"
-    | "provider_unconfirmed";
+    | "provider_unconfirmed"
+    | "recurrence_unsupported"
+    | "write_pending";
 };
 
 export type GoogleCalendar = {
@@ -263,6 +265,30 @@ export type CalendarCreateDraft = {
   timezone: string | null;
 };
 
+export type CalendarEditKind = "edit" | "move" | "resize";
+
+export type CalendarEditSeed = {
+  editKind: CalendarEditKind;
+  startDate?: string;
+  startTime?: string;
+  endDate?: string;
+  endTime?: string;
+};
+
+export type CalendarEditDraft = {
+  command_id: string;
+  calendar_block_id: string;
+  edit_kind: CalendarEditKind;
+  expected_block_revision: number;
+  title: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  timezone: string | null;
+  locked_confirmed: boolean;
+};
+
 export type CalendarBlock = {
   id: string;
   calendar_id: string;
@@ -350,6 +376,8 @@ export const googleCalendarClient = {
     }),
   create: (draft: CalendarCreateDraft) =>
     invoke<CalendarStatus>("create_google_calendar_event", { draft }),
+  edit: (draft: CalendarEditDraft) =>
+    invoke<CalendarStatus>("edit_google_calendar_event", { draft }),
   setEnabled: (calendar: GoogleCalendar, enabled: boolean) =>
     invoke<CalendarStatus>("set_google_calendar_enabled", {
       calendarId: calendar.id,

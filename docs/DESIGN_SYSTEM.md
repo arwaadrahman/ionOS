@@ -100,11 +100,14 @@ The package is not yet implemented as a standalone design-system package.
   dump. Overflow should be disclosed cleanly, with full detail available through
   interaction.
 
-- Event details should remain keyboard-focusable and accessible through a
-  provider-field read-only inspector. Phase 2C-2 adds a separate compact,
-  local-first create surface and explicit account capability state; existing
-  Google events remain view-only. Ion-owned presentation metadata may be
-  edited locally where explicitly supported.
+- Event details remain keyboard-focusable and accessible through one inspector.
+  Phase 2C-2 adds a compact local-first create surface and explicit account
+  capability state. Phase 2C-3 adds explicit-save title/date/time editing for
+  eligible events plus direct timed move/resize gestures that open the same
+  review surface before any provider call. Pending, syncing, retry,
+  reauthentication, failure, and conflict states use calm truthful copy;
+  ineligible Google events remain inspectable with a reason. Ion-owned
+  presentation metadata remains independently editable where supported.
 
 ## Motion ownership ladder
 

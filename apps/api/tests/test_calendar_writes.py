@@ -24,11 +24,13 @@ from ion_api.calendar_contracts import (
 from ion_api.calendar_write_contracts import (
     BeginWriteAttemptInput,
     CreateProviderEventInput,
+    EditProviderEventInput,
     ProviderWriteValues,
     PruneWriteIntentsInput,
     QueueProviderWriteIntentInput,
     ReadyWriteIntentsInput,
     ReconcileProviderCreateInput,
+    ReconcileProviderPatchInput,
     RecordProviderWriteResultInput,
     RecoverWriteIntentsInput,
     WriteIntentTransitionInput,
@@ -43,6 +45,7 @@ from ion_api.main import create_production_app
 from ion_api.migrations import upgrade_to_head
 from ion_api.schema import (
     audit_events,
+    calendar_block_ion_metadata,
     calendar_blocks,
     calendar_provider_write_audit,
     calendar_provider_write_intents,
@@ -154,6 +157,19 @@ def _create(writes, calendar, *, command_id=None, **overrides):
     }
     values.update(overrides)
     return writes.create(CreateProviderEventInput(**values))
+
+
+def _edit(writes, block, *, command_id=None, **overrides):
+    values = {
+        "command_id": command_id or str(uuid4()),
+        "calendar_block_id": block.id,
+        "edit_kind": "edit",
+        "expected_block_revision": block.revision,
+        "title": "Synthetic revised title",
+        "locked_confirmed": True,
+    }
+    values.update(overrides)
+    return writes.edit(EditProviderEventInput(**values))
 
 
 def test_deterministic_google_event_id_is_stable_160_bit_base32hex():
@@ -454,6 +470,7 @@ def test_capability_is_backend_derived_and_existing_read_grants_stay_read_only(
         ({"has_attendees": True}, "attendees_present"),
         ({"provider_locked": True}, "provider_locked"),
         ({"provider_event_type": "special"}, "special_event"),
+        ({"recurrence": ["RRULE:FREQ=DAILY"]}, "recurrence_unsupported"),
     ],
 )
 def test_provider_event_capability_rejects_unsafe_event_classes(
@@ -464,7 +481,20 @@ def test_provider_event_capability_rejects_unsafe_event_classes(
     assert projected.provider_write_capability.eligible is False
     assert projected.provider_write_capability.reason == reason
     with pytest.raises(CalendarValidationError, match=reason):
-        _queue(writes, block)
+        _edit(writes, block)
+
+
+def test_ion_locked_event_requires_explicit_confirmation(tmp_path):
+    engine, _, writes, block = _connected(tmp_path)
+    with engine.begin() as connection:
+        connection.execute(
+            update(calendar_block_ion_metadata)
+            .where(calendar_block_ion_metadata.c.calendar_block_id == block.id)
+            .values(flexibility="locked")
+        )
+    with pytest.raises(CalendarValidationError, match="locked_confirmation_required"):
+        _edit(writes, block, locked_confirmed=False)
+    assert _edit(writes, block, locked_confirmed=True).state == "ready"
 
 
 @pytest.mark.parametrize(
@@ -610,6 +640,384 @@ def test_invalid_transitions_attempt_ceiling_terminal_durability_and_pruning(tmp
         )
 
 
+def test_local_first_title_edit_overlays_confirmed_base_and_reconciles_patch(tmp_path):
+    engine, calendar, writes, block = _connected(tmp_path)
+    intent = _edit(writes, block)
+    assert intent.state == "ready"
+    projected = calendar.status().blocks[0]
+    assert projected.title == "Synthetic revised title"
+    assert projected.provider_write_state == "pending"
+    assert projected.provider_write_detail == "ready"
+    assert projected.provider_write_capability.reason == "write_pending"
+
+    plan = writes.ready(ReadyWriteIntentsInput())[0]
+    assert plan.changed_fields == ["title"]
+    assert plan.base_values == ProviderWriteValues(title="Synthetic event title")
+    assert plan.desired_values == ProviderWriteValues(title="Synthetic revised title")
+    assert plan.expected_provider_etag == '"synthetic-etag"'
+    with engine.connect() as connection:
+        assert (
+            connection.execute(
+                select(calendar_blocks.c.title).where(calendar_blocks.c.id == block.id)
+            ).scalar_one()
+            == "Synthetic event title"
+        )
+
+    writes.begin_attempt(
+        intent.id,
+        BeginWriteAttemptInput(
+            expected_state="ready", executor_provenance="direct_human"
+        ),
+    )
+    completed = writes.reconcile_patch(
+        intent.id,
+        ReconcileProviderPatchInput(
+            resolution_kind="patch_response",
+            event=ProviderEventInput(
+                provider_event_id="synthetic-provider-event",
+                provider_etag='"synthetic-etag-v2"',
+                title="Synthetic revised title",
+                start=ProviderDateTime(
+                    date_time="2030-01-01T09:00:00-08:00",
+                    timezone="America/Los_Angeles",
+                ),
+                end=ProviderDateTime(
+                    date_time="2030-01-01T10:00:00-08:00",
+                    timezone="America/Los_Angeles",
+                ),
+            ),
+        ),
+    )
+    assert completed.state == "completed"
+    confirmed = calendar.status().blocks[0]
+    assert confirmed.title == "Synthetic revised title"
+    assert confirmed.provider_write_state == "synced"
+    with engine.connect() as connection:
+        canonical_actions = (
+            connection.execute(
+                select(audit_events.c.action).where(
+                    audit_events.c.entity_id == block.id
+                )
+            )
+            .scalars()
+            .all()
+        )
+        compact = connection.execute(
+            select(calendar_provider_write_audit).where(
+                calendar_provider_write_audit.c.intent_id == intent.id
+            )
+        ).all()
+    assert "edit_requested" in canonical_actions
+    assert "provider_patch_confirmed" in canonical_actions
+    assert [row.action for row in compact] == [
+        "write_intent_queued",
+        "write_intent_ready",
+        "write_attempt_started",
+        "write_completed",
+    ]
+    assert "Synthetic revised title" not in json.dumps(
+        [row._asdict() for row in compact]
+    )
+
+
+def test_timed_edit_move_and_resize_normalize_only_changed_fields(tmp_path):
+    _, calendar, writes, block = _connected(tmp_path)
+    edited = _edit(
+        writes,
+        block,
+        title="Synthetic event title",
+        start_date="2030-01-01",
+        end_date="2030-01-01",
+        start_time="10:00",
+        end_time="11:30",
+        timezone="America/Los_Angeles",
+    )
+    edit_plan = writes.ready(ReadyWriteIntentsInput())[0]
+    assert edit_plan.id == edited.id
+    assert edit_plan.changed_fields == ["temporal"]
+    assert edit_plan.desired_values.start == ProviderDateTime(
+        date_time="2030-01-01T10:00:00-08:00",
+        timezone="America/Los_Angeles",
+    )
+    assert edit_plan.desired_values.end == ProviderDateTime(
+        date_time="2030-01-01T11:30:00-08:00",
+        timezone="America/Los_Angeles",
+    )
+
+    second_engine, _, second_writes, second_block = _connected(tmp_path)
+    moved = _edit(
+        second_writes,
+        second_block,
+        edit_kind="move",
+        title=None,
+        start_date="2030-01-02",
+        start_time="13:15",
+        timezone="America/Los_Angeles",
+    )
+    move_plan = second_writes.ready(ReadyWriteIntentsInput())[0]
+    assert move_plan.id == moved.id
+    assert move_plan.desired_values.start.date_time == "2030-01-02T13:15:00-08:00"
+    assert move_plan.desired_values.end.date_time == "2030-01-02T14:15:00-08:00"
+    with second_engine.connect() as connection:
+        assert (
+            "move_requested"
+            in connection.execute(
+                select(audit_events.c.action).where(
+                    audit_events.c.entity_id == second_block.id
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    _, _, third_writes, third_block = _connected(tmp_path)
+    resized = _edit(
+        third_writes,
+        third_block,
+        edit_kind="resize",
+        title=None,
+        end_date="2030-01-01",
+        end_time="11:45",
+        timezone="America/Los_Angeles",
+    )
+    resize_plan = third_writes.ready(ReadyWriteIntentsInput())[0]
+    assert resize_plan.id == resized.id
+    assert resize_plan.desired_values.end.date_time == "2030-01-01T11:45:00-08:00"
+
+
+def test_edit_rejects_invalid_duration_dst_timezone_conversion_and_unconfirmed_etag(
+    tmp_path,
+):
+    engine, _, writes, block = _connected(tmp_path)
+    with pytest.raises(CalendarValidationError, match="after start"):
+        _edit(
+            writes,
+            block,
+            title="Synthetic event title",
+            start_date="2030-01-01",
+            end_date="2030-01-01",
+            start_time="10:00",
+            end_time="09:00",
+            timezone="America/Los_Angeles",
+        )
+    with pytest.raises(CalendarValidationError, match="skipped DST"):
+        _edit(
+            writes,
+            block,
+            title="Synthetic event title",
+            start_date="2030-03-10",
+            end_date="2030-03-10",
+            start_time="02:15",
+            end_time="03:15",
+            timezone="America/Los_Angeles",
+        )
+    with pytest.raises(CalendarValidationError, match="ambiguous"):
+        _edit(
+            writes,
+            block,
+            title="Synthetic event title",
+            start_date="2030-11-03",
+            end_date="2030-11-03",
+            start_time="01:15",
+            end_time="02:15",
+            timezone="America/Los_Angeles",
+        )
+    with pytest.raises(CalendarValidationError, match="preserve"):
+        _edit(
+            writes,
+            block,
+            title="Synthetic event title",
+            start_date="2030-01-01",
+            end_date="2030-01-01",
+            start_time="10:00",
+            end_time="11:00",
+            timezone="UTC",
+        )
+    with engine.begin() as connection:
+        connection.execute(update(google_event_links).values(provider_etag="*"))
+    assert _connected  # keep the synthetic fixture visibly local-only
+    with pytest.raises(CalendarValidationError, match="provider_unconfirmed"):
+        _edit(writes, block)
+
+
+def test_all_day_edit_preserves_civil_end_exclusive_dates(tmp_path):
+    _, calendar, writes, block = _connected(
+        tmp_path,
+        event_overrides={
+            "start": ProviderDateTime(date="2030-02-14"),
+            "end": ProviderDateTime(date="2030-02-15"),
+        },
+    )
+    intent = _edit(
+        writes,
+        block,
+        title="Synthetic all-day revised",
+        start_date="2030-02-15",
+        end_date="2030-02-17",
+    )
+    plan = writes.ready(ReadyWriteIntentsInput())[0]
+    assert plan.id == intent.id
+    assert plan.desired_values.start == ProviderDateTime(date="2030-02-15")
+    assert plan.desired_values.end == ProviderDateTime(date="2030-02-17")
+    projected = calendar.status().blocks[0]
+    assert projected.start_date == "2030-02-15"
+    assert projected.end_date == "2030-02-17"
+    assert projected.start_at is None
+
+
+@pytest.mark.parametrize(
+    ("result_class", "expected_state"),
+    [
+        ("reauthentication_required", "reauth_required"),
+        ("terminal_provider_rejection", "failed"),
+        ("provider_not_found", "conflict"),
+        ("stale_precondition", "conflict"),
+        ("retryable_quota", "retry_wait"),
+        ("retryable_backend", "retry_wait"),
+    ],
+)
+def test_patch_failure_classes_are_durable_and_conflicts_do_not_retry(
+    tmp_path, result_class, expected_state
+):
+    _, _, writes, block = _connected(tmp_path)
+    writes.random_fraction = lambda: 0.5
+    intent = _edit(writes, block)
+    writes.begin_attempt(
+        intent.id,
+        BeginWriteAttemptInput(
+            expected_state="ready", executor_provenance="direct_human"
+        ),
+    )
+    result = writes.record_result(
+        intent.id,
+        RecordProviderWriteResultInput(
+            stage="patch",
+            result_class=result_class,
+            safe_reason="synthetic_safe_reason",
+        ),
+    )
+    assert result.state == expected_state
+    if expected_state == "retry_wait":
+        assert result.next_attempt_at is not None
+    else:
+        assert result.next_attempt_at is None
+
+
+def test_offline_restart_and_ambiguous_patch_lookup_preserve_intent(tmp_path):
+    engine, calendar, writes, block = _connected(tmp_path)
+    intent = _edit(writes, block)
+    restarted = CalendarWriteService(engine)
+    assert restarted.ready(ReadyWriteIntentsInput())[0].id == intent.id
+    restarted.begin_attempt(
+        intent.id,
+        BeginWriteAttemptInput(expected_state="ready", executor_provenance="recovery"),
+    )
+    assert restarted.recover(RecoverWriteIntentsInput()).attempting_to_ambiguous == 1
+    ambiguous = restarted.ready(ReadyWriteIntentsInput())[0]
+    assert ambiguous.state == "ambiguous"
+    restarted.begin_attempt(
+        intent.id,
+        BeginWriteAttemptInput(
+            expected_state="ambiguous", executor_provenance="recovery"
+        ),
+    )
+    completed = restarted.reconcile_patch(
+        intent.id,
+        ReconcileProviderPatchInput(
+            resolution_kind="identity_lookup",
+            event=ProviderEventInput(
+                provider_event_id="synthetic-provider-event",
+                provider_etag='"synthetic-etag-v2"',
+                title="Synthetic revised title",
+                start=ProviderDateTime(
+                    date_time="2030-01-01T09:00:00-08:00",
+                    timezone="America/Los_Angeles",
+                ),
+                end=ProviderDateTime(
+                    date_time="2030-01-01T10:00:00-08:00",
+                    timezone="America/Los_Angeles",
+                ),
+            ),
+        ),
+    )
+    assert completed.state == "completed"
+    assert calendar.status().blocks[0].provider_write_state == "synced"
+
+
+def test_provider_refresh_preserves_pending_overlay_and_detects_etag_drift(tmp_path):
+    engine, calendar, writes, block = _connected(tmp_path)
+    intent = _edit(writes, block)
+    calendar_id = calendar.status().calendars[0].id
+    generation = str(uuid4())
+    calendar.begin_sync(
+        calendar_id, SyncBeginInput(generation=generation, mode="incremental")
+    )
+    calendar.apply_sync_page(
+        calendar_id,
+        SyncPageInput(
+            generation=generation,
+            events=[
+                ProviderEventInput(
+                    provider_event_id="synthetic-provider-event",
+                    provider_etag='"synthetic-etag-v2"',
+                    title="Synthetic provider-side title",
+                    start=ProviderDateTime(
+                        date_time="2030-01-01T09:00:00-08:00",
+                        timezone="America/Los_Angeles",
+                    ),
+                    end=ProviderDateTime(
+                        date_time="2030-01-01T10:00:00-08:00",
+                        timezone="America/Los_Angeles",
+                    ),
+                )
+            ],
+        ),
+    )
+    status = calendar.status().blocks[0]
+    assert status.title == "Synthetic provider-side title"
+    assert status.provider_write_state == "conflict"
+    with engine.connect() as connection:
+        stored = connection.execute(
+            select(calendar_provider_write_intents).where(
+                calendar_provider_write_intents.c.id == intent.id
+            )
+        ).one()
+    assert json.loads(stored.desired_values_json)["title"] == "Synthetic revised title"
+    assert stored.state == "conflict"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("calendar_read_only", "access_role_read_only"),
+        ("calendar_deleted", "calendar_deleted"),
+        ("account_read_only", "account_read_only"),
+    ],
+)
+def test_patch_dispatch_rechecks_capability_loss(tmp_path, mutation, reason):
+    engine, _, writes, block = _connected(tmp_path)
+    intent = _edit(writes, block)
+    with engine.begin() as connection:
+        if mutation == "calendar_read_only":
+            connection.execute(update(google_calendars).values(access_role="reader"))
+        elif mutation == "calendar_deleted":
+            connection.execute(
+                update(google_calendars).values(
+                    provider_deleted=True, enabled_in_ion=False
+                )
+            )
+        else:
+            connection.execute(
+                update(google_accounts).values(calendar_write_scope_state="read_only")
+            )
+    blocked = writes.begin_attempt(
+        intent.id,
+        BeginWriteAttemptInput(expected_state="ready", executor_provenance="recovery"),
+    )
+    assert blocked.state == "failed"
+    assert blocked.failure_reason == reason
+
+
 def test_fixed_local_write_routes_are_authenticated_bounded_and_content_safe(tmp_path):
     token = "synthetic-session-token"
     headers = {"X-Ion-Session": token}
@@ -702,8 +1110,8 @@ def test_fixed_local_write_routes_are_authenticated_bounded_and_content_safe(tmp
         assert foundation.status_code == 200
         assert foundation.json()["blocks"][0] == {
             "calendar_block_id": block["id"],
-            "eligible": True,
-            "reason": "eligible",
+            "eligible": False,
+            "reason": "write_pending",
         }
         for forbidden in [
             "Synthetic private event title",

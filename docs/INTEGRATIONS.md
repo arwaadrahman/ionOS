@@ -1,6 +1,6 @@
 # Integration Boundaries
 
-## Status: Phase 2C-2 bounded Google Calendar create implemented
+## Status: Phase 2C-3 bounded Google Calendar edit/move/resize implemented
 
 Integrations are adapters around Ion's local authority; they do not become its
 primary storage. Google Calendar is the first active adapter under ADR 0018.
@@ -82,7 +82,7 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   fields. Google selection, subscription, visibility, and event content remain
   untouched.
 
-## Phase 2C accepted write contract and implemented 2C-2 create
+## Phase 2C accepted write contract through implemented 2C-3 edits
 
 - Accepted scopes: keep `calendar.calendarlist.readonly` and replace
   `calendar.events.readonly` with `calendar.events` only after deliberate
@@ -112,9 +112,17 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   only `events.insert`; ambiguous outcomes use `events.get` for the same
   deterministic event ID before any same-ID retry. Existing account sessions
   and the normal connect command remain read-only until explicit re-consent.
-- Exclusions: patch, update, move, delete, instances dispatch, recurrence,
+- Edit/move/resize: migration `0007` remains sufficient. A fixed edit command
+  persists the last confirmed provider base, the desired title/temporal
+  overlay, and its changed-field mask before dispatch. Rust sends only
+  `events.patch` with the persisted target and exact non-wildcard `If-Match`;
+  ambiguous outcomes use `events.get`. HTTP 412, refresh drift, missing events,
+  and capability loss stop as explicit conflicts rather than overwriting
+  Google. Timed move/resize preserve IANA timezone semantics; all-day edits use
+  civil exclusive-end dates. Timed/all-day conversion is deferred.
+- Exclusions: update, move, delete, batch, instances dispatch, recurrence,
   attendee, reminder, conferencing, attachment, and special-event writes are
-  not reachable from the Phase 2C-2 command or renderer.
+  not reachable from the Phase 2C-3 commands or renderer.
 
 See [ADR 0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md)
 and the [Phase 2C gate](phases/PHASE_2C.md).

@@ -1759,6 +1759,35 @@ h1 {
   background: var(--event-strong-fill);
 }
 
+.calendar-event[draggable="true"] {
+  cursor: grab;
+}
+
+.calendar-event[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.calendar-event-resize-handle {
+  position: absolute;
+  right: 0.3rem;
+  bottom: 0.12rem;
+  left: 0.3rem;
+  z-index: 3;
+  height: 0.34rem;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--event-accent) 70%, transparent);
+  cursor: ns-resize;
+  opacity: 0;
+}
+
+.calendar-timed-position:hover .calendar-event-resize-handle,
+.calendar-event-resize-handle:focus-visible {
+  opacity: 0.9;
+}
+
 .calendar-event strong,
 .calendar-event span,
 .calendar-event small {
@@ -1940,6 +1969,14 @@ h1 {
   margin: 1rem 0;
   font-size: 1.45rem;
   letter-spacing: -0.025em;
+}
+
+.calendar-edit-form {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border: 1px solid #3a3246;
+  border-radius: 0.6rem;
+  background: #15131b;
 }
 
 .calendar-category-editor {

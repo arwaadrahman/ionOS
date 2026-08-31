@@ -10,7 +10,7 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 2 — Calendar
-- **Milestone:** Phase 2C-2 idempotent Google Calendar create implemented;
+- **Milestone:** Phase 2C-3 Google Calendar edit, move, and resize implemented;
   owner real-write acceptance pending
 - **In scope:** a primary Calendar over cached canonical
   CalendarBlocks; Day, consecutive 3 Day, Monday-first Week, rolling Next 7
@@ -19,16 +19,20 @@ actions as authoritative.
   hide/restore;
   Ion-owned event categories, semantic colors/filters, adaptive event detail,
   local vertical density and pane-width responsive view selection; mutually
-  exclusive source/filter drawers; a provider-field read-only event inspector;
+  exclusive source/filter drawers; an event inspector with bounded editing;
   explicit account-scoped Calendar write re-consent; local-first creation of
-  ordinary attendee-free events in eligible calendars; and
+  ordinary attendee-free events plus explicit-save title/time edits and
+  direct-human timed move/resize review for eligible events; and
   truthful CalendarBlock occupancy/free gaps in Today.
 - **Write scope:** migration `0007` provides the durable typed outbox,
   safe capability evidence, deterministic create ID, retry/restart state,
   compact audit, and fixed local routes. Phase 2C-2 adds explicit write
-  re-consent plus `events.insert`/deterministic `events.get` reconciliation
-  only. Existing accounts remain read-only until re-consent.
-- **Out of scope:** Google event edit/move/resize/delete, Google Tasks bridge
+  re-consent plus `events.insert`/deterministic `events.get`; Phase 2C-3 adds
+  changed-field-only `events.patch` with exact `If-Match` and `events.get`
+  ambiguity reconciliation. Existing accounts remain read-only until
+  re-consent.
+- **Out of scope:** Google event delete, recurring-event writes, timed/all-day
+  conversion, cross-calendar move, Google Tasks bridge
   (optional/deferred; not active Phase 2D desktop-v1 work), Gmail,
   push/webhooks, attendee/reminder/recurrence/conferencing/attachment writes,
   Task auto-scheduling, AI, provider free/busy
@@ -71,8 +75,9 @@ recovery/history; Phase 1G adds a quiet native menu-bar presence and focused
 Task capture; Phase 1H hardens the complete Phase 1 flow. Phase 2A adds a
 restrained Calendar read-sync foundation. Phase 2B adds the primary read-only
 Calendar and truthful CalendarBlock occupancy in Today. Phase 2C-2 adds the
-first explicit, local-first create path while every later mutation, Task
-scheduling, Explore, semantic search, and AI remain deferred.
+first explicit, local-first create path; Phase 2C-3 adds bounded local-first
+edit, move, and resize while delete, recurrence writes, Task scheduling,
+Explore, semantic search, and AI remain deferred.
 
 Design/motion ladder: process guidance (`IMPECCABLE`, `EMIL-MOTION`); CSS for
 simple motion; Motion for React for normal stateful UI; Three.js only for a

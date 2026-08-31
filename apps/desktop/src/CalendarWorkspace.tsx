@@ -14,6 +14,8 @@ import {
   CalendarFilterCategory,
   CalendarCreateDraft,
   CalendarCreateSeed,
+  CalendarEditDraft,
+  CalendarEditSeed,
   calendarFilterCategories,
   calendarSubtypeDefinitions,
   asGoogleError,
@@ -104,6 +106,7 @@ export function CalendarWorkspace({
   >(() => calendarSubtypeDefinitions.map((item) => item.value));
   const [selected, setSelected] = useState<CalendarOccurrence | null>(null);
   const [createSeed, setCreateSeed] = useState<CalendarCreateSeed | null>(null);
+  const [editSeed, setEditSeed] = useState<CalendarEditSeed | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const stageRef = useRef<HTMLElement | null>(null);
@@ -247,7 +250,7 @@ export function CalendarWorkspace({
       try {
         onStatus(await googleCalendarClient.enableWrites(account));
         setFeedback(
-          "Calendar writing is enabled for this account. Existing events remain view-only.",
+          "Calendar writing is enabled for eligible attendee-free events in this account.",
         );
       } catch (reason) {
         const error = asGoogleError(reason);
@@ -269,6 +272,7 @@ export function CalendarWorkspace({
         return;
       }
       setSelected(null);
+      setEditSeed(null);
       setFeedback(null);
       setCreateSeed(seed);
     },
@@ -307,6 +311,45 @@ export function CalendarWorkspace({
       }
     },
     [onStatus, pending, status.blocks],
+  );
+
+  const editEvent = useCallback(
+    async (draft: CalendarEditDraft) => {
+      if (pending) return;
+      setPending(`edit:${draft.calendar_block_id}`);
+      setFeedback(null);
+      try {
+        const next = await googleCalendarClient.edit(draft);
+        onStatus(next);
+        setEditSeed(null);
+        const block = next.blocks.find(
+          (item) => item.id === draft.calendar_block_id,
+        );
+        if (block?.provider_write_state === "synced") {
+          setFeedback("Event change confirmed by Google.");
+        } else if (block?.provider_write_detail === "reauth_required") {
+          setFeedback(
+            "Change saved locally. Reconnect Google to finish syncing it.",
+          );
+        } else if (block?.provider_write_state === "conflict") {
+          setFeedback(
+            "Google changed this event elsewhere. Your Ion change remains saved for review.",
+          );
+        } else if (block?.provider_write_state === "failed") {
+          setFeedback(
+            "Change saved locally, but Google sync failed. The intended value remains visible.",
+          );
+        } else {
+          setFeedback("Change saved locally and pending Google confirmation.");
+        }
+      } catch (reason) {
+        const error = asGoogleError(reason);
+        setFeedback(errorCopy[error.code] ?? errorCopy.unavailable);
+      } finally {
+        setPending(null);
+      }
+    },
+    [onStatus, pending],
   );
 
   const toggleCategory = useCallback(
@@ -529,7 +572,10 @@ export function CalendarWorkspace({
                     occurrences={visibleOccurrences}
                     localTimeZone={localTimeZone}
                     today={today}
-                    onSelect={setSelected}
+                    onSelect={(occurrence) => {
+                      setEditSeed(null);
+                      setSelected(occurrence);
+                    }}
                     onCreate={openCreate}
                   />
                 ) : (
@@ -540,8 +586,16 @@ export function CalendarWorkspace({
                     today={today}
                     now={now}
                     density={density}
-                    onSelect={setSelected}
+                    onSelect={(occurrence) => {
+                      setEditSeed(null);
+                      setSelected(occurrence);
+                    }}
                     onCreate={openCreate}
+                    onEditSeed={(occurrence, seed) => {
+                      setCreateSeed(null);
+                      setSelected(occurrence);
+                      setEditSeed(seed);
+                    }}
                   />
                 )}
                 {enabledCalendars.length > 0 &&
@@ -567,6 +621,8 @@ export function CalendarWorkspace({
                 occurrence={selected}
                 localTimeZone={localTimeZone}
                 categoryPending={pending === `category:${selected.block.id}`}
+                editPending={pending === `edit:${selected.block.id}`}
+                editSeed={editSeed}
                 onCategory={(category, subtype) =>
                   void run(`category:${selected.block.id}`, () =>
                     googleCalendarClient.setCategory(
@@ -576,16 +632,21 @@ export function CalendarWorkspace({
                     ),
                   )
                 }
-                onClose={() => setSelected(null)}
+                onEdit={(draft) => void editEvent(draft)}
+                onClose={() => {
+                  setEditSeed(null);
+                  setSelected(null);
+                }}
               />
             ) : null}
           </div>
         </section>
       </div>
       <p className="calendar-readonly-note">
-        Ion can create ordinary attendee-free events only after explicit write
-        consent. Edit, move, resize, delete, attendee, reminder, recurrence,
-        attachment, and conferencing actions remain unavailable.
+        Eligible ordinary attendee-free events support explicit edit, timed
+        move, and timed resize after write consent. Delete, attendee, reminder,
+        recurrence, attachment, conferencing, and cross-calendar moves remain
+        unavailable.
       </p>
       {connected.length === 0 &&
       !needsReauthentication &&

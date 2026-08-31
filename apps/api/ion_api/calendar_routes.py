@@ -25,6 +25,8 @@ from ion_api.calendar_write_contracts import (
     CalendarWriteFoundationOutput,
     CreateProviderEventInput,
     CreateProviderEventOutput,
+    EditProviderEventInput,
+    EditProviderEventOutput,
     ProviderWriteIntentSummaryOutput,
     ProviderWritePlanOutput,
     PruneResultOutput,
@@ -32,6 +34,7 @@ from ion_api.calendar_write_contracts import (
     QueueProviderWriteIntentInput,
     ReadyWriteIntentsInput,
     ReconcileProviderCreateInput,
+    ReconcileProviderPatchInput,
     RecordProviderWriteResultInput,
     RecoverWriteIntentsInput,
     RecoveryResultOutput,
@@ -81,6 +84,24 @@ def calendar_router(service: CalendarService) -> APIRouter:
         try:
             return CreateProviderEventOutput(
                 intent=writes.create(input), status=service.status()
+            )
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/edit",
+        response_model=EditProviderEventOutput,
+    )
+    def edit_write_intent(
+        input: EditProviderEventInput,
+    ) -> EditProviderEventOutput:
+        try:
+            return EditProviderEventOutput(
+                intent=writes.edit(input), status=service.status()
             )
         except (
             CalendarNotFoundError,
@@ -192,6 +213,22 @@ def calendar_router(service: CalendarService) -> APIRouter:
     ) -> ProviderWriteIntentSummaryOutput:
         try:
             return writes.reconcile_create(intent_id, input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/{intent_id}/reconcile-patch",
+        response_model=ProviderWriteIntentSummaryOutput,
+    )
+    def reconcile_write_patch(
+        intent_id: str, input: ReconcileProviderPatchInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        try:
+            return writes.reconcile_patch(intent_id, input)
         except (
             CalendarNotFoundError,
             CalendarConflictError,
