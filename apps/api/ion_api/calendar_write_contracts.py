@@ -213,6 +213,18 @@ class EditProviderEventInput(CalendarModel):
         return self
 
 
+class DeleteProviderEventInput(CalendarModel):
+    command_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    calendar_block_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
+    expected_block_revision: int = Field(ge=1)
+    locked_confirmed: bool = False
+    provenance: Literal["direct_human"] = "direct_human"
+
+
 class BeginWriteAttemptInput(CalendarModel):
     expected_state: Literal["ready", "ambiguous"]
     executor_provenance: Literal["direct_human", "recovery"]
@@ -220,7 +232,7 @@ class BeginWriteAttemptInput(CalendarModel):
 
 class RecordProviderWriteResultInput(CalendarModel):
     expected_state: Literal["attempting"] = "attempting"
-    stage: Literal["insert", "patch", "identity_lookup"]
+    stage: Literal["insert", "patch", "delete", "identity_lookup"]
     result_class: ProviderResultClass
     safe_reason: str = Field(min_length=1, max_length=128)
 
@@ -241,6 +253,18 @@ class ReconcileProviderPatchInput(CalendarModel):
     expected_state: Literal["attempting"] = "attempting"
     resolution_kind: Literal["patch_response", "identity_lookup"]
     event: ProviderEventInput
+
+
+class ReconcileProviderDeleteInput(CalendarModel):
+    expected_state: Literal["attempting"] = "attempting"
+    resolution_kind: Literal["delete_response", "identity_lookup", "already_absent"]
+    event: ProviderEventInput | None = None
+
+    @model_validator(mode="after")
+    def valid_resolution(self):
+        if (self.resolution_kind == "identity_lookup") != (self.event is not None):
+            raise ValueError("delete identity lookup requires exactly one event")
+        return self
 
 
 class WriteIntentTransitionInput(CalendarModel):
@@ -375,6 +399,12 @@ class CreateProviderEventOutput(CalendarModel):
 class EditProviderEventOutput(CalendarModel):
     intent: ProviderWriteIntentSummaryOutput
     status: CalendarStatusOutput
+
+
+class DeleteProviderEventOutput(CalendarModel):
+    intent: ProviderWriteIntentSummaryOutput | None
+    status: CalendarStatusOutput
+    resolution: Literal["provider_delete_queued", "local_create_cancelled"]
 
 
 class RecoveryResultOutput(CalendarModel):

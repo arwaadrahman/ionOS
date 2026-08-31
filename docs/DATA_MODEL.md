@@ -2,8 +2,8 @@
 
 ## Status
 
-**Phase 2C-3 local-first edit/move/resize over the accepted Phase 2C-1 durable write
-foundation; owner real-write acceptance pending.** The organizer schema begins in
+**Phase 2C-4 local-first delete/cancel over the accepted Phase 2C-1 durable write
+foundation; owner real-delete acceptance pending.** The organizer schema begins in
 `0002_organizer_foundation`; `0003_milestone_ordering` adds canonical
 owner-scoped positions to Goal and Project Milestones, and
 `0004_today_planning` adds human day-planning intent over canonical Tasks.
@@ -131,6 +131,11 @@ plus extensible subtype; existing rows migrate to visible and uncategorized.
   Reconciliation either promotes a matching sanitized provider event or keeps
   both base and intent as explicit conflict evidence; it never performs
   last-write-wins.
+- Phase 2C-4 also requires no migration. `delete_event`, the `status` mask,
+  exact ETag, retry states, compact audit, and terminal cancellation already
+  exist in `0007`. Pending deletion keeps the confirmed block visible;
+  provider completion or confirmed absence tombstones that same block. An
+  unattempted create cancels locally without a second intent or provider call.
 
 See [Architecture](ARCHITECTURE.md) and ADR
 [0001](decisions/0001-local-first-data-ownership.md), plus accepted ADR

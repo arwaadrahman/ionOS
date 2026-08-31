@@ -273,7 +273,14 @@ class ProviderWriteCapabilityOutput(CalendarModel):
         "provider_unconfirmed",
         "recurrence_unsupported",
         "write_pending",
+        "create_reconciliation_required",
     ]
+
+
+class ProviderDeleteCapabilityOutput(CalendarModel):
+    eligible: bool
+    mode: Literal["provider_delete", "local_create_cancel"] | None = None
+    reason: str
 
 
 class InternalGoogleCalendarOutput(GoogleCalendarOutput):
@@ -313,6 +320,11 @@ class CalendarBlockOutput(CalendarModel):
     provider_deleted_at: str | None
     revision: int
     provider_write_capability: ProviderWriteCapabilityOutput
+    provider_delete_capability: ProviderDeleteCapabilityOutput
+    provider_write_operation: (
+        Literal["create", "patch", "cancel_occurrence", "delete_event", "delete_series"]
+        | None
+    )
     provider_write_state: Literal["pending", "synced", "failed", "conflict"]
     provider_write_detail: Literal[
         "queued",

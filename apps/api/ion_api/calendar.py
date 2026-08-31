@@ -22,6 +22,7 @@ from ion_api.calendar_contracts import (
     InternalGoogleAccountOutput,
     InternalGoogleCalendarOutput,
     ProviderDateTime,
+    ProviderDeleteCapabilityOutput,
     ProviderEventInput,
     ProviderWriteCapabilityOutput,
     SelectionInput,
@@ -461,6 +462,28 @@ class CalendarService:
                 .correlate(calendar_blocks)
                 .scalar_subquery()
             )
+            latest_write_operation = (
+                select(calendar_provider_write_intents.c.operation)
+                .where(
+                    calendar_provider_write_intents.c.calendar_block_id
+                    == calendar_blocks.c.id
+                )
+                .order_by(calendar_provider_write_intents.c.sequence.desc())
+                .limit(1)
+                .correlate(calendar_blocks)
+                .scalar_subquery()
+            )
+            latest_write_attempt_count = (
+                select(calendar_provider_write_intents.c.attempt_count)
+                .where(
+                    calendar_provider_write_intents.c.calendar_block_id
+                    == calendar_blocks.c.id
+                )
+                .order_by(calendar_provider_write_intents.c.sequence.desc())
+                .limit(1)
+                .correlate(calendar_blocks)
+                .scalar_subquery()
+            )
             latest_write_changed_fields = (
                 select(calendar_provider_write_intents.c.changed_fields_json)
                 .where(
@@ -476,6 +499,8 @@ class CalendarService:
                 select(
                     calendar_blocks,
                     latest_write_state.label("latest_write_state"),
+                    latest_write_operation.label("latest_write_operation"),
+                    latest_write_attempt_count.label("latest_write_attempt_count"),
                     latest_write_desired_values.label("latest_write_desired_values"),
                     latest_write_changed_fields.label("latest_write_changed_fields"),
                     calendar_block_ion_metadata.c.flexibility,
@@ -585,6 +610,29 @@ class CalendarService:
         }.get(write_state, write_state)
         if provider_write_detail == "confirmed" and row.link_state == "pending_create":
             provider_write_detail = "queued"
+        local_create_cancel = (
+            row.latest_write_operation == "create"
+            and row.latest_write_state in ("queued", "ready")
+            and row.latest_write_attempt_count == 0
+            and row.link_state == "pending_create"
+        )
+        provider_delete_eligible = (
+            row.account_auth_state == "connected"
+            and row.calendar_write_scope_state == "write_granted"
+            and bool(row.enabled_in_ion)
+            and not bool(row.provider_deleted)
+            and row.access_role in ("writer", "owner")
+            and row.link_state == "confirmed"
+            and bool(row.provider_etag)
+            and row.provider_etag != "*"
+            and row.provider_event_type == "default"
+            and not bool(row.provider_locked)
+            and not bool(row.has_attendees)
+            and row.status != "cancelled"
+            and row.provider_deleted_at is None
+            and row.recurrence_kind == "single"
+            and provider_write_state == "synced"
+        )
         values = {
             "title": row.title,
             "temporal_kind": row.temporal_kind,
@@ -717,6 +765,60 @@ class CalendarService:
                     else "eligible"
                 ),
             ),
+            provider_delete_capability=ProviderDeleteCapabilityOutput(
+                eligible=local_create_cancel or provider_delete_eligible,
+                mode=(
+                    "local_create_cancel"
+                    if local_create_cancel
+                    else "provider_delete"
+                    if provider_delete_eligible
+                    else None
+                ),
+                reason=(
+                    "eligible"
+                    if local_create_cancel or provider_delete_eligible
+                    else "reauth_required"
+                    if row.account_auth_state != "connected"
+                    or row.calendar_write_scope_state == "reauth_required"
+                    else "account_read_only"
+                    if row.calendar_write_scope_state != "write_granted"
+                    else "calendar_deleted"
+                    if bool(row.provider_deleted)
+                    else "calendar_disabled"
+                    if not bool(row.enabled_in_ion)
+                    else "access_role_read_only"
+                    if row.access_role not in ("writer", "owner")
+                    else "special_event"
+                    if row.provider_event_type != "default"
+                    else "provider_locked"
+                    if bool(row.provider_locked)
+                    else "attendees_present"
+                    if bool(row.has_attendees)
+                    else "provider_deleted"
+                    if row.status == "cancelled" or row.provider_deleted_at is not None
+                    else "create_reconciliation_required"
+                    if row.latest_write_operation == "create"
+                    and row.latest_write_state
+                    in (
+                        "attempting",
+                        "ambiguous",
+                        "retry_wait",
+                        "reauth_required",
+                        "failed",
+                        "conflict",
+                    )
+                    else "recurrence_unsupported"
+                    if row.recurrence_kind != "single"
+                    else "write_pending"
+                    if provider_write_state != "synced"
+                    else "provider_unconfirmed"
+                    if row.link_state != "confirmed"
+                    or not row.provider_etag
+                    or row.provider_etag == "*"
+                    else "provider_unconfirmed"
+                ),
+            ),
+            provider_write_operation=row.latest_write_operation,
             provider_write_state=provider_write_state,
             provider_write_detail=provider_write_detail,
         )
@@ -898,12 +1000,14 @@ class CalendarService:
                     )
                 ).all()
                 for row in unseen:
-                    pending_patch = connection.execute(
+                    pending_write = connection.execute(
                         select(calendar_provider_write_intents)
                         .where(
                             calendar_provider_write_intents.c.calendar_block_id
                             == row.id,
-                            calendar_provider_write_intents.c.operation == "patch",
+                            calendar_provider_write_intents.c.operation.in_(
+                                ("patch", "delete_event")
+                            ),
                             calendar_provider_write_intents.c.state.in_(
                                 (
                                     "queued",
@@ -918,11 +1022,38 @@ class CalendarService:
                         .order_by(calendar_provider_write_intents.c.sequence.desc())
                         .limit(1)
                     ).one_or_none()
-                    if pending_patch is not None:
+                    if (
+                        pending_write is not None
+                        and pending_write.operation == "delete_event"
+                    ):
+                        prune_after = (
+                            (datetime.now(UTC) + timedelta(days=30))
+                            .isoformat(timespec="microseconds")
+                            .replace("+00:00", "Z")
+                        )
                         connection.execute(
                             update(calendar_provider_write_intents)
                             .where(
-                                calendar_provider_write_intents.c.id == pending_patch.id
+                                calendar_provider_write_intents.c.id == pending_write.id
+                            )
+                            .values(
+                                state="completed",
+                                failure_class="success",
+                                failure_reason="provider_already_absent_during_refresh",
+                                next_attempt_at=None,
+                                updated_at=now,
+                                resolved_at=now,
+                                prune_after=prune_after,
+                            )
+                        )
+                        _write_completed_audit(
+                            connection, pending_write, now, row.revision + 1
+                        )
+                    elif pending_write is not None:
+                        connection.execute(
+                            update(calendar_provider_write_intents)
+                            .where(
+                                calendar_provider_write_intents.c.id == pending_write.id
                             )
                             .values(
                                 state="conflict",
@@ -933,7 +1064,7 @@ class CalendarService:
                         )
                         _write_conflict_audit(
                             connection,
-                            pending_patch,
+                            pending_write,
                             now,
                             reason="provider_event_absent_during_refresh",
                             reason_class="provider_not_found",
@@ -1285,6 +1416,25 @@ class CalendarService:
             .order_by(calendar_provider_write_intents.c.sequence.desc())
             .limit(1)
         ).one_or_none()
+        pending_delete = connection.execute(
+            select(calendar_provider_write_intents)
+            .where(
+                calendar_provider_write_intents.c.calendar_block_id == existing.id,
+                calendar_provider_write_intents.c.operation == "delete_event",
+                calendar_provider_write_intents.c.state.in_(
+                    (
+                        "queued",
+                        "ready",
+                        "attempting",
+                        "retry_wait",
+                        "reauth_required",
+                        "ambiguous",
+                    )
+                ),
+            )
+            .order_by(calendar_provider_write_intents.c.sequence.desc())
+            .limit(1)
+        ).one_or_none()
         confirmed_patch = None
         if (
             pending_patch is not None
@@ -1309,6 +1459,44 @@ class CalendarService:
                 _write_conflict_audit(
                     connection,
                     pending_patch,
+                    now,
+                    reason="provider_etag_changed_during_refresh",
+                    reason_class="stale_precondition",
+                )
+        if pending_delete is not None:
+            if event.status == "cancelled":
+                prune_after = (
+                    (datetime.now(UTC) + timedelta(days=30))
+                    .isoformat(timespec="microseconds")
+                    .replace("+00:00", "Z")
+                )
+                connection.execute(
+                    update(calendar_provider_write_intents)
+                    .where(calendar_provider_write_intents.c.id == pending_delete.id)
+                    .values(
+                        state="completed",
+                        failure_class="success",
+                        failure_reason="provider_already_absent_during_refresh",
+                        next_attempt_at=None,
+                        updated_at=now,
+                        resolved_at=now,
+                        prune_after=prune_after,
+                    )
+                )
+            elif event.provider_etag != pending_delete.expected_provider_etag:
+                connection.execute(
+                    update(calendar_provider_write_intents)
+                    .where(calendar_provider_write_intents.c.id == pending_delete.id)
+                    .values(
+                        state="conflict",
+                        failure_class="stale_precondition",
+                        failure_reason="provider_etag_changed_during_refresh",
+                        updated_at=now,
+                    )
+                )
+                _write_conflict_audit(
+                    connection,
+                    pending_delete,
                     now,
                     reason="provider_etag_changed_during_refresh",
                     reason_class="stale_precondition",
@@ -1377,6 +1565,8 @@ class CalendarService:
                 )
             )
             _write_completed_audit(connection, confirmed_patch, now, revision)
+        if pending_delete is not None and event.status == "cancelled":
+            _write_completed_audit(connection, pending_delete, now, revision)
 
     @staticmethod
     def _resolve_recurrence_masters(connection, calendar_id: str):

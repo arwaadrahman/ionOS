@@ -1,6 +1,6 @@
 # Integration Boundaries
 
-## Status: Phase 2C-3 bounded Google Calendar edit/move/resize implemented
+## Status: Phase 2C-4 bounded Google Calendar delete/cancel implemented
 
 Integrations are adapters around Ion's local authority; they do not become its
 primary storage. Google Calendar is the first active adapter under ADR 0018.
@@ -82,7 +82,7 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   fields. Google selection, subscription, visibility, and event content remain
   untouched.
 
-## Phase 2C accepted write contract through implemented 2C-3 edits
+## Phase 2C accepted write contract through implemented 2C-4 delete
 
 - Accepted scopes: keep `calendar.calendarlist.readonly` and replace
   `calendar.events.readonly` with `calendar.events` only after deliberate
@@ -120,9 +120,13 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   and capability loss stop as explicit conflicts rather than overwriting
   Google. Timed move/resize preserve IANA timezone semantics; all-day edits use
   civil exclusive-end dates. Timed/all-day conversion is deferred.
-- Exclusions: update, move, delete, batch, instances dispatch, recurrence,
+- Delete/cancel: a fixed command persists direct-human delete intent before
+  exact-ETag `events.delete`. Transport ambiguity checks only the same event;
+  404/tombstone is provider-complete, live changed ETag conflicts, and a
+  never-attempted create cancels wholly locally without provider traffic.
+- Exclusions: update, move, batch, instances dispatch, recurrence,
   attendee, reminder, conferencing, attachment, and special-event writes are
-  not reachable from the Phase 2C-3 commands or renderer.
+  not reachable from the Phase 2C-4 commands or renderer.
 
 See [ADR 0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md)
 and the [Phase 2C gate](phases/PHASE_2C.md).
@@ -133,3 +137,4 @@ Authoritative provider references:
 - [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth)
 - [Incremental synchronization](https://developers.google.com/workspace/calendar/api/guides/sync)
 - [Events list](https://developers.google.com/workspace/calendar/api/v3/reference/events/list)
+- [Events delete](https://developers.google.com/workspace/calendar/api/v3/reference/events/delete)

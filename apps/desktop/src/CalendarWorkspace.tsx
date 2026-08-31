@@ -352,6 +352,46 @@ export function CalendarWorkspace({
     [onStatus, pending],
   );
 
+  const deleteEvent = useCallback(
+    async (draft: Parameters<typeof googleCalendarClient.delete>[0]) => {
+      if (pending) return;
+      setPending(`delete:${draft.calendar_block_id}`);
+      setFeedback(null);
+      try {
+        const next = await googleCalendarClient.delete(draft);
+        onStatus(next);
+        const block = next.blocks.find(
+          (item) => item.id === draft.calendar_block_id,
+        );
+        if (!block || block.status === "cancelled") {
+          setFeedback("Event deletion is complete.");
+          setSelected(null);
+          setEditSeed(null);
+        } else if (block.provider_write_detail === "reauth_required") {
+          setFeedback("Deletion saved locally. Reconnect Google to finish it.");
+        } else if (block.provider_write_state === "conflict") {
+          setFeedback(
+            "Google changed this event elsewhere. The deletion intent remains saved for review.",
+          );
+        } else if (block.provider_write_state === "failed") {
+          setFeedback(
+            "Deletion remains saved locally, but Google synchronization failed.",
+          );
+        } else {
+          setFeedback(
+            "Deletion saved locally and pending Google confirmation.",
+          );
+        }
+      } catch (reason) {
+        const error = asGoogleError(reason);
+        setFeedback(errorCopy[error.code] ?? errorCopy.unavailable);
+      } finally {
+        setPending(null);
+      }
+    },
+    [onStatus, pending],
+  );
+
   const toggleCategory = useCallback(
     (category: CalendarFilterCategory, visible: boolean) => {
       setVisibleCategories((current) =>
@@ -622,6 +662,7 @@ export function CalendarWorkspace({
                 localTimeZone={localTimeZone}
                 categoryPending={pending === `category:${selected.block.id}`}
                 editPending={pending === `edit:${selected.block.id}`}
+                deletePending={pending === `delete:${selected.block.id}`}
                 editSeed={editSeed}
                 onCategory={(category, subtype) =>
                   void run(`category:${selected.block.id}`, () =>
@@ -633,6 +674,7 @@ export function CalendarWorkspace({
                   )
                 }
                 onEdit={(draft) => void editEvent(draft)}
+                onDelete={(draft) => void deleteEvent(draft)}
                 onClose={() => {
                   setEditSeed(null);
                   setSelected(null);
@@ -644,9 +686,9 @@ export function CalendarWorkspace({
       </div>
       <p className="calendar-readonly-note">
         Eligible ordinary attendee-free events support explicit edit, timed
-        move, and timed resize after write consent. Delete, attendee, reminder,
-        recurrence, attachment, conferencing, and cross-calendar moves remain
-        unavailable.
+        move, timed resize, and confirmed single-event deletion after write
+        consent. Recurrence, attendee, reminder, attachment, conferencing, and
+        cross-calendar mutation remain unavailable.
       </p>
       {connected.length === 0 &&
       !needsReauthentication &&

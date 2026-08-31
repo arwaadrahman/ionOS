@@ -2,8 +2,8 @@
 
 ## Status
 
-**Architecture/security gate accepted; Phase 2C-3 edit/move/resize implemented
-and pending owner real-write acceptance.** The owner accepted ADR 0021 and the seven decisions
+**Architecture/security gate accepted; Phase 2C-4 delete/cancel implemented
+and pending owner real-delete acceptance.** The owner accepted ADR 0021 and the seven decisions
 in this gate on 2026-08-30, then separately authorized the bounded 2C-1
 foundation. Migration `0007`, the typed Python outbox/state API, safe
 capability projection, deterministic ID/retry/recovery/audit helpers, one
@@ -13,8 +13,11 @@ local-first create UI, `events.insert`, and deterministic-ID `events.get`
 reconciliation. Phase 2C-3 adds durable desired overlays, explicit-save
 inspector editing, direct timed move/resize review, changed-field
 `events.patch` with exact `If-Match`, and bounded same-event reconciliation.
+Phase 2C-4 adds explicit single-event delete confirmation, conditional
+`events.delete`, absence reconciliation, and local cancellation before a create
+has reached the provider.
 No real OAuth or Calendar mutation was used during automated verification.
-Delete and recurring event writes remain unavailable.
+Recurring event writes remain unavailable until Phase 2C-5.
 
 ## Objective
 
@@ -622,6 +625,11 @@ Google mutations.
   untouched; temporal conversions require explicit action.
 
 ### 2C-4 — Delete and cancellation
+
+**Implemented; owner real-delete acceptance pending.** Migration `0007` was
+reviewed and remains sufficient. Automated verification uses synthetic state
+and does not initiate OAuth or Google mutations. Recurring occurrence and
+whole-series deletion remain deliberately assigned to Phase 2C-5.
 
 - Add local-only, unattempted-create, confirmed single-event, and provider
   missing/deleted semantics with explicit confirmation.

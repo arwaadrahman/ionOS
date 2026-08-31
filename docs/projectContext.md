@@ -10,8 +10,8 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 2 — Calendar
-- **Milestone:** Phase 2C-3 Google Calendar edit, move, and resize implemented;
-  owner real-write acceptance pending
+- **Milestone:** Phase 2C-4 Google Calendar delete and cancellation implemented;
+  owner real-delete acceptance pending
 - **In scope:** a primary Calendar over cached canonical
   CalendarBlocks; Day, consecutive 3 Day, Monday-first Week, rolling Next 7
   Days, and Monday-first Month views; bounded recurrence/exception projection;
@@ -22,7 +22,8 @@ actions as authoritative.
   exclusive source/filter drawers; an event inspector with bounded editing;
   explicit account-scoped Calendar write re-consent; local-first creation of
   ordinary attendee-free events plus explicit-save title/time edits and
-  direct-human timed move/resize review for eligible events; and
+  direct-human timed move/resize review and explicit confirmed single-event
+  delete for eligible events; local cancellation of unattempted creates; and
   truthful CalendarBlock occupancy/free gaps in Today.
 - **Write scope:** migration `0007` provides the durable typed outbox,
   safe capability evidence, deterministic create ID, retry/restart state,
@@ -30,8 +31,9 @@ actions as authoritative.
   re-consent plus `events.insert`/deterministic `events.get`; Phase 2C-3 adds
   changed-field-only `events.patch` with exact `If-Match` and `events.get`
   ambiguity reconciliation. Existing accounts remain read-only until
-  re-consent.
-- **Out of scope:** Google event delete, recurring-event writes, timed/all-day
+  re-consent. Phase 2C-4 adds exact-ETag `events.delete`, same-event ambiguity
+  lookup, and already-absent reconciliation.
+- **Out of scope:** recurring-event writes, timed/all-day
   conversion, cross-calendar move, Google Tasks bridge
   (optional/deferred; not active Phase 2D desktop-v1 work), Gmail,
   push/webhooks, attendee/reminder/recurrence/conferencing/attachment writes,
@@ -76,7 +78,8 @@ Task capture; Phase 1H hardens the complete Phase 1 flow. Phase 2A adds a
 restrained Calendar read-sync foundation. Phase 2B adds the primary read-only
 Calendar and truthful CalendarBlock occupancy in Today. Phase 2C-2 adds the
 first explicit, local-first create path; Phase 2C-3 adds bounded local-first
-edit, move, and resize while delete, recurrence writes, Task scheduling,
+edit, move, and resize; Phase 2C-4 adds bounded delete/cancel while recurrence
+writes, Task scheduling,
 Explore, semantic search, and AI remain deferred.
 
 Design/motion ladder: process guidance (`IMPECCABLE`, `EMIL-MOTION`); CSS for

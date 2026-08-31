@@ -3,7 +3,7 @@
 ## Status
 
 **Accepted invariants with Phase 2A Google credentials and the implemented
-Phase 2C-3 bounded create/edit path.**
+Phase 2C-4 bounded create/edit/delete path.**
 
 - Ion is local-first. The public repository contains no real personal Ion data.
 - Tests, demos, screenshots, and fixtures use clearly synthetic records only.
@@ -65,7 +65,7 @@ data and prevents a second desktop process from starting another sidecar.
   behavior. Real account data and configuration remain in Application Support,
   Keychain, and the runtime database outside Git.
 
-## Phase 2C accepted write gate through Phase 2C-3 edits
+## Phase 2C accepted write gate through Phase 2C-4 delete
 
 - The accepted future OAuth set is exactly CalendarList read-only plus Calendar
   Events read/write. It replaces Events read-only after deliberate account
@@ -97,11 +97,13 @@ data and prevents a second desktop process from starting another sidecar.
 - Phase 2C-2 exposes one create renderer command. Phase 2C-3 adds one fixed
   Ion-ID edit command whose title/time draft cannot supply provider identifiers,
   ETags, methods, URLs, headers, or arbitrary bodies. Production dispatch
-  selects `events.insert` for ready creates, changed-field-only `events.patch`
-  for eligible existing events, and bounded same-event `events.get` for
+  selects `events.insert` for ready creates, changed-field-only `events.patch`,
+  exact-ETag `events.delete` for confirmed single events, and bounded
+  same-event `events.get` for
   ambiguity reconciliation. Every patch uses the last confirmed non-wildcard
-  ETag as `If-Match`. Update, move, delete, batch, instances, and calendar
-  management remain unreachable. Create and patch bodies exclude attendees,
+  ETag as `If-Match`. Delete 404 reconciles confirmed absence. Update, move,
+  batch, instances, recurrence mutation, and calendar management remain
+  unreachable. Create and patch bodies exclude attendees,
   reminders,
   recurrence, Meet/conference, attachments, extended properties, event colors,
   descriptions, and locations.

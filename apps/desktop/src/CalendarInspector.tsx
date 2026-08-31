@@ -7,6 +7,7 @@ import {
 } from "./calendarProjection";
 import {
   CalendarCategory,
+  CalendarDeleteDraft,
   CalendarEditDraft,
   CalendarEditSeed,
   calendarCategories,
@@ -103,18 +104,22 @@ export function CalendarInspector({
   localTimeZone,
   categoryPending,
   editPending,
+  deletePending,
   editSeed,
   onCategory,
   onEdit,
+  onDelete,
   onClose,
 }: {
   occurrence: CalendarOccurrence;
   localTimeZone: string;
   categoryPending: boolean;
   editPending: boolean;
+  deletePending: boolean;
   editSeed: CalendarEditSeed | null;
   onCategory(category: CalendarCategory | null, subtype: string | null): void;
   onEdit(draft: CalendarEditDraft): void;
+  onDelete(draft: CalendarDeleteDraft): void;
   onClose(): void;
 }) {
   const block = occurrence.block;
@@ -137,6 +142,11 @@ export function CalendarInspector({
   const [startTime, setStartTime] = useState("");
   const [endTime, setEndTime] = useState("");
   const [lockedConfirmed, setLockedConfirmed] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteLockedConfirmed, setDeleteLockedConfirmed] = useState(false);
+  const [deleteCommandId, setDeleteCommandId] = useState(() =>
+    crypto.randomUUID(),
+  );
 
   useEffect(() => {
     setDraftCategory(category);
@@ -161,6 +171,9 @@ export function CalendarInspector({
     setLockedConfirmed(false);
     setCommandId(crypto.randomUUID());
     setEditing(Boolean(editSeed));
+    setConfirmingDelete(false);
+    setDeleteLockedConfirmed(false);
+    setDeleteCommandId(crypto.randomUUID());
   }, [
     block.end_at,
     block.end_date,
@@ -184,6 +197,13 @@ export function CalendarInspector({
     block.provider_write_capability.eligible &&
     block.provider_write_state === "synced" &&
     block.recurrence_kind === "single";
+  const deleteCapability = block.provider_delete_capability ?? {
+    eligible: false,
+    mode: null,
+    reason: "provider_unconfirmed",
+  };
+  const deleteEligible = deleteCapability.eligible;
+  const localCreateCancel = deleteCapability.mode === "local_create_cancel";
   const temporalValid =
     block.temporal_kind === "all_day"
       ? startDate.length === 10 && endDate > startDate
@@ -202,7 +222,7 @@ export function CalendarInspector({
     <aside className="calendar-inspector" aria-label="Event details">
       <div className="calendar-inspector-heading">
         <p className="eyebrow">
-          {eligible ? "Google event" : "Read-only event"}
+          {eligible || deleteEligible ? "Google event" : "Read-only event"}
         </p>
         <button
           className="quiet-button"
@@ -210,7 +230,7 @@ export function CalendarInspector({
           aria-label="Close event details"
           autoFocus={!editSeed}
           onClick={onClose}
-          disabled={editPending}
+          disabled={editPending || deletePending}
         >
           Close
         </button>
@@ -360,6 +380,77 @@ export function CalendarInspector({
         </p>
       )}
 
+      {confirmingDelete && deleteEligible ? (
+        <section
+          className="calendar-delete-confirmation"
+          aria-label="Confirm event deletion"
+        >
+          <h3>
+            {localCreateCancel
+              ? "Cancel pending creation?"
+              : "Delete this event?"}
+          </h3>
+          <p className="context-note">
+            {localCreateCancel
+              ? "This create has not reached Google. Ion will remove the local pending event without a provider delete."
+              : "Scope: this event only. Ion will remove it from Google using the last confirmed version. This cannot be undone in Ion."}
+          </p>
+          {block.flexibility === "locked" ? (
+            <label className="calendar-create-check">
+              <input
+                type="checkbox"
+                checked={deleteLockedConfirmed}
+                onChange={(event) =>
+                  setDeleteLockedConfirmed(event.currentTarget.checked)
+                }
+              />
+              <span>I confirm deleting this Ion-locked event.</span>
+            </label>
+          ) : null}
+          <div className="calendar-create-actions">
+            <button
+              className="quiet-button"
+              type="button"
+              onClick={() => setConfirmingDelete(false)}
+              disabled={deletePending}
+            >
+              Keep event
+            </button>
+            <button
+              className="danger-button"
+              type="button"
+              disabled={
+                deletePending ||
+                (block.flexibility === "locked" && !deleteLockedConfirmed)
+              }
+              onClick={() =>
+                onDelete({
+                  command_id: deleteCommandId,
+                  calendar_block_id: block.id,
+                  expected_block_revision: block.revision,
+                  locked_confirmed: deleteLockedConfirmed,
+                })
+              }
+            >
+              {deletePending
+                ? "Deleting…"
+                : localCreateCancel
+                  ? "Cancel creation"
+                  : "Delete event"}
+            </button>
+          </div>
+        </section>
+      ) : deleteEligible ? (
+        <button
+          className="quiet-button calendar-delete-button"
+          type="button"
+          onClick={() => setConfirmingDelete(true)}
+          disabled={editPending || deletePending}
+        >
+          {localCreateCancel ? "Cancel pending creation" : "Delete event"}
+        </button>
+      ) : null}
+
       <label className="calendar-category-editor">
         <span>Ion category</span>
         <select
@@ -482,10 +573,17 @@ export function CalendarInspector({
         <div>
           <dt>Google write state</dt>
           <dd>
-            {providerWriteLabel(
-              block.provider_write_state,
-              block.provider_write_detail,
-            )}
+            {block.provider_write_operation === "delete_event" &&
+            block.provider_write_state === "pending"
+              ? block.provider_write_detail === "retry_wait"
+                ? "Deletion saved locally · retry waiting"
+                : block.provider_write_detail === "reauth_required"
+                  ? "Deletion saved locally · reconnect Google"
+                  : "Deletion pending with Google"
+              : providerWriteLabel(
+                  block.provider_write_state,
+                  block.provider_write_detail,
+                )}
             <small>
               Provider changes use the confirmed event identity and version.
             </small>

@@ -25,6 +25,8 @@ from ion_api.calendar_write_contracts import (
     CalendarWriteFoundationOutput,
     CreateProviderEventInput,
     CreateProviderEventOutput,
+    DeleteProviderEventInput,
+    DeleteProviderEventOutput,
     EditProviderEventInput,
     EditProviderEventOutput,
     ProviderWriteIntentSummaryOutput,
@@ -34,6 +36,7 @@ from ion_api.calendar_write_contracts import (
     QueueProviderWriteIntentInput,
     ReadyWriteIntentsInput,
     ReconcileProviderCreateInput,
+    ReconcileProviderDeleteInput,
     ReconcileProviderPatchInput,
     RecordProviderWriteResultInput,
     RecoverWriteIntentsInput,
@@ -102,6 +105,31 @@ def calendar_router(service: CalendarService) -> APIRouter:
         try:
             return EditProviderEventOutput(
                 intent=writes.edit(input), status=service.status()
+            )
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/delete",
+        response_model=DeleteProviderEventOutput,
+    )
+    def delete_write_intent(
+        input: DeleteProviderEventInput,
+    ) -> DeleteProviderEventOutput:
+        try:
+            intent = writes.delete(input)
+            return DeleteProviderEventOutput(
+                intent=intent,
+                status=service.status(),
+                resolution=(
+                    "provider_delete_queued"
+                    if intent is not None
+                    else "local_create_cancelled"
+                ),
             )
         except (
             CalendarNotFoundError,
@@ -229,6 +257,22 @@ def calendar_router(service: CalendarService) -> APIRouter:
     ) -> ProviderWriteIntentSummaryOutput:
         try:
             return writes.reconcile_patch(intent_id, input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/{intent_id}/reconcile-delete",
+        response_model=ProviderWriteIntentSummaryOutput,
+    )
+    def reconcile_write_delete(
+        intent_id: str, input: ReconcileProviderDeleteInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        try:
+            return writes.reconcile_delete(intent_id, input)
         except (
             CalendarNotFoundError,
             CalendarConflictError,

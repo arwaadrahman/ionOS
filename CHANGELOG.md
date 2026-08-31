@@ -23,6 +23,14 @@ All notable repository changes are documented here.
 
 ### Added
 
+- Phase 2C-4 Google Calendar delete and cancellation: backend-owned delete
+  eligibility, explicit irreversible confirmation, local-first tombstone
+  intent, exact-ETag `events.delete`, bounded ambiguity lookup, 404
+  already-absent completion, restart-safe retry, refresh drift conflict, and
+  wholly local cancellation of never-attempted creates. Migration `0007`
+  remains sufficient; recurrence mutation and all unsafe event classes remain
+  read-only.
+
 - Phase 2C-3 Google Calendar edit, move, and resize: explicit-save inspector
   editing, direct timed drag/resize review, atomic durable desired overlays,
   changed-field-only `events.patch` with exact non-wildcard `If-Match`, bounded

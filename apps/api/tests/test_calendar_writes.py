@@ -24,12 +24,14 @@ from ion_api.calendar_contracts import (
 from ion_api.calendar_write_contracts import (
     BeginWriteAttemptInput,
     CreateProviderEventInput,
+    DeleteProviderEventInput,
     EditProviderEventInput,
     ProviderWriteValues,
     PruneWriteIntentsInput,
     QueueProviderWriteIntentInput,
     ReadyWriteIntentsInput,
     ReconcileProviderCreateInput,
+    ReconcileProviderDeleteInput,
     ReconcileProviderPatchInput,
     RecordProviderWriteResultInput,
     RecoverWriteIntentsInput,
@@ -170,6 +172,248 @@ def _edit(writes, block, *, command_id=None, **overrides):
     }
     values.update(overrides)
     return writes.edit(EditProviderEventInput(**values))
+
+
+def _delete(writes, block, *, command_id=None, **overrides):
+    values = {
+        "command_id": command_id or str(uuid4()),
+        "calendar_block_id": block.id,
+        "expected_block_revision": block.revision,
+        "locked_confirmed": True,
+    }
+    values.update(overrides)
+    return writes.delete(DeleteProviderEventInput(**values))
+
+
+def test_delete_is_local_first_etag_bound_and_audited(tmp_path):
+    engine, calendar, writes, block = _connected(tmp_path)
+    command_id = str(uuid4())
+    intent = _delete(writes, block, command_id=command_id)
+    assert intent.operation == "delete_event"
+    assert intent.state == "ready"
+    projected = calendar.status().blocks[0]
+    assert projected.status == "confirmed"
+    assert projected.provider_write_operation == "delete_event"
+    assert projected.provider_write_state == "pending"
+    plan = writes.ready(ReadyWriteIntentsInput())[0]
+    assert plan.expected_provider_etag == '"synthetic-etag"'
+    assert plan.changed_fields == ["status"]
+    assert plan.desired_values.status == "cancelled"
+    with engine.connect() as connection:
+        actions = (
+            connection.execute(
+                select(audit_events.c.action).where(
+                    audit_events.c.command_id == command_id
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert actions == ["delete_requested"]
+
+
+def test_never_attempted_create_cancels_locally_without_delete_intent(tmp_path):
+    engine, calendar, writes, _ = _connected(tmp_path)
+    created = _create(writes, calendar)
+    pending = next(
+        item
+        for item in calendar.status().blocks
+        if item.id == created.calendar_block_id
+    )
+    assert pending.provider_delete_capability.mode == "local_create_cancel"
+    command_id = str(uuid4())
+    assert _delete(writes, pending, command_id=command_id) is None
+    assert _delete(writes, pending, command_id=command_id) is None
+    with engine.connect() as connection:
+        operations = (
+            connection.execute(
+                select(calendar_provider_write_intents.c.operation).where(
+                    calendar_provider_write_intents.c.calendar_block_id == pending.id
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert operations == ["create"]
+    cancelled = next(item for item in calendar.status().blocks if item.id == pending.id)
+    assert cancelled.status == "cancelled"
+    assert cancelled.provider_deleted_at is not None
+
+
+def test_attempted_create_requires_reconciliation_before_delete(tmp_path):
+    _, calendar, writes, _ = _connected(tmp_path)
+    created = _create(writes, calendar)
+    writes.begin_attempt(
+        created.id,
+        BeginWriteAttemptInput(
+            expected_state="ready", executor_provenance="direct_human"
+        ),
+    )
+    pending = next(
+        item
+        for item in calendar.status().blocks
+        if item.id == created.calendar_block_id
+    )
+    assert pending.provider_delete_capability.reason == "create_reconciliation_required"
+    with pytest.raises(CalendarValidationError, match="create_reconciliation_required"):
+        _delete(writes, pending)
+
+
+def test_delete_404_completes_and_ambiguous_live_target_retries(tmp_path):
+    _, calendar, writes, block = _connected(tmp_path)
+    intent = _delete(writes, block)
+    writes.begin_attempt(
+        intent.id,
+        BeginWriteAttemptInput(
+            expected_state="ready", executor_provenance="direct_human"
+        ),
+    )
+    completed = writes.reconcile_delete(
+        intent.id,
+        ReconcileProviderDeleteInput(resolution_kind="already_absent"),
+    )
+    assert completed.state == "completed"
+    assert completed.failure_reason == "provider_already_absent"
+    assert calendar.status().blocks[0].status == "cancelled"
+
+    _, _, writes2, block2 = _connected(tmp_path)
+    intent2 = _delete(writes2, block2)
+    writes2.begin_attempt(
+        intent2.id,
+        BeginWriteAttemptInput(
+            expected_state="ready", executor_provenance="direct_human"
+        ),
+    )
+    ambiguous = writes2.record_result(
+        intent2.id,
+        RecordProviderWriteResultInput(
+            stage="delete",
+            result_class="retryable_transport",
+            safe_reason="transport_failure",
+        ),
+    )
+    writes2.begin_attempt(
+        intent2.id,
+        BeginWriteAttemptInput(
+            expected_state="ambiguous", executor_provenance="recovery"
+        ),
+    )
+    retry = writes2.reconcile_delete(
+        intent2.id,
+        ReconcileProviderDeleteInput(
+            resolution_kind="identity_lookup",
+            event=ProviderEventInput(
+                provider_event_id=block2.provider_event_id,
+                provider_etag='"synthetic-etag"',
+                title="Synthetic event title",
+                start=ProviderDateTime(
+                    date_time="2030-01-01T09:00:00-08:00",
+                    timezone="America/Los_Angeles",
+                ),
+                end=ProviderDateTime(
+                    date_time="2030-01-01T10:00:00-08:00",
+                    timezone="America/Los_Angeles",
+                ),
+            ),
+        ),
+    )
+    assert ambiguous.state == "ambiguous"
+    assert retry.state == "retry_wait"
+
+
+def test_delete_412_and_ambiguity_etag_drift_preserve_conflict(tmp_path):
+    _, _, writes, block = _connected(tmp_path)
+    intent = _delete(writes, block)
+    writes.begin_attempt(
+        intent.id,
+        BeginWriteAttemptInput(
+            expected_state="ready", executor_provenance="direct_human"
+        ),
+    )
+    conflict = writes.record_result(
+        intent.id,
+        RecordProviderWriteResultInput(
+            stage="delete",
+            result_class="stale_precondition",
+            safe_reason="stale_precondition",
+        ),
+    )
+    assert conflict.state == "conflict"
+
+    _, _, writes2, block2 = _connected(tmp_path)
+    intent2 = _delete(writes2, block2)
+    writes2.begin_attempt(
+        intent2.id,
+        BeginWriteAttemptInput(
+            expected_state="ready", executor_provenance="direct_human"
+        ),
+    )
+    writes2.record_result(
+        intent2.id,
+        RecordProviderWriteResultInput(
+            stage="delete",
+            result_class="retryable_transport",
+            safe_reason="transport_failure",
+        ),
+    )
+    writes2.begin_attempt(
+        intent2.id,
+        BeginWriteAttemptInput(
+            expected_state="ambiguous", executor_provenance="recovery"
+        ),
+    )
+    drift = writes2.reconcile_delete(
+        intent2.id,
+        ReconcileProviderDeleteInput(
+            resolution_kind="identity_lookup",
+            event=ProviderEventInput(
+                provider_event_id=block2.provider_event_id,
+                provider_etag='"changed-etag"',
+                title="Synthetic event title",
+                start=ProviderDateTime(
+                    date_time="2030-01-01T09:00:00-08:00",
+                    timezone="America/Los_Angeles",
+                ),
+                end=ProviderDateTime(
+                    date_time="2030-01-01T10:00:00-08:00",
+                    timezone="America/Los_Angeles",
+                ),
+            ),
+        ),
+    )
+    assert drift.state == "conflict"
+    assert drift.failure_reason == "provider_target_changed"
+
+
+def test_refresh_tombstone_completes_pending_delete_without_resurrection(tmp_path):
+    _, calendar, writes, block = _connected(tmp_path)
+    intent = _delete(writes, block)
+    calendar_id = calendar.status().calendars[0].id
+    generation = str(uuid4())
+    calendar.begin_sync(
+        calendar_id, SyncBeginInput(generation=generation, mode="incremental")
+    )
+    calendar.apply_sync_page(
+        calendar_id,
+        SyncPageInput(
+            generation=generation,
+            events=[
+                ProviderEventInput(
+                    provider_event_id=block.provider_event_id,
+                    provider_etag='"synthetic-delete-etag"',
+                    status="cancelled",
+                )
+            ],
+        ),
+    )
+    with calendar.engine.connect() as connection:
+        row = connection.execute(
+            select(calendar_provider_write_intents).where(
+                calendar_provider_write_intents.c.id == intent.id
+            )
+        ).one()
+    assert row.state == "completed"
+    assert calendar.status().blocks[0].status == "cancelled"
 
 
 def test_deterministic_google_event_id_is_stable_160_bit_base32hex():
@@ -480,8 +724,12 @@ def test_provider_event_capability_rejects_unsafe_event_classes(
     projected = calendar.status().blocks[0]
     assert projected.provider_write_capability.eligible is False
     assert projected.provider_write_capability.reason == reason
+    assert projected.provider_delete_capability.eligible is False
+    assert projected.provider_delete_capability.reason == reason
     with pytest.raises(CalendarValidationError, match=reason):
         _edit(writes, block)
+    with pytest.raises(CalendarValidationError, match=reason):
+        _delete(writes, block)
 
 
 def test_ion_locked_event_requires_explicit_confirmation(tmp_path):

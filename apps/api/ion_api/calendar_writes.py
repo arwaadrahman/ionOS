@@ -25,6 +25,7 @@ from ion_api.calendar_write_contracts import (
     CalendarWriteCapabilityOutput,
     CalendarWriteFoundationOutput,
     CreateProviderEventInput,
+    DeleteProviderEventInput,
     EditProviderEventInput,
     ProviderWriteIntentSummaryOutput,
     ProviderWritePlanOutput,
@@ -33,6 +34,7 @@ from ion_api.calendar_write_contracts import (
     QueueProviderWriteIntentInput,
     ReadyWriteIntentsInput,
     ReconcileProviderCreateInput,
+    ReconcileProviderDeleteInput,
     ReconcileProviderPatchInput,
     RecordProviderWriteResultInput,
     RecoverWriteIntentsInput,
@@ -893,6 +895,195 @@ class CalendarWriteService:
             )
             return _summary(ready)
 
+    def delete(
+        self, input: DeleteProviderEventInput
+    ) -> ProviderWriteIntentSummaryOutput | None:
+        """Persist a delete intent or cancel a never-attempted create locally."""
+        now = utc_now()
+        with self.engine.begin() as connection:
+            local_cancel = connection.execute(
+                select(audit_events.c.event_id).where(
+                    audit_events.c.command_id == input.command_id,
+                    audit_events.c.action == "create_cancelled_locally",
+                    audit_events.c.entity_id == input.calendar_block_id,
+                )
+            ).one_or_none()
+            if local_cancel is not None:
+                return None
+            existing_command = connection.execute(
+                select(calendar_provider_write_intents).where(
+                    calendar_provider_write_intents.c.command_id == input.command_id
+                )
+            ).one_or_none()
+            if existing_command is not None:
+                if (
+                    existing_command.operation != "delete_event"
+                    or existing_command.calendar_block_id != input.calendar_block_id
+                ):
+                    raise CalendarConflictError(input.command_id)
+                return _summary(existing_command)
+
+            block = self._required_row(
+                connection, calendar_blocks, input.calendar_block_id
+            )
+            if block.revision != input.expected_block_revision:
+                raise CalendarConflictError(input.calendar_block_id)
+            link = self._required_row(
+                connection,
+                google_event_links,
+                block.id,
+                google_event_links.c.calendar_block_id,
+            )
+            account = self._required_row(connection, google_accounts, link.account_id)
+            calendar = self._required_row(
+                connection, google_calendars, link.calendar_id
+            )
+            metadata = self._required_row(
+                connection,
+                calendar_block_ion_metadata,
+                block.id,
+                calendar_block_ion_metadata.c.calendar_block_id,
+            )
+            if metadata.flexibility == "locked" and not input.locked_confirmed:
+                raise CalendarValidationError("locked_confirmation_required")
+
+            latest = connection.execute(
+                select(calendar_provider_write_intents)
+                .where(calendar_provider_write_intents.c.calendar_block_id == block.id)
+                .order_by(calendar_provider_write_intents.c.sequence.desc())
+                .limit(1)
+            ).one_or_none()
+            if latest is not None and latest.state not in TERMINAL_PREDECESSOR_STATES:
+                if (
+                    latest.operation == "create"
+                    and latest.state in ("queued", "ready")
+                    and latest.attempt_count == 0
+                    and link.link_state == "pending_create"
+                ):
+                    connection.execute(
+                        update(calendar_provider_write_intents)
+                        .where(calendar_provider_write_intents.c.id == latest.id)
+                        .values(
+                            state="cancelled",
+                            failure_class=None,
+                            failure_reason="cancelled_before_provider_attempt",
+                            updated_at=now,
+                            resolved_at=now,
+                        )
+                    )
+                    cancelled = self._required_row(
+                        connection, calendar_provider_write_intents, latest.id
+                    )
+                    connection.execute(
+                        update(calendar_blocks)
+                        .where(calendar_blocks.c.id == block.id)
+                        .values(
+                            status="cancelled",
+                            provider_deleted_at=now,
+                            updated_at=now,
+                            revision=block.revision + 1,
+                        )
+                    )
+                    _audit(
+                        connection,
+                        cancelled,
+                        action="write_cancelled",
+                        from_state=latest.state,
+                        to_state="cancelled",
+                        occurred_at=now,
+                        executor_provenance="direct_human",
+                        resulting_revision=block.revision + 1,
+                    )
+                    _canonical_audit(
+                        connection,
+                        block_id=block.id,
+                        action="create_cancelled_locally",
+                        command_id=input.command_id,
+                        from_revision=block.revision,
+                        to_revision=block.revision + 1,
+                    )
+                    return None
+                if latest.operation == "create":
+                    raise CalendarValidationError("create_reconciliation_required")
+                raise CalendarValidationError("write_pending")
+
+            reason = _write_reason(account, calendar, link, block)
+            if reason != "eligible":
+                raise CalendarValidationError(reason)
+            intent_id = str(uuid4())
+            sequence = 1 if latest is None else latest.sequence + 1
+            base = {"schema_version": 1, "status": block.status}
+            desired = {"schema_version": 1, "status": "cancelled"}
+            connection.execute(
+                insert(calendar_provider_write_intents).values(
+                    id=intent_id,
+                    command_id=input.command_id,
+                    calendar_block_id=block.id,
+                    account_id=link.account_id,
+                    calendar_id=link.calendar_id,
+                    provider_event_id=link.provider_event_id,
+                    sequence=sequence,
+                    predecessor_intent_id=None,
+                    operation="delete_event",
+                    recurrence_scope="single",
+                    changed_fields_json=_json(["status"]),
+                    base_values_json=_json(base),
+                    desired_values_json=_json(desired),
+                    expected_provider_etag=link.provider_etag,
+                    source_block_revision=block.revision,
+                    schema_version=1,
+                    state="queued",
+                    attempt_count=0,
+                    next_attempt_at=None,
+                    last_attempt_at=None,
+                    failure_class=None,
+                    failure_reason=None,
+                    created_at=now,
+                    updated_at=now,
+                    resolved_at=None,
+                    prune_after=None,
+                    provenance=input.provenance,
+                )
+            )
+            queued = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            _canonical_audit(
+                connection,
+                block_id=block.id,
+                action="delete_requested",
+                command_id=input.command_id,
+                from_revision=block.revision,
+                to_revision=block.revision,
+            )
+            _audit(
+                connection,
+                queued,
+                action="write_intent_queued",
+                from_state=None,
+                to_state="queued",
+                occurred_at=now,
+                executor_provenance="direct_human",
+            )
+            connection.execute(
+                update(calendar_provider_write_intents)
+                .where(calendar_provider_write_intents.c.id == intent_id)
+                .values(state="ready", updated_at=now)
+            )
+            ready = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            _audit(
+                connection,
+                ready,
+                action="write_intent_ready",
+                from_state="queued",
+                to_state="ready",
+                occurred_at=now,
+                executor_provenance="direct_human",
+            )
+            return _summary(ready)
+
     def queue(
         self, input: QueueProviderWriteIntentInput
     ) -> ProviderWriteIntentSummaryOutput:
@@ -1075,9 +1266,9 @@ class CalendarWriteService:
             )
             if row.state != input.expected_state:
                 raise CalendarConflictError(intent_id)
-            if row.operation not in ("create", "patch"):
+            if row.operation not in ("create", "patch", "delete_event"):
                 raise CalendarValidationError(
-                    "Phase 2C-3 dispatch accepts create and single-event patch only"
+                    "dispatch accepts only bounded create, patch, and delete"
                 )
             block = self._required_row(
                 connection, calendar_blocks, row.calendar_block_id
@@ -1134,16 +1325,16 @@ class CalendarWriteService:
                 )
                 return _summary(blocked)
 
-            if row.operation == "patch" and (
+            if row.operation in ("patch", "delete_event") and (
                 row.recurrence_scope != "single"
                 or not row.expected_provider_etag
                 or row.expected_provider_etag == "*"
             ):
                 raise CalendarValidationError(
-                    "patch requires a bounded non-wildcard ETag"
+                    "provider mutation requires a bounded non-wildcard ETag"
                 )
             if (
-                row.operation == "patch"
+                row.operation in ("patch", "delete_event")
                 and link.provider_etag != row.expected_provider_etag
             ):
                 connection.execute(
@@ -1213,6 +1404,7 @@ class CalendarWriteService:
             if row.state != input.expected_state or row.operation not in (
                 "create",
                 "patch",
+                "delete_event",
             ):
                 raise CalendarConflictError(intent_id)
 
@@ -1257,7 +1449,7 @@ class CalendarWriteService:
                         )
                     else:
                         target = "failed"
-                else:
+                elif row.operation == "patch":
                     if input.stage == "patch" and result_class == "retryable_transport":
                         target = "ambiguous"
                     elif input.stage == "identity_lookup" and result_class in (
@@ -1278,6 +1470,33 @@ class CalendarWriteService:
                         "retryable_backend",
                         "retryable_quota",
                     ):
+                        target = (
+                            "failed"
+                            if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
+                            else "retry_wait"
+                        )
+                    else:
+                        target = "failed"
+                else:
+                    if (
+                        input.stage == "delete"
+                        and result_class == "retryable_transport"
+                    ):
+                        target = "ambiguous"
+                    elif input.stage == "identity_lookup" and result_class in (
+                        "retryable_transport",
+                        "retryable_backend",
+                    ):
+                        target = (
+                            "failed"
+                            if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
+                            else "ambiguous"
+                        )
+                    elif result_class == "stale_precondition":
+                        target = "conflict"
+                    elif result_class == "provider_not_found":
+                        target = "failed"
+                    elif result_class in ("retryable_backend", "retryable_quota"):
                         target = (
                             "failed"
                             if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
@@ -1698,6 +1917,164 @@ class CalendarWriteService:
                 connection,
                 block_id=block.id,
                 action="provider_patch_confirmed",
+                command_id=row.command_id,
+                from_revision=block.revision,
+                to_revision=revision,
+            )
+            return _summary(completed)
+
+    def reconcile_delete(
+        self, intent_id: str, input: ReconcileProviderDeleteInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        now = utc_now()
+        with self.engine.begin() as connection:
+            row = self._required_row(
+                connection, calendar_provider_write_intents, intent_id
+            )
+            if row.state != input.expected_state or row.operation != "delete_event":
+                raise CalendarConflictError(intent_id)
+            block = self._required_row(
+                connection, calendar_blocks, row.calendar_block_id
+            )
+            if input.resolution_kind == "identity_lookup":
+                event = input.event
+                valid = (
+                    event is not None
+                    and event.provider_event_id == row.provider_event_id
+                    and bool(event.provider_etag)
+                    and event.provider_etag != "*"
+                    and event.status != "cancelled"
+                    and event.provider_event_type == "default"
+                    and not event.provider_locked
+                    and not event.has_attendees
+                    and not event.recurrence
+                    and event.recurring_event_id is None
+                )
+                if not valid or event.provider_etag != row.expected_provider_etag:
+                    connection.execute(
+                        update(calendar_provider_write_intents)
+                        .where(calendar_provider_write_intents.c.id == row.id)
+                        .values(
+                            state="conflict",
+                            failure_class="stale_precondition",
+                            failure_reason="provider_target_changed",
+                            updated_at=now,
+                        )
+                    )
+                    changed = self._required_row(
+                        connection, calendar_provider_write_intents, row.id
+                    )
+                    _audit(
+                        connection,
+                        changed,
+                        action="write_conflict_detected",
+                        from_state=row.state,
+                        to_state="conflict",
+                        occurred_at=now,
+                        executor_provenance="recovery",
+                    )
+                    return _summary(changed)
+                target = (
+                    "failed"
+                    if row.attempt_count >= MAX_AUTOMATIC_ATTEMPTS
+                    else "retry_wait"
+                )
+                next_attempt_at = None
+                if target == "retry_wait":
+                    delay = full_jitter_delay_seconds(
+                        row.attempt_count, self.random_fraction()
+                    )
+                    next_attempt_at = (
+                        (datetime.now(UTC) + timedelta(seconds=delay))
+                        .isoformat(timespec="microseconds")
+                        .replace("+00:00", "Z")
+                    )
+                connection.execute(
+                    update(calendar_provider_write_intents)
+                    .where(calendar_provider_write_intents.c.id == row.id)
+                    .values(
+                        state=target,
+                        next_attempt_at=next_attempt_at,
+                        failure_class="retryable_transport",
+                        failure_reason=(
+                            "ambiguous_delete_not_applied"
+                            if target == "retry_wait"
+                            else "automatic_attempt_limit"
+                        ),
+                        updated_at=now,
+                    )
+                )
+                changed = self._required_row(
+                    connection, calendar_provider_write_intents, row.id
+                )
+                _audit(
+                    connection,
+                    changed,
+                    action="write_retry_scheduled"
+                    if target == "retry_wait"
+                    else "write_failed_terminally",
+                    from_state=row.state,
+                    to_state=target,
+                    occurred_at=now,
+                    executor_provenance="recovery",
+                )
+                return _summary(changed)
+
+            revision = block.revision + 1
+            connection.execute(
+                update(calendar_blocks)
+                .where(calendar_blocks.c.id == block.id)
+                .values(
+                    status="cancelled",
+                    provider_deleted_at=now,
+                    updated_at=now,
+                    revision=revision,
+                )
+            )
+            prune_after = (
+                (datetime.now(UTC) + timedelta(days=COMPLETED_RETENTION_DAYS))
+                .isoformat(timespec="microseconds")
+                .replace("+00:00", "Z")
+            )
+            reason = (
+                "provider_already_absent"
+                if input.resolution_kind == "already_absent"
+                else "provider_confirmed"
+            )
+            connection.execute(
+                update(calendar_provider_write_intents)
+                .where(calendar_provider_write_intents.c.id == row.id)
+                .values(
+                    state="completed",
+                    failure_class="success",
+                    failure_reason=reason,
+                    next_attempt_at=None,
+                    updated_at=now,
+                    resolved_at=now,
+                    prune_after=prune_after,
+                )
+            )
+            completed = self._required_row(
+                connection, calendar_provider_write_intents, row.id
+            )
+            _audit(
+                connection,
+                completed,
+                action="write_completed",
+                from_state=row.state,
+                to_state="completed",
+                occurred_at=now,
+                executor_provenance="recovery",
+                resulting_revision=revision,
+            )
+            _canonical_audit(
+                connection,
+                block_id=block.id,
+                action=(
+                    "provider_delete_already_absent"
+                    if input.resolution_kind == "already_absent"
+                    else "provider_delete_confirmed"
+                ),
                 command_id=row.command_id,
                 from_revision=block.revision,
                 to_revision=revision,

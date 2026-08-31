@@ -123,6 +123,12 @@ function block(
       eligible: false,
       reason: "account_read_only",
     },
+    provider_delete_capability: {
+      eligible: false,
+      mode: null,
+      reason: "account_read_only",
+    },
+    provider_write_operation: null,
     provider_write_state: "synced",
     provider_write_detail: "confirmed",
     ...overrides,
@@ -232,6 +238,12 @@ test("Sync Now replaces Never synced with the returned successful projection", a
           eligible: false,
           reason: "account_read_only",
         },
+        provider_delete_capability: {
+          eligible: false,
+          mode: null,
+          reason: "account_read_only",
+        },
+        provider_write_operation: null,
         provider_write_state: "synced",
         provider_write_detail: "confirmed",
       },
@@ -1506,6 +1518,55 @@ test("edits an eligible title through explicit save and preserves locked confirm
   expect(
     await screen.findByText(/saved locally and pending Google confirmation/i),
   ).toBeInTheDocument();
+});
+
+test("requires explicit confirmation before a bounded single-event delete", async () => {
+  const deletable = block(
+    "88888888-8888-4888-8888-888888888888",
+    "Synthetic deletable event",
+    {
+      provider_write_capability: { eligible: true, reason: "eligible" },
+      provider_delete_capability: {
+        eligible: true,
+        mode: "provider_delete",
+        reason: "eligible",
+      },
+    },
+  );
+  const writable = writableStatus([deletable]);
+  vi.mocked(invoke).mockResolvedValue({ ...writable, blocks: [] });
+  render(
+    <CalendarWorkspace
+      status={writable}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: /^Synthetic deletable event,/ }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Delete event" }));
+  expect(screen.getByText(/Scope: this event only/i)).toBeInTheDocument();
+  expect(screen.getByText(/cannot be undone in Ion/i)).toBeInTheDocument();
+  const confirm = screen.getByRole("button", { name: "Delete event" });
+  expect(confirm).toBeDisabled();
+  fireEvent.click(
+    screen.getByRole("checkbox", {
+      name: /confirm deleting this Ion-locked event/i,
+    }),
+  );
+  fireEvent.click(confirm);
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("delete_google_calendar_event", {
+      draft: {
+        command_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        calendar_block_id: deletable.id,
+        expected_block_revision: 1,
+        locked_confirmed: true,
+      },
+    }),
+  );
 });
 
 test("drag move and end resize open a review surface without pointer-time provider calls", () => {

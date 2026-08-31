@@ -289,6 +289,19 @@ export type CalendarEditDraft = {
   locked_confirmed: boolean;
 };
 
+export type CalendarDeleteDraft = {
+  command_id: string;
+  calendar_block_id: string;
+  expected_block_revision: number;
+  locked_confirmed: boolean;
+};
+
+export type ProviderDeleteCapability = {
+  eligible: boolean;
+  mode: "provider_delete" | "local_create_cancel" | null;
+  reason: string;
+};
+
 export type CalendarBlock = {
   id: string;
   calendar_id: string;
@@ -322,6 +335,14 @@ export type CalendarBlock = {
   provider_deleted_at: string | null;
   revision: number;
   provider_write_capability: ProviderWriteCapability;
+  provider_delete_capability: ProviderDeleteCapability;
+  provider_write_operation:
+    | "create"
+    | "patch"
+    | "cancel_occurrence"
+    | "delete_event"
+    | "delete_series"
+    | null;
   provider_write_state: "pending" | "synced" | "failed" | "conflict";
   provider_write_detail:
     | "queued"
@@ -378,6 +399,8 @@ export const googleCalendarClient = {
     invoke<CalendarStatus>("create_google_calendar_event", { draft }),
   edit: (draft: CalendarEditDraft) =>
     invoke<CalendarStatus>("edit_google_calendar_event", { draft }),
+  delete: (draft: CalendarDeleteDraft) =>
+    invoke<CalendarStatus>("delete_google_calendar_event", { draft }),
   setEnabled: (calendar: GoogleCalendar, enabled: boolean) =>
     invoke<CalendarStatus>("set_google_calendar_enabled", {
       calendarId: calendar.id,

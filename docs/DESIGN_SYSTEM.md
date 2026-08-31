@@ -108,6 +108,9 @@ The package is not yet implemented as a standalone design-system package.
   reauthentication, failure, and conflict states use calm truthful copy;
   ineligible Google events remain inspectable with a reason. Ion-owned
   presentation metadata remains independently editable where supported.
+  Phase 2C-4 adds a distinct destructive confirmation with explicit
+  single-event scope, Google-removal consequence, no-Undo copy, and an extra
+  confirmation for Ion-locked events.
 
 ## Motion ownership ladder
 

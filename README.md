@@ -7,7 +7,7 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 ## Status
 
 Current phase: **Phase 2 — Calendar**
-Current milestone: **Phase 2C-3 — Google Calendar edit, move, and resize**
+Current milestone: **Phase 2C-4 — Google Calendar delete and cancellation**
 
 Phase 0 established the secure local runtime. Phase 1A added the canonical
 organizer schema and Task vertical slice. Phase 1B makes Areas, Goals, Projects,
@@ -39,6 +39,9 @@ Phase 2C-2 adds deliberate write re-consent and idempotent local-first event
 creation. Phase 2C-3 adds bounded explicit-save title/time editing and reviewed
 timed move/resize for eligible ordinary attendee-free events, with durable
 offline intent and explicit ETag conflicts.
+Phase 2C-4 adds explicitly confirmed single-event deletion with conditional
+`events.delete`, deterministic ambiguity/404 reconciliation, and wholly local
+cancellation of provider-unattempted creates.
 
 ## Start here
 

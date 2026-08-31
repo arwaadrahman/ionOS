@@ -228,6 +228,13 @@ pub struct ProviderWriteCapability {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProviderDeleteCapability {
+    pub eligible: bool,
+    pub mode: Option<String>,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct InternalGoogleCalendar {
     #[serde(flatten)]
@@ -270,6 +277,8 @@ pub struct CalendarBlock {
     pub provider_deleted_at: Option<String>,
     pub revision: i64,
     pub provider_write_capability: ProviderWriteCapability,
+    pub provider_delete_capability: ProviderDeleteCapability,
+    pub provider_write_operation: Option<String>,
     pub provider_write_state: String,
     pub provider_write_detail: String,
 }
@@ -363,6 +372,15 @@ pub struct EditCalendarEventDraft {
     locked_confirmed: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteCalendarEventDraft {
+    command_id: String,
+    calendar_block_id: String,
+    expected_block_revision: i64,
+    locked_confirmed: bool,
+}
+
 #[derive(Serialize)]
 struct CreateProviderEventInput<'a> {
     command_id: &'a str,
@@ -402,6 +420,22 @@ struct EditProviderEventInput<'a> {
 struct EditProviderEventOutput {
     intent: ProviderWriteIntentSummary,
     status: CalendarStatus,
+}
+
+#[derive(Serialize)]
+struct DeleteProviderEventInput<'a> {
+    command_id: &'a str,
+    calendar_block_id: &'a str,
+    expected_block_revision: i64,
+    locked_confirmed: bool,
+    provenance: &'static str,
+}
+
+#[derive(Deserialize)]
+struct DeleteProviderEventOutput {
+    intent: Option<ProviderWriteIntentSummary>,
+    status: CalendarStatus,
+    resolution: String,
 }
 
 #[allow(dead_code)]
@@ -474,6 +508,13 @@ struct ReconcileProviderPatchInput<'a> {
     expected_state: &'static str,
     resolution_kind: &'a str,
     event: &'a ProviderEvent,
+}
+
+#[derive(Serialize)]
+struct ReconcileProviderDeleteInput<'a> {
+    expected_state: &'static str,
+    resolution_kind: &'a str,
+    event: Option<&'a ProviderEvent>,
 }
 
 #[allow(dead_code)]
@@ -1197,6 +1238,7 @@ fn patch_provider_body(
 
 enum ProviderCreateCallOutcome {
     Confirmed(Box<ProviderEvent>),
+    Deleted,
     Failed(ProviderWriteResultClass),
 }
 
@@ -1258,6 +1300,9 @@ async fn execute_provider_create_call(
     let classification = classify_write_provider_result(call.method, status, &bytes);
     if classification != ProviderWriteResultClass::Success {
         return ProviderCreateCallOutcome::Failed(classification);
+    }
+    if call.method == ProviderWriteMethod::Delete {
+        return ProviderCreateCallOutcome::Deleted;
     }
     match serde_json::from_slice::<ProviderEventRaw>(&bytes) {
         Ok(event) => ProviderCreateCallOutcome::Confirmed(Box::new(sanitize_event(
@@ -1713,6 +1758,20 @@ async fn edit_provider_write_intent(
     .map_err(Into::into)
 }
 
+async fn delete_provider_write_intent(
+    state: &ServiceState,
+    input: &DeleteProviderEventInput<'_>,
+) -> Result<DeleteProviderEventOutput, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/write-intents/delete",
+        Some(input),
+    )
+    .await
+    .map_err(Into::into)
+}
+
 #[allow(dead_code)]
 async fn ready_provider_write_intents(
     state: &ServiceState,
@@ -1820,6 +1879,17 @@ async fn reconcile_provider_patch(
     input: &ReconcileProviderPatchInput<'_>,
 ) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
     let route = write_intent_backend_route(intent_id, "/reconcile-patch")?;
+    product_request(state, reqwest::Method::POST, &route, Some(input))
+        .await
+        .map_err(Into::into)
+}
+
+async fn reconcile_provider_delete(
+    state: &ServiceState,
+    intent_id: &str,
+    input: &ReconcileProviderDeleteInput<'_>,
+) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
+    let route = write_intent_backend_route(intent_id, "/reconcile-delete")?;
     product_request(state, reqwest::Method::POST, &route, Some(input))
         .await
         .map_err(Into::into)
@@ -2119,6 +2189,40 @@ pub async fn edit_google_calendar_event<R: Runtime>(
         .await
         .map(|latest| configured_status(&app, latest))
         .unwrap_or_else(|_| configured_status(&app, edited.status)))
+}
+
+#[tauri::command]
+pub async fn delete_google_calendar_event<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+    google: State<'_, GoogleState>,
+    draft: DeleteCalendarEventDraft,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    validated_backend_id(&draft.command_id)?;
+    validated_backend_id(&draft.calendar_block_id)?;
+    if draft.expected_block_revision < 1 {
+        return Err(GoogleCommandError::new("local_state_invalid"));
+    }
+    let deleted = delete_provider_write_intent(
+        &service,
+        &DeleteProviderEventInput {
+            command_id: &draft.command_id,
+            calendar_block_id: &draft.calendar_block_id,
+            expected_block_revision: draft.expected_block_revision,
+            locked_confirmed: draft.locked_confirmed,
+            provenance: "direct_human",
+        },
+    )
+    .await?;
+    let _persisted_intent = deleted.intent.as_ref().map(|intent| &intent.id);
+    let _local_resolution = &deleted.resolution;
+    if deleted.intent.is_some() {
+        let _ = dispatch_calendar_writes(&app, &service, &google, "direct_human").await;
+    }
+    Ok(local_status(&service)
+        .await
+        .map(|latest| configured_status(&app, latest))
+        .unwrap_or_else(|_| configured_status(&app, deleted.status)))
 }
 
 #[tauri::command]
@@ -2772,6 +2876,9 @@ async fn dispatch_create_plan<R: Runtime>(
                 .await?;
             }
         }
+        ProviderCreateCallOutcome::Deleted => {
+            return Err(GoogleCommandError::new("provider_write_invalid"));
+        }
     }
     Ok(())
 }
@@ -2915,6 +3022,187 @@ async fn dispatch_patch_plan<R: Runtime>(
                 .await?;
             }
         }
+        ProviderCreateCallOutcome::Deleted => {
+            return Err(GoogleCommandError::new("provider_write_invalid"));
+        }
+    }
+    Ok(())
+}
+
+async fn dispatch_delete_plan<R: Runtime>(
+    app: &AppHandle<R>,
+    service: &ServiceState,
+    google: &GoogleState,
+    client: &Client,
+    config: &OAuthConfig,
+    plan: &ProviderWritePlan,
+    executor_provenance: &str,
+) -> Result<(), GoogleCommandError> {
+    if plan.summary.operation != "delete_event"
+        || plan.summary.recurrence_scope != "single"
+        || plan.summary.changed_fields != vec!["status".to_owned()]
+        || plan
+            .expected_provider_etag
+            .as_deref()
+            .map_or(true, |etag| etag.is_empty() || etag == "*")
+        || plan
+            .base_values
+            .as_ref()
+            .and_then(|values| values.status.as_deref())
+            .is_none()
+        || plan
+            .desired_values
+            .as_ref()
+            .and_then(|values| values.status.as_deref())
+            != Some("cancelled")
+        || !matches!(plan.summary.state.as_str(), "ready" | "ambiguous")
+    {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    let claimed = begin_provider_write_attempt(
+        service,
+        &plan.summary.id,
+        &BeginProviderWriteAttemptInput {
+            expected_state: &plan.summary.state,
+            executor_provenance,
+        },
+    )
+    .await?;
+    if claimed.state != "attempting" {
+        return Ok(());
+    }
+
+    let state = internal_state(service).await?;
+    let account = state
+        .accounts
+        .iter()
+        .find(|item| item.account.id == plan.account_id)
+        .ok_or_else(|| GoogleCommandError::new("local_state_not_found"))?;
+    let calendar = state
+        .calendars
+        .iter()
+        .find(|item| item.calendar.id == plan.calendar_id)
+        .ok_or_else(|| GoogleCommandError::new("local_state_not_found"))?;
+    let method = if plan.summary.state == "ambiguous" {
+        ProviderWriteMethod::Get
+    } else {
+        ProviderWriteMethod::Delete
+    };
+    let stage = if method == ProviderWriteMethod::Delete {
+        "delete"
+    } else {
+        "identity_lookup"
+    };
+    let expected_etag = (method == ProviderWriteMethod::Delete)
+        .then_some(plan.expected_provider_etag.as_deref())
+        .flatten();
+    let mut access_token = match google.cached_token(&account.account.id) {
+        Some(token) => token,
+        None => match refreshed_write_access_token(client, config, google, account).await {
+            Ok(token) => token,
+            Err(classification) => {
+                record_create_failure(service, &plan.summary.id, stage, classification).await?;
+                return Ok(());
+            }
+        },
+    };
+    let fallback_timezone = calendar.calendar.timezone.as_deref().unwrap_or("UTC");
+    let mut outcome = execute_provider_create_call(
+        client,
+        &ProviderCreateCall {
+            api_base: CALENDAR_API,
+            method,
+            access_token: &access_token,
+            provider_calendar_id: &calendar.calendar.provider_calendar_id,
+            provider_event_id: &plan.provider_event_id,
+            expected_etag,
+            body: None,
+            fallback_timezone,
+        },
+    )
+    .await;
+    if matches!(
+        outcome,
+        ProviderCreateCallOutcome::Failed(ProviderWriteResultClass::ReauthenticationRequired)
+    ) {
+        google.forget_account(&account.account.id);
+        outcome = match refreshed_write_access_token(client, config, google, account).await {
+            Ok(refreshed) => {
+                access_token = refreshed;
+                execute_provider_create_call(
+                    client,
+                    &ProviderCreateCall {
+                        api_base: CALENDAR_API,
+                        method,
+                        access_token: &access_token,
+                        provider_calendar_id: &calendar.calendar.provider_calendar_id,
+                        provider_event_id: &plan.provider_event_id,
+                        expected_etag,
+                        body: None,
+                        fallback_timezone,
+                    },
+                )
+                .await
+            }
+            Err(classification) => ProviderCreateCallOutcome::Failed(classification),
+        };
+    }
+    match outcome {
+        ProviderCreateCallOutcome::Deleted => {
+            reconcile_provider_delete(
+                service,
+                &plan.summary.id,
+                &ReconcileProviderDeleteInput {
+                    expected_state: "attempting",
+                    resolution_kind: if method == ProviderWriteMethod::Delete {
+                        "delete_response"
+                    } else {
+                        "already_absent"
+                    },
+                    event: None,
+                },
+            )
+            .await?;
+        }
+        ProviderCreateCallOutcome::Confirmed(event) => {
+            if method != ProviderWriteMethod::Get {
+                return Err(GoogleCommandError::new("provider_write_invalid"));
+            }
+            reconcile_provider_delete(
+                service,
+                &plan.summary.id,
+                &ReconcileProviderDeleteInput {
+                    expected_state: "attempting",
+                    resolution_kind: "identity_lookup",
+                    event: Some(&event),
+                },
+            )
+            .await?;
+        }
+        ProviderCreateCallOutcome::Failed(ProviderWriteResultClass::ProviderNotFound) => {
+            reconcile_provider_delete(
+                service,
+                &plan.summary.id,
+                &ReconcileProviderDeleteInput {
+                    expected_state: "attempting",
+                    resolution_kind: "already_absent",
+                    event: None,
+                },
+            )
+            .await?;
+        }
+        ProviderCreateCallOutcome::Failed(classification) => {
+            let result =
+                record_create_failure(service, &plan.summary.id, stage, classification).await?;
+            if method == ProviderWriteMethod::Delete && result.state == "ambiguous" {
+                let mut lookup = plan.clone();
+                lookup.summary = result;
+                Box::pin(dispatch_delete_plan(
+                    app, service, google, client, config, &lookup, "recovery",
+                ))
+                .await?;
+            }
+        }
     }
     Ok(())
 }
@@ -2952,6 +3240,18 @@ async fn dispatch_calendar_writes<R: Runtime>(
             }
             "patch" => {
                 dispatch_patch_plan(
+                    app,
+                    service,
+                    google,
+                    &client,
+                    &config,
+                    &plan,
+                    executor_provenance,
+                )
+                .await?;
+            }
+            "delete_event" => {
+                dispatch_delete_plan(
                     app,
                     service,
                     google,
@@ -3560,6 +3860,33 @@ maxResults=2500&showDeleted=true&singleEvents=false"
         )
         .is_err());
 
+        let delete = provider_write_request(
+            &client,
+            ProviderWriteMethod::Delete,
+            "synthetic-access-token",
+            "primary",
+            Some("synthetic-event"),
+            Some("\"synthetic-etag\""),
+            None,
+        )
+        .unwrap();
+        assert_eq!(delete.method(), reqwest::Method::DELETE);
+        assert_eq!(
+            delete.headers().get(reqwest::header::IF_MATCH).unwrap(),
+            "\"synthetic-etag\""
+        );
+        assert!(delete.body().is_none());
+        assert!(provider_write_request(
+            &client,
+            ProviderWriteMethod::Delete,
+            "synthetic-access-token",
+            "primary",
+            Some("synthetic-event"),
+            None,
+            None,
+        )
+        .is_err());
+
         let instances = provider_write_request(
             &client,
             ProviderWriteMethod::Instances,
@@ -3679,6 +4006,18 @@ maxResults=2500&showDeleted=true&singleEvents=false"
                 ProviderWriteResultClass::StalePrecondition,
             ),
             (
+                ProviderWriteMethod::Delete,
+                StatusCode::PRECONDITION_FAILED,
+                br#"{}"#.as_slice(),
+                ProviderWriteResultClass::StalePrecondition,
+            ),
+            (
+                ProviderWriteMethod::Delete,
+                StatusCode::NOT_FOUND,
+                br#"{}"#.as_slice(),
+                ProviderWriteResultClass::ProviderNotFound,
+            ),
+            (
                 ProviderWriteMethod::Patch,
                 StatusCode::TOO_MANY_REQUESTS,
                 br#"{}"#.as_slice(),
@@ -3709,6 +4048,10 @@ maxResults=2500&showDeleted=true&singleEvents=false"
         );
         assert_eq!(
             classify_write_transport_failure(ProviderWriteMethod::Patch),
+            ProviderWriteResultClass::RetryableTransport
+        );
+        assert_eq!(
+            classify_write_transport_failure(ProviderWriteMethod::Delete),
             ProviderWriteResultClass::RetryableTransport
         );
     }

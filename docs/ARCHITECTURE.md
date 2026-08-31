@@ -253,13 +253,14 @@ visible but do not fabricate timed occupancy. Today Tasks keep their existing
 planning semantics and are never converted to, or implied to be,
 CalendarBlocks. Cached Calendar content stays visible when Google is offline.
 
-## Phase 2C two-way write boundary through implemented 2C-3 edits
+## Phase 2C two-way write boundary through implemented 2C-4 delete
 
 The Phase 2C architecture/security gate is accepted. Phase 2C-1 established
 the reviewed durable outbox/capability migration and typed boundaries. Phase
 2C-2 exposes one fixed create command and an explicit selected-account
-write-scope re-consent command. Phase 2C-3 exposes one fixed edit command for
-eligible existing events. Each command first commits direct-human
+write-scope re-consent command. Phase 2C-3 exposes one fixed edit command and
+Phase 2C-4 one fixed delete command for eligible existing events. Each command
+first commits direct-human
 canonical intent and a durable Python/SQLite outbox
 transaction. Only then may Rust use its existing token and Google HTTPS
 ownership to dispatch an allowlisted event request and return a sanitized
@@ -285,9 +286,11 @@ and compact audit; unresolved work remains until explicit resolution. Phase
 reconciliation. Phase 2C-3 adds only changed-field `events.patch` with the last
 confirmed non-wildcard ETag in `If-Match`, plus same-event `events.get` after
 an ambiguous result. The confirmed provider base remains canonical while a
-durable desired overlay is pending. Provider refresh drift or HTTP 412 becomes
-an explicit conflict; no automatic merge occurs. Delete, update, move, batch,
-and recurrence-instance mutation endpoints remain unreachable. The write path
+durable desired overlay is pending. Phase 2C-4 dispatches only conditional
+single-event `events.delete`; a 404 or confirmed sync tombstone completes the
+intent, while a live changed ETag or HTTP 412 conflicts. A never-attempted
+create is cancelled wholly locally. Update, move, batch, and
+recurrence-instance mutation endpoints remain unreachable. The write path
 has no timer or busy worker: dispatch is bounded after an explicit save, sync,
 re-consent, or app-start recovery call. Existing
 accounts remain read-only until the owner explicitly enables writing. See the
