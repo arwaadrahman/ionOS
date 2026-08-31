@@ -14,6 +14,7 @@ pub fn run() {
         .manage(google_calendar::GoogleState::default())
         .invoke_handler(tauri::generate_handler![
             google_calendar::get_google_calendar_status,
+            google_calendar::get_calendar_write_foundation,
             google_calendar::connect_google_calendar,
             google_calendar::set_google_calendar_enabled,
             google_calendar::set_google_calendar_hidden,

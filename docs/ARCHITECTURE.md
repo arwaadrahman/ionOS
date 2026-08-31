@@ -248,10 +248,14 @@ visible but do not fabricate timed occupancy. Today Tasks keep their existing
 planning semantics and are never converted to, or implied to be,
 CalendarBlocks. Cached Calendar content stays visible when Google is offline.
 
-## Phase 2C accepted two-way write boundary
+## Phase 2C two-way write boundary and implemented 2C-1 foundation
 
-The Phase 2C architecture/security gate is accepted, but no write code, schema,
-or OAuth expansion is implemented yet. A future fixed Tauri Calendar command
+The Phase 2C architecture/security gate is accepted. Phase 2C-1 implements the
+provider-free foundation: one reviewed durable outbox/capability migration,
+typed Python state/recovery/audit routes, safe renderer capability evidence,
+one read-only Tauri foundation command, an explicit-but-uninvoked write-scope
+OAuth mode, and unsent typed Rust provider request/result helpers. A future
+fixed Tauri Calendar mutation command
 first commits direct-human canonical intent and a durable Python/SQLite outbox
 transaction. Only then may Rust use its existing token and Google HTTPS
 ownership to dispatch an allowlisted event request and return a sanitized
@@ -271,8 +275,10 @@ The accepted initial provider boundary is attendee-free ordinary events on
 explicitly re-consented to Calendar Events write access. Attendee/invite
 events, `writerWithoutPrivateAccess`, special event types, automatic conflict
 merges, arbitrary RRULE, and `this and following` remain outside Phase 2C.
-Successful outbox rows may be pruned after 30 days; unresolved work remains
-until explicit resolution. See
+Successful outbox rows may be pruned after 30 days only with confirmed linkage
+and compact audit; unresolved work remains until explicit resolution. No
+2C-1 code sends a Google mutation or automatically starts re-consent. See the
+[frozen 2C-1 contract](phases/PHASE_2C_1_CONTRACT.md),
 [ADR 0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md) and the
 [Phase 2C gate](phases/PHASE_2C.md).
 

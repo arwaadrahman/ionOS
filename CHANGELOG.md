@@ -23,6 +23,18 @@ All notable repository changes are documented here.
 
 ### Added
 
+- Phase 2C-1 Google Calendar write foundation: migration `0007` adds safe
+  account/event capability evidence, a typed durable provider-write outbox and
+  separate compact audit; Python adds fixed enqueue/ready/transition/recovery/
+  pruning contracts with deterministic 160-bit base32hex create IDs, persisted
+  five-attempt full-jitter retry state, crash repair, 30-day completed-only
+  pruning, and backend-derived eligibility; Rust adds an explicit uninvoked
+  write re-consent scope mode, the exact provider-method allowlist, typed unsent
+  ETag request construction, safe failure classification, and one read-only
+  Tauri capability command. Synthetic Python, migration, Rust, and renderer
+  tests cover the accepted failure matrix. No OAuth re-consent or Google event
+  mutation is initiated.
+
 - Accepted Phase 2C two-way Calendar architecture/security gate and ADR 0021,
   defining a Rust-owned provider-write boundary, Python/SQLite durable outbox,
   deterministic create idempotency, ETag conflicts, offline/reconnect recovery,

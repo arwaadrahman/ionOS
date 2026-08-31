@@ -249,6 +249,12 @@ google_accounts = Table(
     Column("granted_scopes", Text, nullable=False),
     Column("keychain_locator", Text, nullable=False, unique=True),
     Column("auth_state", String, nullable=False),
+    Column(
+        "calendar_write_scope_state",
+        String,
+        nullable=False,
+        server_default="read_only",
+    ),
     Column("last_auth_at", String, nullable=True),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
@@ -256,6 +262,11 @@ google_accounts = Table(
     CheckConstraint(
         "auth_state IN ('connected', 'reauth_required', 'disconnected')",
         name="google_account_auth_state_valid",
+    ),
+    CheckConstraint(
+        "calendar_write_scope_state IN "
+        "('read_only', 'write_granted', 'reauth_required')",
+        name="google_account_write_scope_state_valid",
     ),
     CheckConstraint("revision >= 1", name="google_account_revision_positive"),
 )
@@ -443,7 +454,11 @@ google_event_links = Table(
     Column("original_start_date", String, nullable=True),
     Column("original_start_at", String, nullable=True),
     Column("original_start_timezone", Text, nullable=True),
-    Column("last_seen_sync_generation", String(36), nullable=False),
+    Column("last_seen_sync_generation", String(36), nullable=True),
+    Column("link_state", String, nullable=False, server_default="confirmed"),
+    Column("provider_event_type", String, nullable=False, server_default="default"),
+    Column("provider_locked", Integer, nullable=False, server_default="0"),
+    Column("has_attendees", Integer, nullable=False, server_default="0"),
     CheckConstraint(
         "(original_start_kind = 'none' AND original_start_date IS NULL "
         "AND original_start_at IS NULL AND original_start_timezone IS NULL) OR "
@@ -453,7 +468,197 @@ google_event_links = Table(
         "AND original_start_at IS NOT NULL AND original_start_timezone IS NOT NULL)",
         name="google_event_original_start_union_valid",
     ),
+    CheckConstraint(
+        "link_state IN ('confirmed', 'pending_create')",
+        name="google_event_link_state_valid",
+    ),
+    CheckConstraint(
+        "provider_event_type IN ('default', 'special', 'unknown')",
+        name="google_event_type_valid",
+    ),
+    CheckConstraint(
+        "link_state = 'pending_create' OR last_seen_sync_generation IS NOT NULL",
+        name="google_event_link_confirmation_valid",
+    ),
     UniqueConstraint(
         "calendar_id", "provider_event_id", name="uq_google_event_calendar_event_id"
+    ),
+)
+
+calendar_provider_write_intents = Table(
+    "calendar_provider_write_intents",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("command_id", String(36), nullable=False, unique=True),
+    Column(
+        "calendar_block_id",
+        String(36),
+        ForeignKey("calendar_blocks.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "account_id",
+        String(36),
+        ForeignKey("google_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "calendar_id",
+        String(36),
+        ForeignKey("google_calendars.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("provider_event_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column(
+        "predecessor_intent_id",
+        String(36),
+        ForeignKey("calendar_provider_write_intents.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("operation", String, nullable=False),
+    Column("recurrence_scope", String, nullable=False),
+    Column("changed_fields_json", Text, nullable=False),
+    Column("base_values_json", Text, nullable=True),
+    Column("desired_values_json", Text, nullable=True),
+    Column("expected_provider_etag", Text, nullable=True),
+    Column("source_block_revision", Integer, nullable=False),
+    Column("schema_version", Integer, nullable=False, server_default="1"),
+    Column("state", String, nullable=False, index=True),
+    Column("attempt_count", Integer, nullable=False, server_default="0"),
+    Column("next_attempt_at", String, nullable=True),
+    Column("last_attempt_at", String, nullable=True),
+    Column("failure_class", String, nullable=True),
+    Column("failure_reason", String, nullable=True),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("resolved_at", String, nullable=True),
+    Column("prune_after", String, nullable=True),
+    Column("provenance", String, nullable=False),
+    CheckConstraint("sequence >= 1", name="calendar_write_sequence_positive"),
+    CheckConstraint(
+        "operation IN ('create', 'patch', 'cancel_occurrence', "
+        "'delete_event', 'delete_series')",
+        name="calendar_write_operation_valid",
+    ),
+    CheckConstraint(
+        "recurrence_scope IN ('single', 'occurrence', 'series')",
+        name="calendar_write_recurrence_scope_valid",
+    ),
+    CheckConstraint(
+        "length(changed_fields_json) BETWEEN 2 AND 4096",
+        name="calendar_write_field_mask_bounded",
+    ),
+    CheckConstraint(
+        "base_values_json IS NULL OR length(base_values_json) <= 524288",
+        name="calendar_write_base_values_bounded",
+    ),
+    CheckConstraint(
+        "desired_values_json IS NULL OR length(desired_values_json) <= 524288",
+        name="calendar_write_desired_values_bounded",
+    ),
+    CheckConstraint(
+        "source_block_revision >= 1", name="calendar_write_revision_positive"
+    ),
+    CheckConstraint("schema_version = 1", name="calendar_write_schema_version_valid"),
+    CheckConstraint(
+        "state IN ('queued', 'ready', 'attempting', 'retry_wait', "
+        "'reauth_required', 'conflict', 'ambiguous', 'failed', "
+        "'completed', 'cancelled')",
+        name="calendar_write_state_valid",
+    ),
+    CheckConstraint(
+        "attempt_count BETWEEN 0 AND 5", name="calendar_write_attempt_count_bounded"
+    ),
+    CheckConstraint(
+        "state <> 'retry_wait' OR next_attempt_at IS NOT NULL",
+        name="calendar_write_retry_timestamp_required",
+    ),
+    CheckConstraint(
+        "failure_class IS NULL OR failure_class IN "
+        "('success', 'retryable_transport', 'retryable_backend', "
+        "'retryable_quota', 'reauthentication_required', "
+        "'stale_precondition', 'duplicate_or_ambiguous_create', "
+        "'provider_not_found', 'invalid_target', "
+        "'terminal_provider_rejection')",
+        name="calendar_write_failure_class_valid",
+    ),
+    CheckConstraint(
+        "failure_reason IS NULL OR length(failure_reason) <= 128",
+        name="calendar_write_failure_reason_bounded",
+    ),
+    CheckConstraint(
+        "provenance = 'direct_human'", name="calendar_write_provenance_valid"
+    ),
+    UniqueConstraint(
+        "calendar_block_id", "sequence", name="uq_calendar_write_block_sequence"
+    ),
+)
+
+calendar_provider_write_audit = Table(
+    "calendar_provider_write_audit",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("intent_id", String(36), nullable=False, index=True),
+    Column("calendar_block_id", String(36), nullable=False, index=True),
+    Column("action", String, nullable=False),
+    Column("operation", String, nullable=False),
+    Column("changed_fields_json", Text, nullable=False),
+    Column("attempt_count", Integer, nullable=False),
+    Column("safe_reason_class", String, nullable=True),
+    Column("safe_reason", String, nullable=True),
+    Column("from_state", String, nullable=True),
+    Column("to_state", String, nullable=False),
+    Column("source_revision", Integer, nullable=True),
+    Column("resulting_revision", Integer, nullable=True),
+    Column("occurred_at", String, nullable=False),
+    Column("executor_provenance", String, nullable=False),
+    CheckConstraint(
+        "action IN ('write_intent_queued', 'write_intent_ready', "
+        "'write_attempt_started', 'write_retry_scheduled', "
+        "'write_reauthentication_required', 'write_outcome_ambiguous', "
+        "'write_conflict_detected', 'write_failed_terminally', "
+        "'write_completed', 'write_cancelled')",
+        name="calendar_write_audit_action_valid",
+    ),
+    CheckConstraint(
+        "operation IN ('create', 'patch', 'cancel_occurrence', "
+        "'delete_event', 'delete_series')",
+        name="calendar_write_audit_operation_valid",
+    ),
+    CheckConstraint(
+        "(from_state IS NULL OR from_state IN "
+        "('queued', 'ready', 'attempting', 'retry_wait', "
+        "'reauth_required', 'conflict', 'ambiguous', 'failed', "
+        "'completed', 'cancelled')) AND to_state IN "
+        "('queued', 'ready', 'attempting', 'retry_wait', "
+        "'reauth_required', 'conflict', 'ambiguous', 'failed', "
+        "'completed', 'cancelled')",
+        name="calendar_write_audit_state_valid",
+    ),
+    CheckConstraint(
+        "length(changed_fields_json) BETWEEN 2 AND 4096",
+        name="calendar_write_audit_fields_bounded",
+    ),
+    CheckConstraint(
+        "attempt_count BETWEEN 0 AND 5",
+        name="calendar_write_audit_attempt_bounded",
+    ),
+    CheckConstraint(
+        "safe_reason IS NULL OR length(safe_reason) <= 128",
+        name="calendar_write_audit_reason_bounded",
+    ),
+    CheckConstraint(
+        "safe_reason_class IS NULL OR safe_reason_class IN "
+        "('success', 'retryable_transport', 'retryable_backend', "
+        "'retryable_quota', 'reauthentication_required', "
+        "'stale_precondition', 'duplicate_or_ambiguous_create', "
+        "'provider_not_found', 'invalid_target', "
+        "'terminal_provider_rejection')",
+        name="calendar_write_audit_reason_class_valid",
+    ),
+    CheckConstraint(
+        "executor_provenance IN ('direct_human', 'recovery')",
+        name="calendar_write_audit_provenance_valid",
     ),
 )

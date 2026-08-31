@@ -1,6 +1,6 @@
 # Integration Boundaries
 
-## Status: Phase 2B read-only runtime active; Phase 2C write gate accepted but not implemented
+## Status: Phase 2B read-only runtime active; Phase 2C-1 provider-free write foundation implemented
 
 Integrations are adapters around Ion's local authority; they do not become its
 primary storage. Google Calendar is the first active adapter under ADR 0018.
@@ -76,7 +76,7 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   fields. Google selection, subscription, visibility, and event content remain
   untouched.
 
-## Phase 2C accepted write contract — not implemented
+## Phase 2C accepted write contract and implemented 2C-1 foundation
 
 - Accepted scopes: keep `calendar.calendarlist.readonly` and replace
   `calendar.events.readonly` with `calendar.events` only after deliberate
@@ -100,6 +100,11 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
 - Retention: unresolved, failed, conflict, and ambiguous intents remain until
   explicit resolution. Successfully completed intent rows may be pruned after
   30 days while compact audit remains durable.
+- Foundation: migration `0007`, fixed local state/recovery routes, safe
+  capability projection, one read-only Tauri foundation command, and unsent
+  Rust request construction/classification helpers implement only 2C-1.
+  Current connect remains read-only, re-consent is not triggered, and no Google
+  event mutation is reachable.
 
 See [ADR 0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md)
 and the [Phase 2C gate](phases/PHASE_2C.md).

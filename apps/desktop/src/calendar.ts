@@ -147,10 +147,27 @@ export type GoogleAccount = {
   display_name: string;
   granted_scopes: string[];
   auth_state: "connected" | "reauth_required" | "disconnected";
+  calendar_write_scope_state: "read_only" | "write_granted" | "reauth_required";
   last_auth_at: string | null;
   created_at: string;
   updated_at: string;
   revision: number;
+};
+
+export type ProviderWriteCapability = {
+  eligible: boolean;
+  reason:
+    | "eligible"
+    | "account_read_only"
+    | "reauth_required"
+    | "calendar_disabled"
+    | "calendar_deleted"
+    | "access_role_read_only"
+    | "special_event"
+    | "provider_locked"
+    | "attendees_present"
+    | "provider_deleted"
+    | "provider_unconfirmed";
 };
 
 export type GoogleCalendar = {
@@ -181,6 +198,51 @@ export type GoogleCalendar = {
   retry_count: number;
   next_retry_at: string | null;
   revision: number;
+  provider_write_eligible: boolean;
+  provider_write_reason: string;
+};
+
+export type ProviderWriteIntentSummary = {
+  id: string;
+  calendar_block_id: string;
+  operation:
+    "create" | "patch" | "cancel_occurrence" | "delete_event" | "delete_series";
+  recurrence_scope: "single" | "occurrence" | "series";
+  changed_fields: string[];
+  state:
+    | "queued"
+    | "ready"
+    | "attempting"
+    | "retry_wait"
+    | "reauth_required"
+    | "conflict"
+    | "ambiguous"
+    | "failed"
+    | "completed"
+    | "cancelled";
+  attempt_count: number;
+  next_attempt_at: string | null;
+  failure_class: string | null;
+  failure_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  provenance: "direct_human";
+};
+
+export type CalendarWriteFoundation = {
+  accounts: {
+    account_id: string;
+    state: "read_only" | "write_granted" | "reauth_required";
+    write_capable: boolean;
+  }[];
+  calendars: { calendar_id: string; eligible: boolean; reason: string }[];
+  blocks: {
+    calendar_block_id: string;
+    eligible: boolean;
+    reason: string;
+  }[];
+  pending: ProviderWriteIntentSummary[];
 };
 
 export type CalendarBlock = {
@@ -215,6 +277,7 @@ export type CalendarBlock = {
   ion_metadata_revision: number;
   provider_deleted_at: string | null;
   revision: number;
+  provider_write_capability: ProviderWriteCapability;
 };
 
 export type CalendarStatus = {
@@ -249,6 +312,8 @@ export const emptyCalendarStatus = (): CalendarStatus => ({
 
 export const googleCalendarClient = {
   status: () => invoke<CalendarStatus>("get_google_calendar_status"),
+  writeFoundation: () =>
+    invoke<CalendarWriteFoundation>("get_calendar_write_foundation"),
   connect: () => invoke<CalendarStatus>("connect_google_calendar"),
   setEnabled: (calendar: GoogleCalendar, enabled: boolean) =>
     invoke<CalendarStatus>("set_google_calendar_enabled", {

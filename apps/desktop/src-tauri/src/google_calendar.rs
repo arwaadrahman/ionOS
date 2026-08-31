@@ -25,6 +25,7 @@ use crate::service::{product_request, ProductError, ProductErrorCode, ServiceSta
 
 const CALENDAR_LIST_SCOPE: &str = "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
 const EVENTS_READ_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events.readonly";
+const EVENTS_WRITE_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events";
 const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const REVOKE_ENDPOINT: &str = "https://oauth2.googleapis.com/revoke";
@@ -37,6 +38,26 @@ const MAX_CALLBACK_BYTES: usize = 8_192;
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PROVIDER_ATTEMPTS: u32 = 3;
+
+#[allow(dead_code)] // Write mode is deliberately unbound from a renderer command in 2C-1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OAuthScopeMode {
+    ReadOnly,
+    CalendarWriteReconsent,
+}
+
+impl OAuthScopeMode {
+    fn scopes(self) -> [&'static str; 2] {
+        match self {
+            Self::ReadOnly => [CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE],
+            Self::CalendarWriteReconsent => [CALENDAR_LIST_SCOPE, EVENTS_WRITE_SCOPE],
+        }
+    }
+
+    fn query(self) -> String {
+        self.scopes().join(" ")
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +180,7 @@ pub struct GoogleAccount {
     pub display_name: String,
     pub granted_scopes: Vec<String>,
     pub auth_state: String,
+    pub calendar_write_scope_state: String,
     pub last_auth_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -195,6 +217,14 @@ pub struct GoogleCalendar {
     pub retry_count: i64,
     pub next_retry_at: Option<String>,
     pub revision: i64,
+    pub provider_write_eligible: bool,
+    pub provider_write_reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProviderWriteCapability {
+    pub eligible: bool,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -238,6 +268,144 @@ pub struct CalendarBlock {
     pub ion_metadata_revision: i64,
     pub provider_deleted_at: Option<String>,
     pub revision: i64,
+    pub provider_write_capability: ProviderWriteCapability,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProviderWriteIntentSummary {
+    pub id: String,
+    pub calendar_block_id: String,
+    pub operation: String,
+    pub recurrence_scope: String,
+    pub changed_fields: Vec<String>,
+    pub state: String,
+    pub attempt_count: i64,
+    pub next_attempt_at: Option<String>,
+    pub failure_class: Option<String>,
+    pub failure_reason: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub resolved_at: Option<String>,
+    pub provenance: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AccountWriteCapability {
+    pub account_id: String,
+    pub state: String,
+    pub write_capable: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CalendarWriteCapability {
+    pub calendar_id: String,
+    pub eligible: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BlockWriteCapability {
+    pub calendar_block_id: String,
+    pub eligible: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CalendarWriteFoundation {
+    pub accounts: Vec<AccountWriteCapability>,
+    pub calendars: Vec<CalendarWriteCapability>,
+    pub blocks: Vec<BlockWriteCapability>,
+    pub pending: Vec<ProviderWriteIntentSummary>,
+}
+
+#[allow(dead_code)] // Fixed Rust-internal DTOs are activated by later 2C dispatch work.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ProviderWriteValues {
+    schema_version: i64,
+    title: Option<String>,
+    description: Option<String>,
+    location: Option<String>,
+    transparency: Option<String>,
+    start: Option<ProviderDateTime>,
+    end: Option<ProviderDateTime>,
+    recurrence: Option<Vec<String>>,
+    status: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize)]
+struct QueueProviderWriteIntentInput {
+    command_id: String,
+    calendar_block_id: String,
+    operation: String,
+    recurrence_scope: String,
+    changed_fields: Vec<String>,
+    base_values: Option<ProviderWriteValues>,
+    desired_values: Option<ProviderWriteValues>,
+    expected_block_revision: i64,
+    provenance: String,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize)]
+struct ReadyProviderWriteIntentsInput {
+    now: String,
+    limit: u16,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize)]
+struct RecoverProviderWriteIntentsInput {
+    now: String,
+    limit: u16,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize)]
+struct PruneProviderWriteIntentsInput {
+    now: String,
+    limit: u16,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize)]
+struct TransitionProviderWriteIntentInput {
+    expected_state: String,
+    target_state: String,
+    occurred_at: String,
+    executor_provenance: String,
+    result_class: Option<String>,
+    safe_reason: Option<String>,
+    next_attempt_at: Option<String>,
+    resulting_revision: Option<i64>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+struct ProviderWritePlan {
+    #[serde(flatten)]
+    summary: ProviderWriteIntentSummary,
+    account_id: String,
+    calendar_id: String,
+    provider_event_id: String,
+    expected_provider_etag: Option<String>,
+    base_values: Option<ProviderWriteValues>,
+    desired_values: Option<ProviderWriteValues>,
+    source_block_revision: i64,
+    schema_version: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize)]
+struct RecoveryResult {
+    attempting_to_ambiguous: u16,
+    retry_wait_to_ready: u16,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize)]
+struct PruneResult {
+    pruned: u16,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -448,6 +616,10 @@ struct ProviderEventRaw {
     recurrence: Vec<String>,
     recurring_event_id: Option<String>,
     original_start_time: Option<ProviderDateTimeRaw>,
+    event_type: Option<String>,
+    #[serde(default)]
+    locked: bool,
+    attendees: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -458,7 +630,7 @@ struct ProviderDateTimeRaw {
     time_zone: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct ProviderDateTime {
     date: Option<String>,
     date_time: Option<String>,
@@ -481,6 +653,9 @@ struct ProviderEvent {
     recurrence: Vec<String>,
     recurring_event_id: Option<String>,
     original_start: Option<ProviderDateTime>,
+    provider_event_type: String,
+    provider_locked: bool,
+    has_attendees: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,6 +676,262 @@ enum ProviderRejection {
     InsufficientPermissions,
     ApiDisabled,
     Other,
+}
+
+#[allow(dead_code)] // Sent only after a later phase authorizes provider dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderWriteMethod {
+    Insert,
+    Get,
+    Patch,
+    Delete,
+    Instances,
+}
+
+#[allow(dead_code)]
+impl ProviderWriteMethod {
+    fn from_inventory_name(value: &str) -> Option<Self> {
+        match value {
+            "events.insert" => Some(Self::Insert),
+            "events.get" => Some(Self::Get),
+            "events.patch" => Some(Self::Patch),
+            "events.delete" => Some(Self::Delete),
+            "events.instances" => Some(Self::Instances),
+            _ => None,
+        }
+    }
+
+    fn inventory_name(self) -> &'static str {
+        match self {
+            Self::Insert => "events.insert",
+            Self::Get => "events.get",
+            Self::Patch => "events.patch",
+            Self::Delete => "events.delete",
+            Self::Instances => "events.instances",
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AllowedWriteDateTime {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    date_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_zone: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AllowedProviderWriteBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transparency: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start: Option<AllowedWriteDateTime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end: Option<AllowedWriteDateTime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recurrence: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+}
+
+#[allow(dead_code)]
+impl AllowedProviderWriteBody {
+    fn validate(&self, method: ProviderWriteMethod) -> Result<(), GoogleCommandError> {
+        if method == ProviderWriteMethod::Insert {
+            let id = self
+                .id
+                .as_deref()
+                .ok_or_else(|| GoogleCommandError::new("provider_write_invalid"))?;
+            if id.len() != 32
+                || !id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'v').contains(&byte))
+            {
+                return Err(GoogleCommandError::new("provider_write_invalid"));
+            }
+        } else if self.id.is_some() {
+            return Err(GoogleCommandError::new("provider_write_invalid"));
+        }
+        if self
+            .summary
+            .as_ref()
+            .is_some_and(|value| value.len() > 65_536)
+            || self
+                .description
+                .as_ref()
+                .is_some_and(|value| value.len() > 262_144)
+            || self
+                .location
+                .as_ref()
+                .is_some_and(|value| value.len() > 65_536)
+            || self
+                .recurrence
+                .as_ref()
+                .is_some_and(|values| values.len() > 128 || values.iter().any(|v| v.len() > 4096))
+        {
+            return Err(GoogleCommandError::new("provider_write_invalid"));
+        }
+        Ok(())
+    }
+}
+
+#[allow(dead_code)]
+fn provider_write_url(
+    method: ProviderWriteMethod,
+    provider_calendar_id: &str,
+    provider_event_id: Option<&str>,
+) -> Result<Url, GoogleCommandError> {
+    if provider_calendar_id.is_empty() {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    let needs_event = method != ProviderWriteMethod::Insert;
+    if needs_event != provider_event_id.is_some_and(|value| !value.is_empty()) {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    let mut url =
+        Url::parse(CALENDAR_API).map_err(|_| GoogleCommandError::new("provider_write_invalid"))?;
+    let mut segments = url
+        .path_segments_mut()
+        .map_err(|_| GoogleCommandError::new("provider_write_invalid"))?;
+    segments
+        .pop_if_empty()
+        .extend(["calendars", provider_calendar_id, "events"]);
+    if let Some(event_id) = provider_event_id {
+        segments.push(event_id);
+    }
+    if method == ProviderWriteMethod::Instances {
+        segments.push("instances");
+    }
+    drop(segments);
+    Ok(url)
+}
+
+#[allow(dead_code)]
+fn provider_write_request(
+    client: &Client,
+    method: ProviderWriteMethod,
+    access_token: &str,
+    provider_calendar_id: &str,
+    provider_event_id: Option<&str>,
+    expected_etag: Option<&str>,
+    body: Option<&AllowedProviderWriteBody>,
+) -> Result<reqwest::Request, GoogleCommandError> {
+    let requires_body = matches!(
+        method,
+        ProviderWriteMethod::Insert | ProviderWriteMethod::Patch
+    );
+    if requires_body != body.is_some() {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    if let Some(body) = body {
+        body.validate(method)?;
+    }
+    let requires_etag = matches!(
+        method,
+        ProviderWriteMethod::Patch | ProviderWriteMethod::Delete
+    );
+    if requires_etag != expected_etag.is_some() {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    if expected_etag.is_some_and(|value| value.is_empty() || value == "*" || value.len() > 4096) {
+        return Err(GoogleCommandError::new("provider_write_invalid"));
+    }
+    let http_method = match method {
+        ProviderWriteMethod::Insert => reqwest::Method::POST,
+        ProviderWriteMethod::Get | ProviderWriteMethod::Instances => reqwest::Method::GET,
+        ProviderWriteMethod::Patch => reqwest::Method::PATCH,
+        ProviderWriteMethod::Delete => reqwest::Method::DELETE,
+    };
+    let mut request = client
+        .request(
+            http_method,
+            provider_write_url(method, provider_calendar_id, provider_event_id)?,
+        )
+        .bearer_auth(access_token);
+    if let Some(etag) = expected_etag {
+        request = request.header(reqwest::header::IF_MATCH, etag);
+    }
+    if let Some(body) = body {
+        request = request.json(body);
+    }
+    request
+        .build()
+        .map_err(|_| GoogleCommandError::new("provider_write_invalid"))
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProviderWriteResultClass {
+    Success,
+    RetryableTransport,
+    RetryableBackend,
+    RetryableQuota,
+    ReauthenticationRequired,
+    StalePrecondition,
+    DuplicateOrAmbiguousCreate,
+    ProviderNotFound,
+    InvalidTarget,
+    TerminalProviderRejection,
+}
+
+#[allow(dead_code)]
+fn classify_write_transport_failure(method: ProviderWriteMethod) -> ProviderWriteResultClass {
+    if method == ProviderWriteMethod::Insert {
+        ProviderWriteResultClass::DuplicateOrAmbiguousCreate
+    } else {
+        ProviderWriteResultClass::RetryableTransport
+    }
+}
+
+#[allow(dead_code)]
+fn classify_write_provider_result(
+    method: ProviderWriteMethod,
+    status: StatusCode,
+    body: &[u8],
+) -> ProviderWriteResultClass {
+    if status.is_success() {
+        return ProviderWriteResultClass::Success;
+    }
+    let reason = serde_json::from_slice::<GoogleErrorEnvelope>(body)
+        .ok()
+        .and_then(|value| value.error.errors.into_iter().next())
+        .map(|detail| detail.reason);
+    match (status, reason.as_deref()) {
+        (StatusCode::UNAUTHORIZED, _) => ProviderWriteResultClass::ReauthenticationRequired,
+        (StatusCode::PRECONDITION_FAILED, _) => ProviderWriteResultClass::StalePrecondition,
+        (StatusCode::CONFLICT, Some("duplicate")) if method == ProviderWriteMethod::Insert => {
+            ProviderWriteResultClass::DuplicateOrAmbiguousCreate
+        }
+        (StatusCode::NOT_FOUND, _) => ProviderWriteResultClass::ProviderNotFound,
+        (StatusCode::TOO_MANY_REQUESTS, _)
+        | (
+            StatusCode::FORBIDDEN,
+            Some(
+                "rateLimitExceeded"
+                | "userRateLimitExceeded"
+                | "quotaExceeded"
+                | "dailyLimitExceeded",
+            ),
+        ) => ProviderWriteResultClass::RetryableQuota,
+        (_, _) if status.is_server_error() => ProviderWriteResultClass::RetryableBackend,
+        (StatusCode::BAD_REQUEST, _) => ProviderWriteResultClass::InvalidTarget,
+        _ => ProviderWriteResultClass::TerminalProviderRejection,
+    }
 }
 
 fn should_reset_to_full(mode: &str, failure: &ProviderFailure) -> bool {
@@ -613,16 +1044,14 @@ fn authorization_url(
     redirect_uri: &str,
     state: &str,
     challenge: &str,
+    scope_mode: OAuthScopeMode,
 ) -> Result<Url, GoogleCommandError> {
     let mut url = Url::parse(AUTH_ENDPOINT).map_err(|_| GoogleCommandError::new("oauth_failed"))?;
     url.query_pairs_mut()
         .append_pair("client_id", &config.client_id)
         .append_pair("redirect_uri", redirect_uri)
         .append_pair("response_type", "code")
-        .append_pair(
-            "scope",
-            &format!("{CALENDAR_LIST_SCOPE} {EVENTS_READ_SCOPE}"),
-        )
+        .append_pair("scope", &scope_mode.query())
         .append_pair("code_challenge", challenge)
         .append_pair("code_challenge_method", "S256")
         .append_pair("state", state)
@@ -745,6 +1174,7 @@ async fn exchange_code(
     code: &str,
     verifier: &str,
     redirect_uri: &str,
+    scope_mode: OAuthScopeMode,
 ) -> Result<TokenResponse, GoogleCommandError> {
     let mut form = vec![
         ("client_id", config.client_id.as_str()),
@@ -770,7 +1200,7 @@ async fn exchange_code(
         .await
         .map_err(|_| GoogleCommandError::new("oauth_exchange_failed"))?;
     let granted: HashSet<_> = token.scope.split_whitespace().collect();
-    let required = HashSet::from([CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE]);
+    let required = HashSet::from(scope_mode.scopes());
     if token.token_type != "Bearer" || granted != required || token.refresh_token.is_none() {
         return Err(GoogleCommandError::new("oauth_scope_denied"));
     }
@@ -854,6 +1284,85 @@ fn calendar_block_backend_route(id: &str, suffix: &str) -> Result<String, Google
     ))
 }
 
+fn write_intent_backend_route(id: &str, suffix: &str) -> Result<String, GoogleCommandError> {
+    Ok(format!(
+        "/v1/calendar/internal/write-intents/{}{suffix}",
+        validated_backend_id(id)?
+    ))
+}
+
+#[allow(dead_code)]
+async fn queue_provider_write_intent(
+    state: &ServiceState,
+    input: &QueueProviderWriteIntentInput,
+) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/write-intents",
+        Some(input),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+#[allow(dead_code)]
+async fn ready_provider_write_intents(
+    state: &ServiceState,
+    input: &ReadyProviderWriteIntentsInput,
+) -> Result<Vec<ProviderWritePlan>, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/write-intents/ready",
+        Some(input),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+#[allow(dead_code)]
+async fn recover_provider_write_intents(
+    state: &ServiceState,
+    input: &RecoverProviderWriteIntentsInput,
+) -> Result<RecoveryResult, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/write-intents/recover",
+        Some(input),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+#[allow(dead_code)]
+async fn prune_provider_write_intents(
+    state: &ServiceState,
+    input: &PruneProviderWriteIntentsInput,
+) -> Result<PruneResult, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/write-intents/prune",
+        Some(input),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+#[allow(dead_code)]
+async fn transition_provider_write_intent(
+    state: &ServiceState,
+    intent_id: &str,
+    input: &TransitionProviderWriteIntentInput,
+) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
+    let route = write_intent_backend_route(intent_id, "/transition")?;
+    product_request(state, reqwest::Method::POST, &route, Some(input))
+        .await
+        .map_err(Into::into)
+}
+
 async fn internal_state(state: &ServiceState) -> Result<InternalCalendarState, GoogleCommandError> {
     product_request(
         state,
@@ -901,6 +1410,20 @@ pub async fn get_google_calendar_status<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn get_calendar_write_foundation(
+    service: State<'_, ServiceState>,
+) -> Result<CalendarWriteFoundation, GoogleCommandError> {
+    product_request::<EmptyInput, CalendarWriteFoundation>(
+        &service,
+        reqwest::Method::GET,
+        "/v1/calendar/write-foundation",
+        None,
+    )
+    .await
+    .map_err(Into::into)
+}
+
+#[tauri::command]
 pub async fn connect_google_calendar<R: Runtime>(
     app: AppHandle<R>,
     service: State<'_, ServiceState>,
@@ -918,13 +1441,22 @@ pub async fn connect_google_calendar<R: Runtime>(
     let redirect_uri = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
     let state_value = URL_SAFE_NO_PAD.encode(random_bytes::<32>()?);
     let (verifier, challenge) = pkce_pair()?;
-    let url = authorization_url(&config, &redirect_uri, &state_value, &challenge)?;
+    let scope_mode = OAuthScopeMode::ReadOnly;
+    let url = authorization_url(&config, &redirect_uri, &state_value, &challenge, scope_mode)?;
     open_system_browser(&url)?;
     let callback =
         tauri::async_runtime::spawn_blocking(move || await_callback(listener, state_value))
             .await
             .map_err(|_| GoogleCommandError::new("oauth_callback_unavailable"))??;
-    let token = exchange_code(&client, &config, &callback, &verifier, &redirect_uri).await?;
+    let token = exchange_code(
+        &client,
+        &config,
+        &callback,
+        &verifier,
+        &redirect_uri,
+        scope_mode,
+    )
+    .await?;
     let calendars = discover_calendars(&client, &token.access_token).await?;
     let primary = calendars
         .iter()
@@ -949,7 +1481,7 @@ pub async fn connect_google_calendar<R: Runtime>(
     let input = ConnectAccountInput {
         provider_account_id: &primary.provider_calendar_id,
         display_name: primary_summary,
-        granted_scopes: [CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE],
+        granted_scopes: scope_mode.scopes(),
         keychain_locator: &locator,
         calendars: &calendars,
     };
@@ -1149,6 +1681,11 @@ fn sanitize_event(raw: ProviderEventRaw, fallback_timezone: &str) -> ProviderEve
         Some("cancelled") => "cancelled",
         _ => "confirmed",
     };
+    let provider_event_type = match raw.event_type.as_deref() {
+        Some("default") | None => "default",
+        Some("") => "unknown",
+        Some(_) => "special",
+    };
     ProviderEvent {
         provider_event_id: raw.id,
         ical_uid: raw.i_cal_uid,
@@ -1168,6 +1705,9 @@ fn sanitize_event(raw: ProviderEventRaw, fallback_timezone: &str) -> ProviderEve
         recurrence: raw.recurrence,
         recurring_event_id: raw.recurring_event_id,
         original_start: sanitize_time(raw.original_start_time, fallback_timezone),
+        provider_event_type: provider_event_type.into(),
+        provider_locked: raw.locked,
+        has_attendees: raw.attendees.is_some_and(|values| !values.is_empty()),
     }
 }
 
@@ -1655,6 +2195,7 @@ mod tests {
             "http://127.0.0.1:49152/oauth2/callback",
             "synthetic-state",
             &challenge,
+            OAuthScopeMode::ReadOnly,
         )
         .unwrap();
         let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
@@ -1666,6 +2207,22 @@ mod tests {
         assert!(!url.as_str().contains(&verifier));
         assert!(!url.as_str().contains("tasks"));
         assert!(!url.as_str().contains("calendar%20"));
+
+        let write_url = authorization_url(
+            &synthetic_config(),
+            "http://127.0.0.1:49152/oauth2/callback",
+            "synthetic-state",
+            &challenge,
+            OAuthScopeMode::CalendarWriteReconsent,
+        )
+        .unwrap();
+        let write_query: HashMap<_, _> = write_url.query_pairs().into_owned().collect();
+        assert_eq!(
+            write_query.get("scope").unwrap(),
+            &format!("{CALENDAR_LIST_SCOPE} {EVENTS_WRITE_SCOPE}")
+        );
+        assert!(!write_url.as_str().contains(EVENTS_READ_SCOPE));
+        assert!(!write_url.as_str().contains("auth/calendar%20"));
     }
 
     #[test]
@@ -1860,6 +2417,224 @@ maxResults=2500&showDeleted=true&singleEvents=false"
         );
     }
 
+    fn synthetic_write_body(id: Option<&str>) -> AllowedProviderWriteBody {
+        AllowedProviderWriteBody {
+            id: id.map(str::to_owned),
+            summary: Some("Synthetic event".into()),
+            description: None,
+            location: None,
+            transparency: Some("opaque".into()),
+            start: Some(AllowedWriteDateTime {
+                date: None,
+                date_time: Some("2030-01-01T09:00:00-08:00".into()),
+                time_zone: Some("America/Los_Angeles".into()),
+            }),
+            end: Some(AllowedWriteDateTime {
+                date: None,
+                date_time: Some("2030-01-01T10:00:00-08:00".into()),
+                time_zone: Some("America/Los_Angeles".into()),
+            }),
+            recurrence: None,
+            status: None,
+        }
+    }
+
+    #[test]
+    fn write_method_inventory_is_exact_and_excludes_broad_operations() {
+        for (name, expected) in [
+            ("events.insert", ProviderWriteMethod::Insert),
+            ("events.get", ProviderWriteMethod::Get),
+            ("events.patch", ProviderWriteMethod::Patch),
+            ("events.delete", ProviderWriteMethod::Delete),
+            ("events.instances", ProviderWriteMethod::Instances),
+        ] {
+            let method = ProviderWriteMethod::from_inventory_name(name).unwrap();
+            assert_eq!(method, expected);
+            assert_eq!(method.inventory_name(), name);
+        }
+        for excluded in [
+            "events.update",
+            "events.move",
+            "events.import",
+            "events.quickAdd",
+            "events.batch",
+            "events.watch",
+        ] {
+            assert_eq!(ProviderWriteMethod::from_inventory_name(excluded), None);
+        }
+    }
+
+    #[test]
+    fn typed_write_requests_are_allowlisted_conditional_and_never_sent() {
+        let client = Client::new();
+        let insert_body = synthetic_write_body(Some("0123456789abcdefghijklmnopqrstuv"));
+        let insert = provider_write_request(
+            &client,
+            ProviderWriteMethod::Insert,
+            "synthetic-access-token",
+            "synthetic/calendar@example.invalid",
+            None,
+            None,
+            Some(&insert_body),
+        )
+        .unwrap();
+        assert_eq!(insert.method(), reqwest::Method::POST);
+        assert_eq!(
+            insert.url().path(),
+            "/calendar/v3/calendars/synthetic%2Fcalendar@example.invalid/events"
+        );
+        let body = String::from_utf8(insert.body().unwrap().as_bytes().unwrap().to_vec()).unwrap();
+        assert!(body.contains("\"id\":\"0123456789abcdefghijklmnopqrstuv\""));
+        for forbidden in [
+            "attendees",
+            "reminders",
+            "conferenceData",
+            "attachments",
+            "extendedProperties",
+            "colorId",
+        ] {
+            assert!(!body.contains(forbidden));
+        }
+
+        let patch_body = synthetic_write_body(None);
+        let patch = provider_write_request(
+            &client,
+            ProviderWriteMethod::Patch,
+            "synthetic-access-token",
+            "primary",
+            Some("synthetic-event"),
+            Some("\"synthetic-etag\""),
+            Some(&patch_body),
+        )
+        .unwrap();
+        assert_eq!(patch.method(), reqwest::Method::PATCH);
+        assert_eq!(
+            patch.headers().get(reqwest::header::IF_MATCH).unwrap(),
+            "\"synthetic-etag\""
+        );
+        assert!(!patch.url().as_str().contains("synthetic-access-token"));
+        assert!(provider_write_request(
+            &client,
+            ProviderWriteMethod::Patch,
+            "synthetic-access-token",
+            "primary",
+            Some("synthetic-event"),
+            Some("*"),
+            Some(&patch_body),
+        )
+        .is_err());
+
+        let instances = provider_write_request(
+            &client,
+            ProviderWriteMethod::Instances,
+            "synthetic-access-token",
+            "primary",
+            Some("synthetic-series"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(instances
+            .url()
+            .path()
+            .ends_with("/synthetic-series/instances"));
+    }
+
+    #[test]
+    fn synthetic_write_failure_matrix_is_safe_and_deterministic() {
+        let cases = [
+            (
+                ProviderWriteMethod::Insert,
+                StatusCode::OK,
+                br#"{}"#.as_slice(),
+                ProviderWriteResultClass::Success,
+            ),
+            (
+                ProviderWriteMethod::Patch,
+                StatusCode::UNAUTHORIZED,
+                br#"{}"#.as_slice(),
+                ProviderWriteResultClass::ReauthenticationRequired,
+            ),
+            (
+                ProviderWriteMethod::Patch,
+                StatusCode::FORBIDDEN,
+                br#"{"error":{"errors":[{"reason":"forbidden"}]}}"#.as_slice(),
+                ProviderWriteResultClass::TerminalProviderRejection,
+            ),
+            (
+                ProviderWriteMethod::Get,
+                StatusCode::NOT_FOUND,
+                br#"{}"#.as_slice(),
+                ProviderWriteResultClass::ProviderNotFound,
+            ),
+            (
+                ProviderWriteMethod::Insert,
+                StatusCode::CONFLICT,
+                br#"{"error":{"errors":[{"reason":"duplicate"}]}}"#.as_slice(),
+                ProviderWriteResultClass::DuplicateOrAmbiguousCreate,
+            ),
+            (
+                ProviderWriteMethod::Patch,
+                StatusCode::PRECONDITION_FAILED,
+                br#"{}"#.as_slice(),
+                ProviderWriteResultClass::StalePrecondition,
+            ),
+            (
+                ProviderWriteMethod::Patch,
+                StatusCode::TOO_MANY_REQUESTS,
+                br#"{}"#.as_slice(),
+                ProviderWriteResultClass::RetryableQuota,
+            ),
+            (
+                ProviderWriteMethod::Patch,
+                StatusCode::SERVICE_UNAVAILABLE,
+                br#"{}"#.as_slice(),
+                ProviderWriteResultClass::RetryableBackend,
+            ),
+            (
+                ProviderWriteMethod::Patch,
+                StatusCode::BAD_REQUEST,
+                br#"{}"#.as_slice(),
+                ProviderWriteResultClass::InvalidTarget,
+            ),
+        ];
+        for (method, status, body, expected) in cases {
+            assert_eq!(
+                classify_write_provider_result(method, status, body),
+                expected
+            );
+        }
+        assert_eq!(
+            classify_write_transport_failure(ProviderWriteMethod::Insert),
+            ProviderWriteResultClass::DuplicateOrAmbiguousCreate
+        );
+        assert_eq!(
+            classify_write_transport_failure(ProviderWriteMethod::Patch),
+            ProviderWriteResultClass::RetryableTransport
+        );
+    }
+
+    #[test]
+    fn provider_sanitization_reduces_attendees_and_special_types_to_capabilities() {
+        let raw: ProviderEventRaw = serde_json::from_str(
+            r#"{
+                "id":"synthetic-event",
+                "eventType":"outOfOffice",
+                "locked":true,
+                "attendees":[{"email":"private@example.invalid"}]
+            }"#,
+        )
+        .unwrap();
+        let sanitized = sanitize_event(raw, "America/Los_Angeles");
+        assert_eq!(sanitized.provider_event_type, "special");
+        assert!(sanitized.provider_locked);
+        assert!(sanitized.has_attendees);
+        let serialized = serde_json::to_string(&sanitized).unwrap();
+        assert!(!serialized.contains("private@example.invalid"));
+        assert!(!serialized.contains("\"attendees\":["));
+        assert!(serialized.contains("\"has_attendees\":true"));
+    }
+
     #[test]
     fn event_sync_skips_roles_without_event_detail_access() {
         for role in ["reader", "writerWithoutPrivateAccess", "writer", "owner"] {
@@ -1950,9 +2725,14 @@ maxResults=2500&showDeleted=true&singleEvents=false"
             calendar_block_backend_route(id, "/category").unwrap(),
             format!("/v1/calendar/blocks/{id}/category")
         );
+        assert_eq!(
+            write_intent_backend_route(id, "/transition").unwrap(),
+            format!("/v1/calendar/internal/write-intents/{id}/transition")
+        );
         assert!(calendar_backend_route("../status", "/sync/begin").is_err());
         assert!(calendar_block_backend_route("../status", "/category").is_err());
         assert!(account_backend_route("../status", "/disconnect").is_err());
+        assert!(write_intent_backend_route("../status", "/transition").is_err());
     }
 
     #[test]

@@ -27,6 +27,7 @@ const account = {
   display_name: "Synthetic Account",
   granted_scopes: [],
   auth_state: "connected" as const,
+  calendar_write_scope_state: "read_only" as const,
   last_auth_at: "2030-01-01T00:00:00Z",
   created_at: "2030-01-01T00:00:00Z",
   updated_at: "2030-01-01T00:00:00Z",
@@ -55,6 +56,8 @@ const calendar = {
   retry_count: 0,
   next_retry_at: null,
   revision: 1,
+  provider_write_eligible: false,
+  provider_write_reason: "account_read_only",
 };
 
 function block(
@@ -93,6 +96,10 @@ function block(
     ion_metadata_revision: 1,
     provider_deleted_at: null,
     revision: 1,
+    provider_write_capability: {
+      eligible: false,
+      reason: "account_read_only",
+    },
     ...overrides,
   };
 }

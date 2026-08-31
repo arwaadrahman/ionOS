@@ -2,8 +2,8 @@
 
 ## Status
 
-**Phase 2B runtime over the Phase 2A foundation; Phase 2C write architecture
-accepted but not implemented.** The organizer schema begins in
+**Phase 2B runtime over the Phase 2A foundation; Phase 2C-1 durable write
+foundation implemented and pending owner acceptance.** The organizer schema begins in
 `0002_organizer_foundation`; `0003_milestone_ordering` adds canonical
 owner-scoped positions to Goal and Project Milestones, and
 `0004_today_planning` adds human day-planning intent over canonical Tasks.
@@ -101,12 +101,13 @@ plus extensible subtype; existing rows migrate to visible and uncategorized.
   instead of deleting them. Incremental cancellation updates the same record.
   Either path preserves Ion-only metadata and appends an integration/automated
   audit event without payload snapshots.
-- Accepted Phase 2C architecture adds no parallel GoogleEvent owner. A future
-  reviewed migration will add one durable typed provider-write outbox plus only
-  the capability/linkage fields needed for safe dispatch. Existing provider
+- Phase 2C-1 adds no parallel GoogleEvent owner. Reviewed migration `0007` adds
+  one durable typed provider-write outbox, compact separate lifecycle audit,
+  account write-scope state, and only the capability/linkage fields needed for
+  safe future dispatch. Existing provider
   fields remain the confirmed Google base; bounded outbox values preserve
   pending human intent and conflict evidence.
-- The future write state (`pending`, `synced`, `failed`, or `conflict`) is a
+- The product write state (`pending`, `synced`, `failed`, or `conflict`) is a
   projection over confirmed linkage and unresolved outbox state, not a new
   provider status mixed into CalendarBlock lifecycle. Unresolved, failed,
   conflict, and ambiguous intents remain until explicit resolution. Successful
@@ -115,7 +116,9 @@ plus extensible subtype; existing rows migrate to visible and uncategorized.
 - Ion-created Google events receive a persisted deterministic opaque provider
   ID before dispatch. Provider capability evidence stores only safe booleans or
   enums needed for write eligibility, not attendee addresses or raw provider
-  resources. No migration is present until Phase 2C-1 is separately authorized.
+  resources. Persisted `attempting` state repairs to `ambiguous` after restart
+  before any future dispatch selection; retry timing and the five-attempt
+  ceiling are durable.
 
 See [Architecture](ARCHITECTURE.md) and ADR
 [0001](decisions/0001-local-first-data-ownership.md), plus accepted ADR

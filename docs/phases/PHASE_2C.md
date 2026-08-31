@@ -2,11 +2,14 @@
 
 ## Status
 
-**Architecture/security gate accepted; implementation not started.** The owner
-accepted ADR 0021 and the seven decisions in this gate on 2026-08-30. This
-acceptance locks Phase 2C direction but does not itself add application code, a
-migration, dependency, requested OAuth scope, or Google write. Phase 2C-1
-begins only under a separate implementation request.
+**Architecture/security gate accepted; Phase 2C-1 foundation implemented and
+pending owner acceptance.** The owner accepted ADR 0021 and the seven decisions
+in this gate on 2026-08-30, then separately authorized the bounded 2C-1
+foundation. Migration `0007`, the typed Python outbox/state API, safe
+capability projection, deterministic ID/retry/recovery/audit helpers, one
+read-only Tauri foundation command, and unsent Rust provider request/result
+helpers are now present. No Calendar write UI, automatic re-consent, or real
+Google event mutation is enabled.
 
 ## Objective
 
@@ -574,6 +577,9 @@ require explicit authorization of the test account/calendar and exact actions:
 ## Recommended independently testable substeps
 
 ### 2C-1 — Write foundation, OAuth, and durable outbox
+
+**Implemented; owner acceptance pending.** Exact implementation names and
+exclusions are frozen in [Phase 2C-1 Contract](PHASE_2C_1_CONTRACT.md).
 
 - Use accepted ADR 0021 and its exact scope boundary.
 - Add the one reviewed migration for outbox and provider capability evidence.

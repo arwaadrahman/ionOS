@@ -10,7 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 CALENDAR_LIST_SCOPE = "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
 EVENTS_READ_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly"
-REQUIRED_GOOGLE_SCOPES = frozenset((CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE))
+EVENTS_WRITE_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+READ_ONLY_GOOGLE_SCOPES = frozenset((CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE))
+WRITE_GOOGLE_SCOPES = frozenset((CALENDAR_LIST_SCOPE, EVENTS_WRITE_SCOPE))
+ACCEPTED_GOOGLE_SCOPE_SETS = frozenset((READ_ONLY_GOOGLE_SCOPES, WRITE_GOOGLE_SCOPES))
 CalendarCategory = Literal[
     "academic",
     "career",
@@ -70,8 +73,8 @@ class GoogleAccountConnectInput(CalendarModel):
 
     @model_validator(mode="after")
     def has_exact_phase_scopes(self):
-        if set(self.granted_scopes) != REQUIRED_GOOGLE_SCOPES:
-            raise ValueError("the exact Phase 2A read-only scopes are required")
+        if frozenset(self.granted_scopes) not in ACCEPTED_GOOGLE_SCOPE_SETS:
+            raise ValueError("an exact accepted Calendar scope set is required")
         if not any(
             item.is_primary and not item.provider_deleted for item in self.calendars
         ):
@@ -161,6 +164,9 @@ class ProviderEventInput(CalendarModel):
     recurrence: list[str] = Field(default_factory=list, max_length=1024)
     recurring_event_id: str | None = Field(default=None, max_length=2048)
     original_start: ProviderDateTime | None = None
+    provider_event_type: Literal["default", "special", "unknown"] = "default"
+    provider_locked: bool = False
+    has_attendees: bool = False
 
     @model_validator(mode="after")
     def valid_event_shape(self):
@@ -214,6 +220,7 @@ class GoogleAccountOutput(CalendarModel):
     display_name: str
     granted_scopes: list[str]
     auth_state: Literal["connected", "reauth_required", "disconnected"]
+    calendar_write_scope_state: Literal["read_only", "write_granted", "reauth_required"]
     last_auth_at: str | None
     created_at: str
     updated_at: str
@@ -246,6 +253,25 @@ class GoogleCalendarOutput(CalendarModel):
     retry_count: int
     next_retry_at: str | None
     revision: int
+    provider_write_eligible: bool
+    provider_write_reason: str
+
+
+class ProviderWriteCapabilityOutput(CalendarModel):
+    eligible: bool
+    reason: Literal[
+        "eligible",
+        "account_read_only",
+        "reauth_required",
+        "calendar_disabled",
+        "calendar_deleted",
+        "access_role_read_only",
+        "special_event",
+        "provider_locked",
+        "attendees_present",
+        "provider_deleted",
+        "provider_unconfirmed",
+    ]
 
 
 class InternalGoogleCalendarOutput(GoogleCalendarOutput):
@@ -284,6 +310,7 @@ class CalendarBlockOutput(CalendarModel):
     ion_metadata_revision: int
     provider_deleted_at: str | None
     revision: int
+    provider_write_capability: ProviderWriteCapabilityOutput
 
 
 class CalendarStatusOutput(CalendarModel):

@@ -14,6 +14,7 @@ from alembic.operations import Operations
 from ion_api.db import database_url
 
 UNRELEASED_CALENDAR_PRESENTATION_REVISION = "0006_calendar_presentation_metadata"
+CALENDAR_WRITE_FOUNDATION_REVISION = "0007_calendar_write_foundation"
 CATEGORY_VALUES = (
     "academic",
     "career",
@@ -72,7 +73,11 @@ def _repair_interrupted_unreleased_0006(database_path: Path) -> None:
                 if constraint.get("name")
             }
         if (
-            revision != UNRELEASED_CALENDAR_PRESENTATION_REVISION
+            revision
+            not in (
+                UNRELEASED_CALENDAR_PRESENTATION_REVISION,
+                CALENDAR_WRITE_FOUNDATION_REVISION,
+            )
             or "category" not in columns
         ):
             return
@@ -149,5 +154,6 @@ def upgrade_to_head(database_path: Path) -> None:
     config.set_main_option("script_location", str(root / "migrations"))
     config.set_main_option("sqlalchemy.url", database_url(database_path))
     config.attributes["ion_explicit_database_url"] = True
+    _repair_interrupted_unreleased_0006(database_path)
     command.upgrade(config, "head")
     _repair_interrupted_unreleased_0006(database_path)

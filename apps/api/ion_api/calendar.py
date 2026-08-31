@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy import Engine, insert, select, update
 
 from ion_api.calendar_contracts import (
+    WRITE_GOOGLE_SCOPES,
     CalendarBlockOutput,
     CalendarCategoryInput,
     CalendarStatusOutput,
@@ -22,6 +23,7 @@ from ion_api.calendar_contracts import (
     InternalGoogleCalendarOutput,
     ProviderDateTime,
     ProviderEventInput,
+    ProviderWriteCapabilityOutput,
     SelectionInput,
     SyncBeginInput,
     SyncCompleteInput,
@@ -95,6 +97,7 @@ def _account_output(row, *, internal: bool = False):
         "display_name": row.display_name,
         "granted_scopes": json.loads(row.granted_scopes),
         "auth_state": row.auth_state,
+        "calendar_write_scope_state": row.calendar_write_scope_state,
         "last_auth_at": row.last_auth_at,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -105,7 +108,7 @@ def _account_output(row, *, internal: bool = False):
     return model.model_validate(values)
 
 
-def _calendar_output(row, *, internal: bool = False):
+def _calendar_output(row, *, account=None, internal: bool = False):
     model = InternalGoogleCalendarOutput if internal else GoogleCalendarOutput
     values = {
         "id": row.id,
@@ -129,6 +132,31 @@ def _calendar_output(row, *, internal: bool = False):
         "retry_count": row.retry_count,
         "next_retry_at": row.next_retry_at,
         "revision": row.revision,
+        "provider_write_eligible": bool(
+            account
+            and account.auth_state == "connected"
+            and account.calendar_write_scope_state == "write_granted"
+            and row.enabled_in_ion
+            and not row.provider_deleted
+            and row.access_role in ("writer", "owner")
+        ),
+        "provider_write_reason": (
+            "reauth_required"
+            if account
+            and (
+                account.auth_state != "connected"
+                or account.calendar_write_scope_state == "reauth_required"
+            )
+            else "account_read_only"
+            if not account or account.calendar_write_scope_state != "write_granted"
+            else "calendar_disabled"
+            if not row.enabled_in_ion
+            else "calendar_deleted"
+            if row.provider_deleted
+            else "access_role_read_only"
+            if row.access_role not in ("writer", "owner")
+            else "eligible"
+        ),
     }
     if internal:
         values["next_sync_token"] = row.next_sync_token
@@ -157,6 +185,11 @@ class CalendarService:
                 )
             ).one_or_none()
             scopes = json.dumps(sorted(input.granted_scopes), separators=(",", ":"))
+            write_scope_state = (
+                "write_granted"
+                if frozenset(input.granted_scopes) == WRITE_GOOGLE_SCOPES
+                else "read_only"
+            )
             if existing is None:
                 account_id = str(uuid4())
                 connection.execute(
@@ -167,6 +200,7 @@ class CalendarService:
                         granted_scopes=scopes,
                         keychain_locator=input.keychain_locator,
                         auth_state="connected",
+                        calendar_write_scope_state=write_scope_state,
                         last_auth_at=now,
                         created_at=now,
                         updated_at=now,
@@ -196,6 +230,7 @@ class CalendarService:
                         granted_scopes=scopes,
                         keychain_locator=input.keychain_locator,
                         auth_state="connected",
+                        calendar_write_scope_state=write_scope_state,
                         last_auth_at=now,
                         updated_at=now,
                         revision=revision,
@@ -323,6 +358,7 @@ class CalendarService:
                     google_calendars.c.summary,
                 )
             ).all()
+            accounts_by_id = {row.id: row for row in account_rows}
             block_rows = connection.execute(
                 select(
                     calendar_blocks,
@@ -341,6 +377,15 @@ class CalendarService:
                     google_event_links.c.original_start_date,
                     google_event_links.c.original_start_at,
                     google_event_links.c.original_start_timezone,
+                    google_event_links.c.link_state,
+                    google_event_links.c.provider_event_type,
+                    google_event_links.c.provider_locked,
+                    google_event_links.c.has_attendees,
+                    google_accounts.c.auth_state.label("account_auth_state"),
+                    google_accounts.c.calendar_write_scope_state,
+                    google_calendars.c.enabled_in_ion,
+                    google_calendars.c.provider_deleted,
+                    google_calendars.c.access_role,
                 )
                 .join(
                     calendar_block_ion_metadata,
@@ -351,6 +396,14 @@ class CalendarService:
                     google_event_links,
                     google_event_links.c.calendar_block_id == calendar_blocks.c.id,
                 )
+                .join(
+                    google_accounts,
+                    google_accounts.c.id == google_event_links.c.account_id,
+                )
+                .join(
+                    google_calendars,
+                    google_calendars.c.id == google_event_links.c.calendar_id,
+                )
                 .order_by(
                     calendar_blocks.c.start_date,
                     calendar_blocks.c.start_at,
@@ -360,7 +413,10 @@ class CalendarService:
             ).all()
         return CalendarStatusOutput(
             accounts=[_account_output(row) for row in account_rows],
-            calendars=[_calendar_output(row) for row in calendar_rows],
+            calendars=[
+                _calendar_output(row, account=accounts_by_id[row.account_id])
+                for row in calendar_rows
+            ],
             blocks=[self._block_output(row) for row in block_rows],
         )
 
@@ -372,9 +428,15 @@ class CalendarService:
             calendars = connection.execute(
                 select(google_calendars).order_by(google_calendars.c.created_at)
             ).all()
+            accounts_by_id = {row.id: row for row in accounts}
         return InternalCalendarStateOutput(
             accounts=[_account_output(row, internal=True) for row in accounts],
-            calendars=[_calendar_output(row, internal=True) for row in calendars],
+            calendars=[
+                _calendar_output(
+                    row, account=accounts_by_id[row.account_id], internal=True
+                )
+                for row in calendars
+            ],
         )
 
     @staticmethod
@@ -411,6 +473,45 @@ class CalendarService:
             ion_metadata_revision=row.ion_metadata_revision,
             provider_deleted_at=row.provider_deleted_at,
             revision=row.revision,
+            provider_write_capability=ProviderWriteCapabilityOutput(
+                eligible=(
+                    row.account_auth_state == "connected"
+                    and row.calendar_write_scope_state == "write_granted"
+                    and bool(row.enabled_in_ion)
+                    and not bool(row.provider_deleted)
+                    and row.access_role in ("writer", "owner")
+                    and row.link_state == "confirmed"
+                    and row.provider_event_type == "default"
+                    and not bool(row.provider_locked)
+                    and not bool(row.has_attendees)
+                    and row.status != "cancelled"
+                    and row.provider_deleted_at is None
+                ),
+                reason=(
+                    "reauth_required"
+                    if row.account_auth_state != "connected"
+                    or row.calendar_write_scope_state == "reauth_required"
+                    else "account_read_only"
+                    if row.calendar_write_scope_state != "write_granted"
+                    else "calendar_disabled"
+                    if not bool(row.enabled_in_ion)
+                    else "calendar_deleted"
+                    if bool(row.provider_deleted)
+                    else "access_role_read_only"
+                    if row.access_role not in ("writer", "owner")
+                    else "special_event"
+                    if row.provider_event_type != "default"
+                    else "provider_locked"
+                    if bool(row.provider_locked)
+                    else "attendees_present"
+                    if bool(row.has_attendees)
+                    else "provider_deleted"
+                    if row.status == "cancelled" or row.provider_deleted_at is not None
+                    else "provider_unconfirmed"
+                    if row.link_state != "confirmed"
+                    else "eligible"
+                ),
+            ),
         )
 
     def set_selection(
@@ -677,6 +778,7 @@ class CalendarService:
                     .where(google_accounts.c.id == account.id)
                     .values(
                         auth_state="reauth_required",
+                        calendar_write_scope_state="reauth_required",
                         updated_at=now,
                         revision=account.revision + 1,
                     )
@@ -896,6 +998,10 @@ class CalendarService:
                     provider_updated_at=event.provider_updated_at,
                     recurring_event_id=event.recurring_event_id,
                     last_seen_sync_generation=generation,
+                    link_state="confirmed",
+                    provider_event_type=event.provider_event_type,
+                    provider_locked=event.provider_locked,
+                    has_attendees=event.has_attendees,
                     **original_values,
                 )
             )
@@ -922,6 +1028,10 @@ class CalendarService:
                 provider_updated_at=event.provider_updated_at,
                 recurring_event_id=event.recurring_event_id,
                 last_seen_sync_generation=generation,
+                link_state="confirmed",
+                provider_event_type=event.provider_event_type,
+                provider_locked=event.provider_locked,
+                has_attendees=event.has_attendees,
                 **original_values,
             )
         )

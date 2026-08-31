@@ -20,6 +20,19 @@ from ion_api.calendar_contracts import (
     SyncFailureInput,
     SyncPageInput,
 )
+from ion_api.calendar_write_contracts import (
+    CalendarWriteFoundationOutput,
+    ProviderWriteIntentSummaryOutput,
+    ProviderWritePlanOutput,
+    PruneResultOutput,
+    PruneWriteIntentsInput,
+    QueueProviderWriteIntentInput,
+    ReadyWriteIntentsInput,
+    RecoverWriteIntentsInput,
+    RecoveryResultOutput,
+    WriteIntentTransitionInput,
+)
+from ion_api.calendar_writes import CalendarWriteService
 
 
 def _raise_safe(error: Exception) -> None:
@@ -39,6 +52,7 @@ def _raise_safe(error: Exception) -> None:
 
 def calendar_router(service: CalendarService) -> APIRouter:
     router = APIRouter(prefix="/v1/calendar", tags=["calendar"])
+    writes = CalendarWriteService(service.engine)
 
     @router.get("/status", response_model=CalendarStatusOutput)
     def status() -> CalendarStatusOutput:
@@ -47,6 +61,88 @@ def calendar_router(service: CalendarService) -> APIRouter:
     @router.post("/internal/state", response_model=InternalCalendarStateOutput)
     def internal_state() -> InternalCalendarStateOutput:
         return service.internal_state()
+
+    @router.get("/write-foundation", response_model=CalendarWriteFoundationOutput)
+    def write_foundation() -> CalendarWriteFoundationOutput:
+        return writes.foundation()
+
+    @router.post(
+        "/internal/write-intents",
+        response_model=ProviderWriteIntentSummaryOutput,
+    )
+    def queue_write_intent(
+        input: QueueProviderWriteIntentInput,
+    ) -> ProviderWriteIntentSummaryOutput:
+        try:
+            return writes.queue(input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/ready",
+        response_model=list[ProviderWritePlanOutput],
+    )
+    def ready_write_intents(
+        input: ReadyWriteIntentsInput,
+    ) -> list[ProviderWritePlanOutput]:
+        try:
+            return writes.ready(input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/recover",
+        response_model=RecoveryResultOutput,
+    )
+    def recover_write_intents(
+        input: RecoverWriteIntentsInput,
+    ) -> RecoveryResultOutput:
+        try:
+            return writes.recover(input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/prune",
+        response_model=PruneResultOutput,
+    )
+    def prune_write_intents(input: PruneWriteIntentsInput) -> PruneResultOutput:
+        try:
+            return writes.prune(input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/{intent_id}/transition",
+        response_model=ProviderWriteIntentSummaryOutput,
+    )
+    def transition_write_intent(
+        intent_id: str, input: WriteIntentTransitionInput
+    ) -> ProviderWriteIntentSummaryOutput:
+        try:
+            return writes.transition(intent_id, input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
 
     @router.post("/accounts/connect", response_model=CalendarStatusOutput)
     def connect(input: GoogleAccountConnectInput) -> CalendarStatusOutput:

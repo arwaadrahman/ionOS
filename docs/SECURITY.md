@@ -2,8 +2,8 @@
 
 ## Status
 
-**Accepted invariants with Phase 2A Google credential implementation and the
-not-yet-implemented Phase 2C write gate.**
+**Accepted invariants with Phase 2A Google credentials and the implemented,
+provider-free Phase 2C-1 write foundation.**
 
 - Ion is local-first. The public repository contains no real personal Ion data.
 - Tests, demos, screenshots, and fixtures use clearly synthetic records only.
@@ -65,15 +65,17 @@ data and prevents a second desktop process from starting another sidecar.
   behavior. Real account data and configuration remain in Application Support,
   Keychain, and the runtime database outside Git.
 
-## Phase 2C accepted write gate — not implemented
+## Phase 2C accepted write gate and Phase 2C-1 foundation
 
 - The accepted future OAuth set is exactly CalendarList read-only plus Calendar
   Events read/write. It replaces Events read-only after deliberate account
   re-consent. Broad Calendar, Gmail, Tasks, ACL/sharing, calendar management,
   Meet/conference, and reminder authority remain forbidden.
-- This documentation acceptance does not change current requested scopes.
-  Existing accounts remain read-only until a separately authorized consent
-  flow confirms the exact accepted grant.
+- The ordinary connect flow still requests the current read-only scope set.
+  A separate exact write-scope mode is typed and tested but is not exposed as a
+  renderer command or initiated automatically. Existing accounts default to
+  read-only until a separately authorized deliberate re-consent confirms the
+  exact accepted grant.
 - Initial provider writes require `writer` or `owner`, ordinary/default event
   type, no provider lock, no attendees, and the accepted account scope.
   Attendee/invite events and `writerWithoutPrivateAccess` remain read-only.
@@ -92,6 +94,10 @@ data and prevents a second desktop process from starting another sidecar.
 - Successful intent rows may be pruned after 30 days by bounded,
   deterministic, restart-safe cleanup. Unresolved, failed, conflict, and
   ambiguous rows remain until explicit resolution.
+- Phase 2C-1 exposes no create/edit/delete renderer command and sends no Google
+  event mutation. Provider request helpers are constructed only in synthetic
+  tests and exclude attendees, reminders, Meet/conference, attachments,
+  extended properties, event colors, calendar management, and wildcard ETags.
 
 See accepted ADR
 [0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md) and the

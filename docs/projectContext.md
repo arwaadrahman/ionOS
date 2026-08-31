@@ -10,8 +10,8 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 2 — Calendar
-- **Milestone:** Phase 2C architecture/security gate accepted; implementation
-  not started
+- **Milestone:** Phase 2C-1 write foundation implemented; owner acceptance
+  pending
 - **In scope:** a primary read-only Calendar over cached canonical
   CalendarBlocks; Day, consecutive 3 Day, Monday-first Week, rolling Next 7
   Days, and Monday-first Month views; bounded recurrence/exception projection;
@@ -21,13 +21,14 @@ actions as authoritative.
   local vertical density and pane-width responsive view selection; mutually
   exclusive source/filter drawers; a provider-read-only event inspector; and
   truthful CalendarBlock occupancy/free gaps in Today.
-- **Gate scope:** accepted minimum durable outbox, idempotency, ETag conflict,
-  offline/recovery, recurrence-write, OAuth, audit, and performance boundaries
-  for future two-way Google Calendar writes. ADR 0021 and all seven owner
-  decisions are accepted; implementation requires a separate request.
+- **Foundation scope:** migration `0007` now provides the durable typed outbox,
+  safe capability evidence, deterministic create ID, retry/restart state,
+  compact audit, fixed local routes, one read-only Tauri capability command,
+  and unsent Rust provider-request/classification helpers. Existing accounts
+  remain read-only and no Google event mutation is reachable.
 - **Out of scope:** Google event writes/deletes, Google Tasks, Gmail,
-  push/webhooks, Phase 2C application code/migration/OAuth expansion/provider
-  mutation until separately authorized, Task auto-scheduling, AI, provider free/busy
+  push/webhooks, Phase 2C create/edit/delete UI or provider mutation, OAuth
+  re-consent execution until separately authorized, Task auto-scheduling, AI, provider free/busy
   planning, FocusSession, DailyReview, WeeklyPlan, semantic/conversational search,
   persisted search indexes/history, generic Undo/version history, automatic
   purge, inferred relationships, global shortcuts requiring a new plugin,

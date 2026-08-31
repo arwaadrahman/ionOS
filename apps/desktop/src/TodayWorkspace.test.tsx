@@ -310,6 +310,10 @@ test("shows real CalendarBlock occupancy and free gaps without scheduling Today 
     ion_metadata_revision: 1,
     provider_deleted_at: null,
     revision: 1,
+    provider_write_capability: {
+      eligible: false,
+      reason: "account_read_only",
+    },
     ...overrides,
   });
   const calendarStatus: CalendarStatus = {
@@ -322,6 +326,7 @@ test("shows real CalendarBlock occupancy and free gaps without scheduling Today 
         display_name: "Synthetic account",
         granted_scopes: [],
         auth_state: "connected",
+        calendar_write_scope_state: "read_only",
         last_auth_at: time,
         created_at: time,
         updated_at: time,
@@ -351,6 +356,8 @@ test("shows real CalendarBlock occupancy and free gaps without scheduling Today 
         retry_count: 0,
         next_retry_at: null,
         revision: 1,
+        provider_write_eligible: false,
+        provider_write_reason: "account_read_only",
       },
     ],
     blocks: [
