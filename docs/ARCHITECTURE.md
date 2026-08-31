@@ -50,6 +50,39 @@ settings, logging, quality tooling, and synthetic fixtures. Production
 packaging, supervision, and authentication are intentionally a separate
 runtime mode.
 
+## Future Developer Agent Bridge boundary
+
+Claude Code, Codex, IDEs, and future development agents remain external tools
+that own authentication, process lifetime, session state, and conversation
+history. Ion may later generate compact repo-aware handoffs and, after explicit
+user action, use narrow Rust-owned commands to launch or resume an allowlisted
+agent executable inside an allowlisted registered project. The renderer gains
+no generic shell, terminal, arbitrary process, filesystem, working-directory,
+or environment authority.
+
+Progress observation prefers bounded structured lifecycle/tool events plus
+checkpoint-oriented Git, test, build, and commit evidence. Ion does not mirror
+IDE state, screen-scrape terminals, continuously parse every filesystem event,
+continuously compute expensive diffs, or store complete agent transcripts by
+default. Compact durable checkpoint state belongs locally; recent/current UI
+state remains bounded. See ADR
+[0020](decisions/0020-external-developer-agent-bridge.md).
+
+The lightweight bridge may be separately authorized before Phase 8 when useful
+for Ion's own development. Full GitHub and project-development intelligence
+remains Phase 8; no new numbered roadmap phase is introduced.
+
+## Performance and resource lifecycle
+
+Persistent SQLite/Markdown state must not imply persistent computation.
+Baseline product surfaces use bounded projections and do not require a loaded
+local model, active repository analysis, continuous WebGL, or embedded external
+agent runtime. Heavy systems start lazily, suspend when hidden or inactive,
+bound caches and queues, and release resources after meaningful idle periods.
+Polling is coordinated rather than independently accumulated per integration.
+Detailed resource ownership, provisional memory targets, risk mitigations, and
+soak expectations are governed by [Performance and Resource Policy](PERFORMANCE.md).
+
 ## Phase 1A organizer path
 
 Product operations use fixed Ion-owned Tauri commands in development and

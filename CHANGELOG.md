@@ -23,6 +23,12 @@ All notable repository changes are documented here.
 
 ### Added
 
+- Documentation checkpoint accepting the narrow external Developer Agent
+  Bridge boundary, evidence-based local progress observation, strict separation
+  from Deep Ask credentials, first-class performance/resource policy, and
+  deferred holistic UI-polish requirements. No runtime behavior or numbered
+  roadmap phase was added.
+
 - Phase 2B primary read-only Calendar interface with Day, consecutive 3 Day,
   Monday-first Week, rolling Next 7 Days, and Monday-first Month views; bounded recurrence and
   exception projection; two-level category-family/subtype semantic color and

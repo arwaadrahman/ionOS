@@ -5,19 +5,44 @@
 Integrations are adapters around Ion's local authority; they do not become its
 primary storage. Google Calendar is the first active adapter under ADR 0018.
 
-| Integration                                    | Target phase/status             |
-| ---------------------------------------------- | ------------------------------- |
-| Google Calendar                                | Phase 2B read-only interface    |
-| Canvas                                         | Phase 3, deferred               |
-| Local AI                                       | Phase 4, deferred               |
-| Gmail                                          | Phase 5, deferred               |
-| Obsidian-compatible knowledge/vault operations | Phase 7, deferred               |
-| GitHub                                         | Phase 8, deferred               |
-| Cloud AI / Deep Ask                            | Phase 12, deferred              |
-| Mobile companion                               | TBD; security-gated by ADR 0004 |
+| Integration                                    | Target phase/status                 |
+| ---------------------------------------------- | ----------------------------------- |
+| Google Calendar                                | Phase 2B read-only interface        |
+| Canvas                                         | Phase 3, deferred                   |
+| Local AI                                       | Phase 4, deferred                   |
+| Gmail                                          | Phase 5, deferred                   |
+| Obsidian-compatible knowledge/vault operations | Phase 7, deferred                   |
+| GitHub                                         | Phase 8, deferred                   |
+| External developer-agent bridge                | Narrow precursor allowed; deferred |
+| Cloud AI / Deep Ask                            | Phase 12, deferred                  |
+| Mobile companion                               | TBD; security-gated by ADR 0004     |
 
 Any other integration requires a scoped route, privacy review, and owner
 approval before implementation.
+
+## External development-agent direction
+
+The first development-agent integration is a lightweight Claude Code companion
+for explicitly registered projects, not a general agent-provider framework.
+Its evidence vocabulary remains extensible to Codex and future agents. After
+explicit user action, Ion may generate a compact repo-driven handoff/prompt and
+eventually ask narrow Rust-owned commands to launch or resume an allowlisted
+agent executable. External tools retain authentication and lifecycle
+ownership; Ion never supplies or captures their credentials and the renderer
+gains no generic shell/process capability.
+
+Progress input should use bounded structured lifecycle/tool events when the
+external tool supports them, plus deterministic Git status and meaningful
+test/build/commit checkpoints. Ion does not screen-scrape IDEs, mirror agent
+sessions, store complete transcripts, continuously embed repositories, or run
+continuous expensive full diffs. Detailed authority, privacy, evidence, and
+roadmap boundaries are accepted in ADR
+[0020](decisions/0020-external-developer-agent-bridge.md).
+
+This narrow companion may be separately scoped before Phase 8 when it helps
+build Ion itself. Full GitHub, portfolio, and project-development intelligence
+remains Phase 8. Cloud Deep Ask remains a separate Phase 12-capable integration
+with Ion-owned Keychain credentials, privacy filtering, and cost controls.
 
 ## Google Calendar Phase 2A/2B contract
 

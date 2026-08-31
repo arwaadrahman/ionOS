@@ -118,3 +118,21 @@ or rare delight; support reduced motion; and respect performance and visibility
 constraints.
 
 The listed tools are guidance/future owners, not installed dependencies.
+
+## Deferred holistic polish requirements
+
+These notes are accepted future polish direction, not Phase 2B implementation
+work and not a new numbered roadmap phase.
+
+- Calendar navigation arrows are functionally accepted. A later polish pass
+  should improve their symmetry, geometry, stroke/weight, hit area, spacing,
+  and perceived craftsmanship to the standard expected of mature desktop
+  calendar interfaces without copying Apple or Google branding.
+- Ion's current interaction structure is broadly acceptable. A holistic pass
+  should refine spacing, alignment, shared control geometry, icon consistency,
+  typography, responsive hierarchy, interaction states, and perceived
+  craftsmanship while preserving **Familiar mechanics, distinctive identity.**
+- Narrow Calendar and Day layouts should preserve readable primary typography.
+  Use available horizontal space, reflow or reposition secondary information,
+  and simplify chrome before mechanically shrinking all type merely because
+  the application reaches its minimum width.

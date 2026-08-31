@@ -3033,3 +3033,60 @@ Ion detects patterns
 The user should spend progressively less time administering Ion as Ion becomes more useful.
 That is the central product requirement.
 62
+
+---
+
+## Owner-approved architecture amendment — 2026-08-30
+
+This amendment is canonical product direction adopted after the preserved
+source transcription above.
+
+### Developer Agent Bridge
+
+Ion may eventually generate compact, repository-aware handoffs/prompts and
+explicitly launch or resume external development agents for registered
+projects. The first companion should prioritize Claude Code while keeping its
+evidence vocabulary extensible to Codex and future agents. Those tools remain
+external: they own their
+authentication, process lifecycle, sessions, and conversations. Ion must never
+read, store, reuse, export, or impersonate their credentials, and the renderer
+must never receive generic shell or process authority. Any future launch path
+uses narrow Rust-owned commands restricted to allowlisted repositories and
+agent executables and requires explicit user action.
+Handoff/prompt generation also requires an explicit user action.
+
+Progress observation should prefer bounded structured agent events,
+deterministic Git state, test/build outcomes, commits/checkpoints, and concise
+completion summaries. Full transcripts, hidden reasoning, IDE screen scraping,
+continuous full-repository watching, and fabricated completion percentages are
+not default product behavior. Human work time and agent execution time are
+distinct measures. Developer telemetry is Private Local unless a later
+security decision explicitly authorizes remote exposure.
+
+The first capability is a lightweight bridge, not an embedded coding runtime,
+general terminal, process supervisor, IDE mirror, transcript archive, or
+autonomous multi-agent platform. It may be separately scoped before Phase 8
+when useful for building Ion; full GitHub and project-development intelligence
+continues to mature in Phase 8. No additional numbered roadmap phase is
+created.
+
+### Deep Ask and resource boundary
+
+External coding-agent use is separate from Ion Deep Ask. Normal Claude Code
+uses the user's Claude subscription and never receives Ion's Anthropic API
+credential. Future Deep Ask credentials belong in macOS Keychain or equivalent
+secure storage and remain subject to local retrieval, context minimization,
+sensitive-data filtering, Private Local exclusions, deliberate cloud use, and
+configurable usage/cost budgets.
+
+Persistent intelligence does not require persistent computation. Baseline Ion
+must remain useful without an always-loaded local model, continuous WebGL,
+continuous repository indexing, unbounded caches/history, per-integration
+polling workers, whole-database renderer mirrors, or embedded heavyweight
+agent runtimes. Heavy systems initialize on demand, suspend when inactive, use
+bounded projections, and release resources after meaningful idle periods.
+Approximately 300 MB Ion-owned idle memory is an initial soft target; an idle
+baseline approaching or exceeding approximately 500 MB requires investigation
+unless measured requirements justify it. External agents, IDEs, and Ollama are
+measured separately. Normal fluctuation is acceptable; memory must not grow
+materially and monotonically merely because Ion remains open for days.

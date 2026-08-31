@@ -72,3 +72,32 @@ port and these exact origins only: `http://127.0.0.1:1420` and
 `tauri://localhost` for the Tauri WebView. Wildcard CORS is prohibited. The
 default port is not an enduring protocol commitment: it is a non-secret local
 setting and can be changed for development.
+
+## Future external development-agent boundary
+
+- Claude Code, Codex, and future coding agents own their own authentication.
+  Ion never reads, stores, reuses, exports, or impersonates those credentials.
+- Normal Claude Code development uses the user's Claude subscription and never
+  receives an Ion Anthropic API credential through arguments, environment,
+  files, prompts, or process inheritance controlled by Ion.
+- Future launch/resume capability requires explicit user action and narrow
+  Rust-owned commands restricted to allowlisted registered project paths and
+  allowlisted agent executables. The renderer receives no generic shell,
+  terminal, process, arbitrary path, or environment authority.
+- Developer telemetry is Private Local by default. Project paths, sensitive
+  repository names, file lists, diffs, test/build logs, agent activity, and
+  completion summaries do not automatically synchronize to mobile or cloud.
+- Full transcripts, source payloads, prompts, and hidden reasoning are not
+  collected by default. Any later remote exposure or broader collection needs
+  a separate explicit security/privacy decision.
+
+See ADR [0020](decisions/0020-external-developer-agent-bridge.md).
+
+## Deep Ask credential separation
+
+Future Deep Ask OpenAI/Anthropic API credentials belong only in macOS Keychain
+or equivalent secure OS storage. They are Ion credentials, not external coding
+agent credentials, and must never be globally exported into Claude Code,
+Codex, IDE, or terminal environments. Cloud reasoning remains deliberate and
+uses local retrieval, minimized context, deterministic sensitive-data
+filtering, Private Local exclusions, and configurable usage/cost controls.

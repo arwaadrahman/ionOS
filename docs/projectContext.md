@@ -10,15 +10,18 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 2 — Calendar
-- **Milestone:** Phase 2B — Calendar Interface
+- **Milestone:** Phase 2B accepted; documentation checkpoint before Phase 2C
 - **In scope:** a primary read-only Calendar over cached canonical
   CalendarBlocks; Day, consecutive 3 Day, Monday-first Week, rolling Next 7
-  Days, and Monday-first Month views; bounded recurrence/exception projection; unified multi-account
-  rendering; progressive calendar management with local hide/restore;
+  Days, and Monday-first Month views; bounded recurrence/exception projection;
+  unified multi-account rendering; progressive calendar management with local
+  hide/restore;
   Ion-owned event categories, semantic colors/filters, adaptive event detail,
-  local vertical density and pane-width responsive view selection; mutually exclusive
-  source/filter drawers; a provider-read-only event inspector; and truthful
-  CalendarBlock occupancy/free gaps in Today.
+  local vertical density and pane-width responsive view selection; mutually
+  exclusive source/filter drawers; a provider-read-only event inspector; and
+  truthful CalendarBlock occupancy/free gaps in Today.
+- **Checkpoint scope:** durable Developer Agent Bridge, external-agent/Deep Ask
+  separation, performance/resource policy, and deferred UI-polish direction.
 - **Out of scope:** Google event writes/deletes, Google Tasks, Gmail,
   push/webhooks, Phase 2C provider mutation/conflict resolution, Task
   auto-scheduling, AI, provider free/busy planning,
@@ -82,6 +85,13 @@ performance-conscious.
   data ownership, authentication, authorization, or canonical requirements.
 - Destructive actions, publication, and external side effects require approval.
 - Current phase boundaries are binding.
+- External coding agents retain their own authentication and lifecycle. Any
+  future bridge is explicit, allowlisted, Rust-owned, and never grants generic
+  renderer shell/process authority; developer telemetry is Private Local.
+- Persistent intelligence does not require persistent computation. Heavy
+  models, indexing, visualization, and repository analysis remain on-demand and
+  baseline resource behavior follows the
+  [Performance and resource policy](PERFORMANCE.md).
 
 ## Canonical documents
 
@@ -90,6 +100,8 @@ performance-conscious.
 - [Task router](agent/taskRouter.md)
 - [Approved Ion reference snapshot](references/approvedReferences.md)
 - [Decision index](decisions/README.md)
+- [Performance and resource policy](PERFORMANCE.md)
+- [External Developer Agent Bridge decision](decisions/0020-external-developer-agent-bridge.md)
 - [Active phase](phases/PHASE_2B.md)
 
 The approved-reference snapshot derives from `projectReference.md` version
