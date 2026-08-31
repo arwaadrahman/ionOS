@@ -8,6 +8,8 @@ from ion_api.calendar import CalendarService
 from ion_api.calendar_contracts import (
     CALENDAR_LIST_SCOPE,
     EVENTS_READ_SCOPE,
+    CalendarCategoryInput,
+    CalendarVisibilityInput,
     GoogleAccountConnectInput,
     ProviderCalendarInput,
     ProviderDateTime,
@@ -40,6 +42,41 @@ def provider_calendar(**overrides):
     }
     values.update(overrides)
     return ProviderCalendarInput.model_validate(values)
+
+
+def test_calendar_category_contract_is_two_level_and_extensible():
+    future = CalendarCategoryInput(
+        category="personal_project",
+        category_subtype="future_extension_2",
+        expected_revision=1,
+    )
+    assert future.category_subtype == "future_extension_2"
+    with pytest.raises(ValidationError):
+        CalendarCategoryInput(
+            category=None,
+            category_subtype="homework_study",
+            expected_revision=1,
+        )
+    with pytest.raises(ValidationError):
+        CalendarCategoryInput(
+            category="academic",
+            category_subtype="Invalid subtype",
+            expected_revision=1,
+        )
+    with pytest.raises(ValidationError):
+        CalendarCategoryInput(
+            category="career",
+            category_subtype=None,
+            expected_revision=1,
+        )
+    assert (
+        CalendarCategoryInput(
+            category="ion_focus",
+            category_subtype=None,
+            expected_revision=1,
+        ).category
+        == "ion_focus"
+    )
 
 
 def connected_service(tmp_path):
@@ -92,6 +129,97 @@ def event(event_id: str, **overrides):
     return ProviderEventInput.model_validate(values)
 
 
+def test_all_starter_categories_round_trip_restart_and_reconciliation(tmp_path):
+    service, engine = connected_service(tmp_path)
+    calendar = service.status().calendars[0]
+    starter_categories = [
+        ("academic", "class_section"),
+        ("academic", "homework_study"),
+        ("academic", "quiz_exam"),
+        ("career", "internship_recruiting"),
+        ("career", "application_admin"),
+        ("career", "interview_networking"),
+        ("personal_project", "build"),
+        ("personal_project", "research"),
+        ("personal_project", "creative"),
+        ("routine_physical", "work_shift"),
+        ("routine_physical", "meal"),
+        ("routine_physical", "gym"),
+        ("routine_physical", "hygiene"),
+        ("routine_physical", "chores_errands"),
+        ("personal", "appointment"),
+        ("personal", "family"),
+        ("personal", "travel"),
+        ("personal", "personal_admin"),
+        ("fun", "social"),
+        ("fun", "entertainment"),
+        ("fun", "gaming_media"),
+        ("fun", "leisure"),
+        ("ion_focus", None),
+    ]
+    provider_events = [
+        event(f"category-{index}") for index in range(len(starter_categories))
+    ]
+    provider_events.append(event("uncategorized"))
+    generation = str(uuid4())
+    service.begin_sync(calendar.id, SyncBeginInput(generation=generation, mode="full"))
+    service.apply_sync_page(
+        calendar.id,
+        SyncPageInput(generation=generation, events=provider_events),
+    )
+    service.complete_sync(
+        calendar.id,
+        SyncCompleteInput(generation=generation, next_sync_token="category-token-1"),
+    )
+
+    blocks = {item.provider_event_id: item for item in service.status().blocks}
+    for index, (category, subtype) in enumerate(starter_categories):
+        block_id = f"category-{index}"
+        service.set_category(
+            blocks[block_id].id,
+            CalendarCategoryInput(
+                category=category,
+                category_subtype=subtype,
+                expected_revision=1,
+            ),
+        )
+
+    restarted = CalendarService(engine)
+    restarted_blocks = {
+        item.provider_event_id: item for item in restarted.status().blocks
+    }
+    for index, expected in enumerate(starter_categories):
+        block = restarted_blocks[f"category-{index}"]
+        assert (block.category, block.category_subtype) == expected
+    uncategorized = restarted_blocks["uncategorized"]
+    assert (uncategorized.category, uncategorized.category_subtype) == (None, None)
+
+    generation = str(uuid4())
+    restarted.begin_sync(
+        calendar.id, SyncBeginInput(generation=generation, mode="incremental")
+    )
+    restarted.apply_sync_page(
+        calendar.id,
+        SyncPageInput(
+            generation=generation,
+            events=[
+                event(
+                    item.provider_event_id, title=f"Reconciled {item.provider_event_id}"
+                )
+                for item in provider_events
+            ],
+        ),
+    )
+    restarted.complete_sync(
+        calendar.id,
+        SyncCompleteInput(generation=generation, next_sync_token="category-token-2"),
+    )
+    reconciled = {item.provider_event_id: item for item in restarted.status().blocks}
+    for index, expected in enumerate(starter_categories):
+        block = reconciled[f"category-{index}"]
+        assert (block.category, block.category_subtype) == expected
+
+
 def test_contract_requires_exact_read_only_scopes_and_explicit_temporal_union():
     with pytest.raises(ValidationError):
         GoogleAccountConnectInput(
@@ -114,6 +242,7 @@ def test_discovery_defaults_and_ion_selection_are_independent(tmp_path):
     assert not hasattr(status.accounts[0], "keychain_locator")
     primary, hidden = status.calendars
     assert primary.enabled_in_ion is True
+    assert primary.hidden_in_ion is False
     assert hidden.enabled_in_ion is False
     assert hidden.provider_hidden is True
 
@@ -124,6 +253,13 @@ def test_discovery_defaults_and_ion_selection_are_independent(tmp_path):
     selected = next(item for item in changed.calendars if item.id == hidden.id)
     assert selected.enabled_in_ion is True
     assert selected.provider_hidden is True
+
+    hidden_locally = service.set_visibility(
+        selected.id,
+        CalendarVisibilityInput(hidden=True, expected_revision=selected.revision),
+    )
+    selected = next(item for item in hidden_locally.calendars if item.id == hidden.id)
+    assert selected.hidden_in_ion is True
 
     rediscovered = service.connect_account(
         GoogleAccountConnectInput(
@@ -145,7 +281,143 @@ def test_discovery_defaults_and_ion_selection_are_independent(tmp_path):
     )
     selected = next(item for item in rediscovered.calendars if item.id == hidden.id)
     assert selected.enabled_in_ion is True
+    assert selected.hidden_in_ion is True
     assert selected.provider_selected is False
+
+
+def test_calendar_list_reconciliation_retires_stale_rows_without_losing_identity(
+    tmp_path,
+):
+    service, _ = connected_service(tmp_path)
+    initial = service.status()
+    secondary = next(
+        item
+        for item in initial.calendars
+        if item.provider_calendar_id == "synthetic-hidden@example.invalid"
+    )
+    selected = service.set_selection(
+        secondary.id,
+        SelectionInput(enabled=True, expected_revision=secondary.revision),
+    )
+    secondary = next(item for item in selected.calendars if item.id == secondary.id)
+    generation = str(uuid4())
+    service.begin_sync(secondary.id, SyncBeginInput(generation=generation, mode="full"))
+    service.apply_sync_page(
+        secondary.id,
+        SyncPageInput(generation=generation, events=[event("retained-event")]),
+    )
+    service.complete_sync(
+        secondary.id,
+        SyncCompleteInput(generation=generation, next_sync_token="retained-token"),
+    )
+    retained_block = next(
+        item
+        for item in service.status().blocks
+        if item.provider_event_id == "retained-event"
+    )
+    service.set_category(
+        retained_block.id,
+        CalendarCategoryInput(
+            category="personal_project",
+            category_subtype="build",
+            expected_revision=retained_block.ion_metadata_revision,
+        ),
+    )
+
+    removed = service.connect_account(
+        GoogleAccountConnectInput(
+            provider_account_id="synthetic-primary@example.invalid",
+            display_name="Synthetic Calendar Account",
+            granted_scopes=[CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE],
+            keychain_locator="ion-google-reconnected-locator",
+            calendars=[provider_calendar(summary="Renamed Synthetic Primary")],
+        )
+    )
+    stale = next(item for item in removed.calendars if item.id == secondary.id)
+    assert stale.provider_deleted is True
+    assert stale.enabled_in_ion is False
+    assert stale.summary == "Synthetic Hidden Calendar"
+    preserved = next(
+        item for item in removed.blocks if item.provider_event_id == "retained-event"
+    )
+    assert preserved.calendar_id == secondary.id
+    assert (preserved.category, preserved.category_subtype) == (
+        "personal_project",
+        "build",
+    )
+
+    tombstoned = service.connect_account(
+        GoogleAccountConnectInput(
+            provider_account_id="synthetic-primary@example.invalid",
+            display_name="Synthetic Calendar Account",
+            granted_scopes=[CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE],
+            keychain_locator="ion-google-reconnected-locator",
+            calendars=[
+                provider_calendar(summary="Renamed Synthetic Primary"),
+                provider_calendar(
+                    provider_calendar_id="synthetic-hidden@example.invalid",
+                    summary=None,
+                    is_primary=False,
+                    provider_selected=False,
+                    provider_deleted=True,
+                ),
+                provider_calendar(
+                    provider_calendar_id="unknown-deleted@example.invalid",
+                    summary=None,
+                    is_primary=False,
+                    provider_selected=False,
+                    provider_deleted=True,
+                ),
+            ],
+        )
+    )
+    stale = next(item for item in tombstoned.calendars if item.id == secondary.id)
+    assert stale.summary == "Synthetic Hidden Calendar"
+    assert not any(
+        item.provider_calendar_id == "unknown-deleted@example.invalid"
+        for item in tombstoned.calendars
+    )
+
+    restored = service.connect_account(
+        GoogleAccountConnectInput(
+            provider_account_id="synthetic-primary@example.invalid",
+            display_name="Synthetic Calendar Account",
+            granted_scopes=[CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE],
+            keychain_locator="ion-google-reconnected-locator",
+            calendars=[
+                provider_calendar(summary="Renamed Synthetic Primary"),
+                provider_calendar(
+                    provider_calendar_id="synthetic-hidden@example.invalid",
+                    summary="Restored Provider Title",
+                    is_primary=False,
+                    provider_selected=True,
+                    provider_deleted=False,
+                ),
+                provider_calendar(
+                    provider_calendar_id="genuinely-unnamed@example.invalid",
+                    summary=None,
+                    is_primary=False,
+                    provider_selected=True,
+                    provider_deleted=False,
+                ),
+            ],
+        )
+    )
+    matching = [
+        item
+        for item in restored.calendars
+        if item.provider_calendar_id == "synthetic-hidden@example.invalid"
+    ]
+    assert len(matching) == 1
+    assert matching[0].id == secondary.id
+    assert matching[0].summary == "Restored Provider Title"
+    assert matching[0].provider_deleted is False
+    unnamed = next(
+        item
+        for item in restored.calendars
+        if item.provider_calendar_id == "genuinely-unnamed@example.invalid"
+    )
+    assert unnamed.summary == "Untitled Google Calendar"
 
 
 def test_full_and_incremental_sync_preserve_identity_recurrence_and_audit(tmp_path):
@@ -219,8 +491,12 @@ def test_full_and_incremental_sync_preserve_identity_recurrence_and_audit(tmp_pa
         by_event["moved-exception"].recurrence_master_block_id
         == by_event["master-event"].id
     )
+    assert by_event["moved-exception"].original_start_kind == "instant"
+    assert by_event["moved-exception"].original_start_at == "2030-03-11T09:00:00-07:00"
+    assert by_event["moved-exception"].original_start_timezone == "America/Los_Angeles"
     assert by_event["cancelled-exception"].status == "cancelled"
     assert by_event["cancelled-exception"].start_at == "2030-03-18T09:00:00-07:00"
+    assert by_event["cancelled-exception"].original_start_kind == "instant"
     assert all(item.revision == 1 for item in status.blocks)
 
     with engine.connect() as connection:
@@ -241,6 +517,21 @@ def test_full_and_incremental_sync_preserve_identity_recurrence_and_audit(tmp_pa
             )
             .values(flexibility="flexible", notes="Synthetic Ion-only note")
         )
+
+    categorized = service.set_category(
+        by_event["event-a"].id,
+        CalendarCategoryInput(
+            category="academic",
+            category_subtype="homework_study",
+            expected_revision=by_event["event-a"].ion_metadata_revision,
+        ),
+    )
+    categorized_event = next(
+        item for item in categorized.blocks if item.provider_event_id == "event-a"
+    )
+    assert categorized_event.category == "academic"
+    assert categorized_event.category_subtype == "homework_study"
+    assert categorized_event.ion_metadata_revision == 2
 
     incremental = str(uuid4())
     service.begin_sync(
@@ -272,6 +563,9 @@ def test_full_and_incremental_sync_preserve_identity_recurrence_and_audit(tmp_pa
     assert by_event["event-a"].title == "Synthetic Event A Updated"
     assert by_event["event-a"].flexibility == "flexible"
     assert by_event["event-a"].notes == "Synthetic Ion-only note"
+    assert by_event["event-a"].category == "academic"
+    assert by_event["event-a"].category_subtype == "homework_study"
+    assert by_event["event-a"].ion_metadata_revision == 2
     assert by_event["event-b"].status == "cancelled"
     assert by_event["event-b"].provider_deleted_at is not None
 

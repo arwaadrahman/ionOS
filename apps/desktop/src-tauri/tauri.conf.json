@@ -16,6 +16,8 @@
         "title": "Ion OS",
         "width": 980,
         "height": 680,
+        "minWidth": 540,
+        "minHeight": 560,
         "resizable": true
       },
       {

@@ -10,14 +10,18 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 2 — Calendar
-- **Milestone:** Phase 2A — Google Account + Calendar Sync Foundation
-- **In scope:** native Google OAuth, secure Keychain token ownership, multiple
-  accounts, CalendarList discovery and Ion-owned selection, canonical
-  CalendarBlocks, per-calendar full/incremental read sync, offline cached
-  state, and minimal setup/status UI under the Rust-owned boundary.
-- **Out of scope:** Google event writes/deletes, Tasks, Gmail, push/webhooks,
-  Phase 2B calendar interaction/scheduling, Phase 2C conflict resolution, AI,
-  free-busy planning,
+- **Milestone:** Phase 2B — Calendar Interface
+- **In scope:** a primary read-only Calendar over cached canonical
+  CalendarBlocks; Day, consecutive 3 Day, Monday-first Week, rolling Next 7
+  Days, and Monday-first Month views; bounded recurrence/exception projection; unified multi-account
+  rendering; progressive calendar management with local hide/restore;
+  Ion-owned event categories, semantic colors/filters, adaptive event detail,
+  local vertical density and pane-width responsive view selection; mutually exclusive
+  source/filter drawers; a provider-read-only event inspector; and truthful
+  CalendarBlock occupancy/free gaps in Today.
+- **Out of scope:** Google event writes/deletes, Google Tasks, Gmail,
+  push/webhooks, Phase 2C provider mutation/conflict resolution, Task
+  auto-scheduling, AI, provider free/busy planning,
   FocusSession, DailyReview, WeeklyPlan, semantic/conversational search,
   persisted search indexes/history, generic Undo/version history, automatic
   purge, inferred relationships, global shortcuts requiring a new plugin,
@@ -55,8 +59,9 @@ a premium technical/editorial tone. Phase 1D established the first operational
 Core baseline; Phases 1E and 1F add compact command search and contextual
 recovery/history; Phase 1G adds a quiet native menu-bar presence and focused
 Task capture; Phase 1H hardens the complete Phase 1 flow. Phase 2A adds a
-restrained Calendar setup/status surface while full calendar interaction,
-Explore, semantic search, and AI remain deferred.
+restrained Calendar read-sync foundation. Phase 2B adds the primary read-only
+Calendar and truthful CalendarBlock occupancy in Today while provider writes,
+Task scheduling, Explore, semantic search, and AI remain deferred.
 
 Design/motion ladder: process guidance (`IMPECCABLE`, `EMIL-MOTION`); CSS for
 simple motion; Motion for React for normal stateful UI; Three.js only for a
@@ -85,7 +90,7 @@ performance-conscious.
 - [Task router](agent/taskRouter.md)
 - [Approved Ion reference snapshot](references/approvedReferences.md)
 - [Decision index](decisions/README.md)
-- [Active phase](phases/PHASE_2A.md)
+- [Active phase](phases/PHASE_2B.md)
 
 The approved-reference snapshot derives from `projectReference.md` version
 **1.1.0** (updated 2026-08-27). Project-local decisions override it.

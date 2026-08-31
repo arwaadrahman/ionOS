@@ -9,7 +9,9 @@ from ion_api.calendar import (
     CalendarValidationError,
 )
 from ion_api.calendar_contracts import (
+    CalendarCategoryInput,
     CalendarStatusOutput,
+    CalendarVisibilityInput,
     GoogleAccountConnectInput,
     InternalCalendarStateOutput,
     SelectionInput,
@@ -76,6 +78,32 @@ def calendar_router(service: CalendarService) -> APIRouter:
     def selection(calendar_id: str, input: SelectionInput) -> CalendarStatusOutput:
         try:
             return service.set_selection(calendar_id, input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.put(
+        "/calendars/{calendar_id}/visibility", response_model=CalendarStatusOutput
+    )
+    def visibility(
+        calendar_id: str, input: CalendarVisibilityInput
+    ) -> CalendarStatusOutput:
+        try:
+            return service.set_visibility(calendar_id, input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.put("/blocks/{block_id}/category", response_model=CalendarStatusOutput)
+    def category(block_id: str, input: CalendarCategoryInput) -> CalendarStatusOutput:
+        try:
+            return service.set_category(block_id, input)
         except (
             CalendarNotFoundError,
             CalendarConflictError,

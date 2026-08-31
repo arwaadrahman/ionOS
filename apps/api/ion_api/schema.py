@@ -282,6 +282,7 @@ google_calendars = Table(
     Column("provider_selected", Integer, nullable=False, server_default="0"),
     Column("provider_hidden", Integer, nullable=False, server_default="0"),
     Column("enabled_in_ion", Integer, nullable=False, server_default="0"),
+    Column("hidden_in_ion", Integer, nullable=False, server_default="0"),
     Column("provider_deleted", Integer, nullable=False, server_default="0"),
     Column("next_sync_token", Text, nullable=True),
     Column("sync_state", String, nullable=False),
@@ -387,12 +388,27 @@ calendar_block_ion_metadata = Table(
     ),
     Column("flexibility", String, nullable=False),
     Column("notes", Text, nullable=True),
+    Column("category", String, nullable=True),
+    Column("category_subtype", String, nullable=True),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
     Column("revision", Integer, nullable=False, server_default="1"),
     CheckConstraint(
         "flexibility IN ('locked', 'flexible', 'ion_controlled')",
         name="calendar_block_flexibility_valid",
+    ),
+    CheckConstraint(
+        "category IS NULL OR category IN "
+        "('academic', 'career', 'personal_project', 'routine_physical', "
+        "'personal', 'fun', 'ion_focus')",
+        name="calendar_block_category_valid",
+    ),
+    CheckConstraint(
+        "category_subtype IS NULL OR (category IS NOT NULL "
+        "AND length(category_subtype) BETWEEN 1 AND 64 "
+        "AND category_subtype NOT GLOB '*[^a-z0-9_]*' "
+        "AND category_subtype GLOB '[a-z]*')",
+        name="calendar_block_category_subtype_valid",
     ),
     CheckConstraint("revision >= 1", name="calendar_block_metadata_revision_positive"),
 )

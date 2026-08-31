@@ -175,6 +175,46 @@ adds no daemon, launch agent, webhook, cloud relay, LAN/mobile boundary, Google
 event write, generic integration framework, or Python provider SDK. See ADR
 [0018](decisions/0018-google-calendar-read-sync-foundation.md).
 
+## Phase 2B Calendar presentation path
+
+Phase 2B adds no provider, credential, process, dependency, or trust-boundary
+owner. React derives bounded visible occurrences from the safe cached CalendarBlock
+DTO: recurring masters remain canonical, explicit moved/cancelled exceptions
+replace or suppress their generated occurrence, and all-day civil dates remain
+date-only. The projection is deterministic, limited to the visible range, and
+never writes generated occurrences back to SQLite.
+
+Owner acceptance adds two narrow Ion-local presentation owners through
+revisioned fixed routes: `google_calendars.hidden_in_ion` controls reversible
+hide/restore, while nullable `calendar_block_ion_metadata.category` plus
+`category_subtype` control semantic event color/filtering. Provider
+discovery/reconciliation never overwrites these Ion-owned fields, and neither
+route can make a Google request. Current categories with explicit starter
+choices require a subtype at both local API and Tauri command boundaries;
+the stored subtype remains an extensible slug rather than a closed enum.
+
+The Calendar workspace combines enabled, non-hidden calendars from every account into Day,
+consecutive 3 Day, Monday-first Week, rolling Next 7 Days, and Monday-first Month views. Layout,
+category-family and subtype-toned restrained color, overlap columns, local-time display, month
+overflow, adaptive title detail, density, filters, and the inspector are
+renderer presentation concerns. Calendar/source management and filters share
+one mutually exclusive secondary drawer that opens to filters. Density controls
+hour-row spacing. The usable calendar canvas recommends Week at 840 logical CSS
+pixels, 3 Day from 560 through 839, and Day below 560; a major width-class
+crossing closes the drawer and all active-view columns fit without horizontal
+day scrolling or independent calendar zoom. An indexed recurrence read model is rebuilt
+only when canonical status changes and caches a bounded set of range
+projections for immediate navigation. The DTO also includes the already-stored
+exception original-start union needed to correlate an explicit exception with
+the generated master occurrence; provider technical identifiers are not
+rendered.
+
+Today uses the same projection to show current-day CalendarBlocks and derives
+open gaps only from opaque timed blocks. All-day and transparent blocks remain
+visible but do not fabricate timed occupancy. Today Tasks keep their existing
+planning semantics and are never converted to, or implied to be,
+CalendarBlocks. Cached Calendar content stays visible when Google is offline.
+
 ## TBD
 
 See ADRs [0004](decisions/0004-macos-local-trust-boundary.md),

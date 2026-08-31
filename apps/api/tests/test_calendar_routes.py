@@ -79,6 +79,15 @@ def test_selection_and_disconnect_are_revisioned_fixed_mutations(tmp_path):
         assert changed.status_code == 200
         assert changed.json()["calendars"][0]["enabled_in_ion"] is False
 
+        visible_revision = changed.json()["calendars"][0]["revision"]
+        hidden = client.put(
+            f"/v1/calendar/calendars/{calendar['id']}/visibility",
+            headers=HEADERS,
+            json={"hidden": True, "expected_revision": visible_revision},
+        )
+        assert hidden.status_code == 200
+        assert hidden.json()["calendars"][0]["hidden_in_ion"] is True
+
         stale = client.put(
             f"/v1/calendar/calendars/{calendar['id']}/selection",
             headers=HEADERS,
@@ -165,6 +174,29 @@ def test_fixed_sync_routes_advance_success_and_cache_canonical_blocks(tmp_path):
         assert synced["calendars"][0]["has_sync_token"] is True
         assert len(synced["blocks"]) == 1
         assert synced["blocks"][0]["provider_event_id"] == "synthetic-event"
+
+        block = synced["blocks"][0]
+        categorized = client.put(
+            f"/v1/calendar/blocks/{block['id']}/category",
+            headers=HEADERS,
+            json={
+                "category": "academic",
+                "category_subtype": "quiz_exam",
+                "expected_revision": block["ion_metadata_revision"],
+            },
+        )
+        assert categorized.status_code == 200
+        categorized_block = categorized.json()["blocks"][0]
+        assert categorized_block["category"] == "academic"
+        assert categorized_block["category_subtype"] == "quiz_exam"
+        assert categorized_block["ion_metadata_revision"] == 2
+
+        rejected = client.put(
+            f"/v1/calendar/blocks/{block['id']}/category",
+            headers=HEADERS,
+            json={"category": "provider-write", "expected_revision": 2},
+        )
+        assert rejected.status_code == 422
 
         legacy = client.post(
             f"/v1/calendar/{calendar_id}/sync/begin",

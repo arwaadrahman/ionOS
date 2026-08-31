@@ -1,13 +1,13 @@
 # Integration Boundaries
 
-## Status: Google Calendar Phase 2A active; other integrations deferred
+## Status: Google Calendar Phase 2B read-only interface active; other integrations deferred
 
 Integrations are adapters around Ion's local authority; they do not become its
 primary storage. Google Calendar is the first active adapter under ADR 0018.
 
 | Integration                                    | Target phase/status             |
 | ---------------------------------------------- | ------------------------------- |
-| Google Calendar                                | Phase 2A read-sync foundation   |
+| Google Calendar                                | Phase 2B read-only interface    |
 | Canvas                                         | Phase 3, deferred               |
 | Local AI                                       | Phase 4, deferred               |
 | Gmail                                          | Phase 5, deferred               |
@@ -19,10 +19,11 @@ primary storage. Google Calendar is the first active adapter under ADR 0018.
 Any other integration requires a scoped route, privacy review, and owner
 approval before implementation.
 
-## Google Calendar Phase 2A contract
+## Google Calendar Phase 2A/2B contract
 
 - Authority: Google owns synchronized event fields; SQLite owns canonical
-  CalendarBlock identity and offline state; Ion owns block flexibility/notes
+  CalendarBlock identity and offline state; Ion owns block flexibility/notes,
+  nullable category/subtype, and local calendar hide state
   and enabled-in-Ion calendar selection.
 - Scope: `calendar.calendarlist.readonly` and `calendar.events.readonly` only.
 - Credential owner: Rust + macOS Keychain; no token in React, Python, SQLite,
@@ -43,6 +44,12 @@ approval before implementation.
 - Mutations: Phase 2A makes no Google event write/delete request. Disconnect
   records local state, attempts revocation where feasible, clears Keychain and
   memory tokens, and preserves cached blocks.
+- Interface: Phase 2B reads the same safe cached DTO into bounded Day, 3 Day,
+  Week, Next 7 Days, Month, inspector, and Today occupancy projections. It makes no
+  additional Google request and adds no provider-event mutation affordance.
+  Revisioned category/subtype and hide/restore commands update only Ion-local SQLite
+  fields. Google selection, subscription, visibility, and event content remain
+  untouched.
 
 Authoritative provider references:
 

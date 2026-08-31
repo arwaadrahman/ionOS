@@ -11,6 +11,18 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 CALENDAR_LIST_SCOPE = "https://www.googleapis.com/auth/calendar.calendarlist.readonly"
 EVENTS_READ_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly"
 REQUIRED_GOOGLE_SCOPES = frozenset((CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE))
+CalendarCategory = Literal[
+    "academic",
+    "career",
+    "personal_project",
+    "routine_physical",
+    "personal",
+    "fun",
+    "ion_focus",
+]
+CATEGORIES_REQUIRING_SUBTYPE = frozenset(
+    ("academic", "career", "personal_project", "routine_physical", "personal", "fun")
+)
 
 
 class CalendarModel(BaseModel):
@@ -19,7 +31,7 @@ class CalendarModel(BaseModel):
 
 class ProviderCalendarInput(CalendarModel):
     provider_calendar_id: str = Field(min_length=1, max_length=2048)
-    summary: str = Field(min_length=1, max_length=4096)
+    summary: str | None = Field(default=None, min_length=1, max_length=4096)
     description: str | None = Field(default=None, max_length=65536)
     location: str | None = Field(default=None, max_length=4096)
     timezone: str | None = Field(default=None, max_length=255)
@@ -60,14 +72,43 @@ class GoogleAccountConnectInput(CalendarModel):
     def has_exact_phase_scopes(self):
         if set(self.granted_scopes) != REQUIRED_GOOGLE_SCOPES:
             raise ValueError("the exact Phase 2A read-only scopes are required")
-        if not any(item.is_primary for item in self.calendars):
+        if not any(
+            item.is_primary and not item.provider_deleted for item in self.calendars
+        ):
             raise ValueError("calendar discovery must include the primary calendar")
+        provider_ids = [item.provider_calendar_id for item in self.calendars]
+        if len(provider_ids) != len(set(provider_ids)):
+            raise ValueError("calendar discovery must not contain duplicate identities")
         return self
 
 
 class SelectionInput(CalendarModel):
     enabled: bool
     expected_revision: int = Field(ge=1)
+
+
+class CalendarVisibilityInput(CalendarModel):
+    hidden: bool
+    expected_revision: int = Field(ge=1)
+
+
+class CalendarCategoryInput(CalendarModel):
+    category: CalendarCategory | None
+    category_subtype: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$"
+    )
+    expected_revision: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def valid_category_shape(self):
+        if self.category is None and self.category_subtype is not None:
+            raise ValueError("calendar category subtype requires a broad category")
+        if (
+            self.category in CATEGORIES_REQUIRING_SUBTYPE
+            and self.category_subtype is None
+        ):
+            raise ValueError("the selected calendar category requires a subtype")
+        return self
 
 
 class SyncBeginInput(CalendarModel):
@@ -196,6 +237,7 @@ class GoogleCalendarOutput(CalendarModel):
     provider_selected: bool
     provider_hidden: bool
     enabled_in_ion: bool
+    hidden_in_ion: bool
     provider_deleted: bool
     has_sync_token: bool
     sync_state: str
@@ -231,8 +273,15 @@ class CalendarBlockOutput(CalendarModel):
     recurrence_rules: list[str]
     recurrence_master_block_id: str | None
     recurring_event_id: str | None
+    original_start_kind: Literal["none", "date", "instant"]
+    original_start_date: str | None
+    original_start_at: str | None
+    original_start_timezone: str | None
     flexibility: str
     notes: str | None
+    category: CalendarCategory | None
+    category_subtype: str | None
+    ion_metadata_revision: int
     provider_deleted_at: str | None
     revision: int
 

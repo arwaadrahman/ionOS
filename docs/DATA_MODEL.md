@@ -2,12 +2,15 @@
 
 ## Status
 
-**Phase 2A foundation.** The organizer schema begins in
+**Phase 2B interface over the Phase 2A foundation.** The organizer schema begins in
 `0002_organizer_foundation`; `0003_milestone_ordering` adds canonical
 owner-scoped positions to Goal and Project Milestones, and
 `0004_today_planning` adds human day-planning intent over canonical Tasks.
 `0005_google_calendar_foundation` adds Google account/calendar sync metadata,
 canonical CalendarBlocks, Ion-only block metadata, and provider linkage.
+Owner-authorized Phase 2B migration `0006_calendar_presentation_metadata` adds
+only persistent local calendar hide state and nullable CalendarBlock category
+plus extensible subtype; existing rows migrate to visible and uncategorized.
 
 - Use one canonical record with multiple contextual views; do not duplicate an
   object merely because multiple areas display it.
@@ -71,6 +74,24 @@ canonical CalendarBlocks, Ion-only block metadata, and provider linkage.
   provider series ID, original-start union, and resolved canonical master link.
   Cancelled exceptions remain canonical so generated occurrences cannot
   reappear. Generated occurrences are derived/rebuildable and not stored.
+- Phase 2B projects generated occurrences only across the visible Calendar or
+  Today range. The safe status DTO includes the linkage row's original-start
+  date/instant/timezone union so moved and cancelled exceptions can replace or
+  suppress a generated occurrence without exposing tokens, ETags, sync tokens,
+  or Keychain metadata. Projection, overlap columns, colors, and free-gap
+  intervals are renderer-only state.
+- `google_calendars.hidden_in_ion` is a reversible Ion-local presentation flag.
+  It does not alter `enabled_in_ion`, Google selection, subscription, or
+  visibility, and provider rediscovery preserves it.
+- `calendar_block_ion_metadata.category` is nullable and constrained to the
+  starter broad domains `academic`, `career`, `personal_project`,
+  `routine_physical`, `personal`, `fun`, or `ion_focus`. Null means
+  uncategorized. `category_subtype` is a bounded lowercase slug so Ion can
+  extend the presentation taxonomy without a schema migration. The local
+  mutation contracts require a subtype for every current broad category that
+  exposes subtype choices; Ion focus currently omits that control. Both fields
+  share the Ion metadata revision, and provider reconciliation preserves them
+  alongside flexibility and notes.
 - `google_event_links` separates provider event ID, iCalUID, ETag, provider
   update time, series identity, original start, and sync generation. Event ID
   is unique only within its calendar. iCalUID is indexed but deliberately not

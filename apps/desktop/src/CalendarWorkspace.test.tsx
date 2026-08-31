@@ -1,16 +1,25 @@
 import "@testing-library/jest-dom/vitest";
 import { invoke } from "@tauri-apps/api/core";
+import { readFileSync } from "node:fs";
 import { useState } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { CalendarWorkspace } from "./CalendarWorkspace";
-import { CalendarStatus, emptyCalendarStatus } from "./calendar";
+import {
+  CalendarBlock,
+  CalendarStatus,
+  GoogleAccount,
+  GoogleCalendar,
+  emptyCalendarStatus,
+} from "./calendar";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -42,6 +51,7 @@ const calendar = {
   provider_selected: true,
   provider_hidden: false,
   enabled_in_ion: true,
+  hidden_in_ion: false,
   provider_deleted: false,
   has_sync_token: true,
   sync_state: "idle" as const,
@@ -60,8 +70,65 @@ const connected: CalendarStatus = {
   blocks: [],
 };
 
-beforeEach(() => vi.clearAllMocks());
-afterEach(cleanup);
+const now = new Date("2030-01-02T18:30:00Z");
+const calendarStyles = readFileSync("src/styles.css", "utf8");
+const tauriConfig = JSON.parse(
+  readFileSync("src-tauri/tauri.conf.json", "utf8"),
+) as {
+  app: { windows: { label: string; minWidth?: number; minHeight?: number }[] };
+};
+
+function block(
+  id: string,
+  title: string,
+  overrides: Partial<CalendarBlock> = {},
+): CalendarBlock {
+  return {
+    id,
+    calendar_id: calendar.id,
+    provider_event_id: `provider-${id}`,
+    ical_uid: `ical-${id}@example.invalid`,
+    title,
+    description: null,
+    location: null,
+    temporal_kind: "timed",
+    start_date: null,
+    end_date: null,
+    start_at: "2030-01-02T09:00:00Z",
+    end_at: "2030-01-02T10:00:00Z",
+    start_timezone: "UTC",
+    end_timezone: "UTC",
+    status: "confirmed",
+    transparency: "opaque",
+    recurrence_kind: "single",
+    recurrence_rules: [],
+    recurrence_master_block_id: null,
+    recurring_event_id: null,
+    original_start_kind: "none",
+    original_start_date: null,
+    original_start_at: null,
+    original_start_timezone: null,
+    flexibility: "locked",
+    notes: null,
+    category: null,
+    category_subtype: null,
+    ion_metadata_revision: 1,
+    provider_deleted_at: null,
+    revision: 1,
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  window.localStorage.clear();
+  window.sessionStorage.clear();
+  window.sessionStorage.setItem("ion.calendar-sidebar.v1", "calendars");
+});
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 test("explains missing local configuration without enabling OAuth", () => {
   const status = {
@@ -125,6 +192,8 @@ test("Sync Now replaces Never synced with the returned successful projection", a
         provider_event_id: "synthetic-event",
         ical_uid: "synthetic-event@example.invalid",
         title: "Synthetic Calendar Event",
+        description: null,
+        location: null,
         temporal_kind: "timed",
         start_date: null,
         end_date: null,
@@ -133,8 +202,20 @@ test("Sync Now replaces Never synced with the returned successful projection", a
         start_timezone: "America/Los_Angeles",
         end_timezone: "America/Los_Angeles",
         status: "confirmed",
+        transparency: "opaque",
         recurrence_kind: "single",
+        recurrence_rules: [],
+        recurrence_master_block_id: null,
+        recurring_event_id: null,
+        original_start_kind: "none",
+        original_start_date: null,
+        original_start_at: null,
+        original_start_timezone: null,
         flexibility: "locked",
+        notes: null,
+        category: null,
+        category_subtype: null,
+        ion_metadata_revision: 1,
         provider_deleted_at: null,
         revision: 1,
       },
@@ -149,7 +230,7 @@ test("Sync Now replaces Never synced with the returned successful projection", a
 
   render(<Harness />);
   expect(screen.getByText(/Never synced/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+  fireEvent.click(screen.getByRole("button", { name: "Sync calendars" }));
 
   await waitFor(() =>
     expect(invoke).toHaveBeenCalledWith("sync_google_calendars"),
@@ -157,7 +238,13 @@ test("Sync Now replaces Never synced with the returned successful projection", a
   await waitFor(() =>
     expect(screen.queryByText(/Never synced/)).not.toBeInTheDocument(),
   );
-  expect(screen.getByText("1 cached canonical block")).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      (_, node) =>
+        node?.tagName === "SMALL" &&
+        node.textContent === "connected · 1 cached canonical block",
+    ),
+  ).toBeInTheDocument();
 });
 
 test("renders only the safe provider rejection classification", () => {
@@ -174,12 +261,52 @@ test("renders only the safe provider rejection classification", () => {
             last_error_code: "provider_not_found",
           },
         ],
+        blocks: [
+          block("33333333-3333-4333-8333-333333333333", "Saved provider event"),
+        ],
       }}
       onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
     />,
   );
   expect(screen.getByText("provider not found")).toBeInTheDocument();
   expect(screen.getByText(/Never synced/)).toBeInTheDocument();
+  expect(
+    screen.getByText("Some calendars couldn't refresh. Showing saved events."),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/CalendarBlocks/)).not.toBeInTheDocument();
+});
+
+test("keeps a local category mutation failure distinct from provider refresh copy", async () => {
+  const item = block(
+    "33333333-3333-4333-8333-333333333334",
+    "Local category failure",
+    { category: "academic", category_subtype: "class_section" },
+  );
+  vi.mocked(invoke).mockRejectedValue({ code: "local_state_invalid" });
+  render(
+    <CalendarWorkspace
+      status={{ ...connected, blocks: [item] }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: /Local category failure/ }),
+  );
+  fireEvent.change(
+    screen.getByLabelText("Local category failure Ion category subtype"),
+    {
+      target: { value: "homework_study" },
+    },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save category" }));
+  expect(
+    await screen.findByText("That calendar change couldn't be saved."),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/local calendar service/i)).not.toBeInTheDocument();
 });
 
 test("changes only Ion selection and disconnects through fixed commands", async () => {
@@ -198,7 +325,11 @@ test("changes only Ion selection and disconnects through fixed commands", async 
   });
   const onStatus = vi.fn();
   render(<CalendarWorkspace status={connected} onStatus={onStatus} />);
-  fireEvent.click(screen.getByRole("checkbox", { name: "Enabled in Ion" }));
+  fireEvent.click(
+    screen.getByRole("checkbox", {
+      name: "Synthetic Primary Calendar enabled in Ion",
+    }),
+  );
   await waitFor(() =>
     expect(invoke).toHaveBeenCalledWith("set_google_calendar_enabled", {
       calendarId: calendar.id,
@@ -214,4 +345,951 @@ test("changes only Ion selection and disconnects through fixed commands", async 
       accountId: account.id,
     }),
   );
+});
+
+test("defaults to a Monday-through-Sunday week and navigates every locked view", () => {
+  render(
+    <CalendarWorkspace
+      status={connected}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+
+  expect(screen.getByRole("button", { name: "Week view" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.getByText("Mon, Dec 31")).toBeInTheDocument();
+  expect(screen.getByText("Sun, Jan 6")).toBeInTheDocument();
+  expect(screen.getByText("Wed, Jan 2").parentElement).toHaveClass("is-today");
+
+  fireEvent.click(screen.getByRole("button", { name: "Previous period" }));
+  expect(screen.getByText("Mon, Dec 24")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Today" }));
+  expect(screen.getByText("Mon, Dec 31")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Day view" }));
+  expect(
+    screen.getByRole("heading", { name: "Wednesday, January 2, 2030" }),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Next period" }));
+  expect(
+    screen.getByRole("heading", { name: "Thursday, January 3, 2030" }),
+  ).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "3 Day view" }));
+  fireEvent.click(screen.getByRole("button", { name: "Today" }));
+  expect(screen.getByText("Wed, Jan 2")).toBeInTheDocument();
+  expect(screen.getByText("Fri, Jan 4")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Next period" }));
+  expect(screen.getByText("Sat, Jan 5")).toBeInTheDocument();
+  expect(screen.getByText("Mon, Jan 7")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Next 7 Days view" }));
+  fireEvent.click(screen.getByRole("button", { name: "Today" }));
+  expect(screen.getByText("Wed, Jan 2")).toBeInTheDocument();
+  expect(screen.getByText("Tue, Jan 8")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Month view" }));
+  expect(
+    screen.getByRole("heading", { name: "January 2030" }),
+  ).toBeInTheDocument();
+  expect(screen.getAllByText("Mon").length).toBeGreaterThan(0);
+  expect(screen.getByLabelText("2030-01-02")).toHaveClass("is-today");
+});
+
+test("renders unified multi-account timed, all-day, and overlapping events while filtering disabled calendars", () => {
+  const schoolAccount: GoogleAccount = {
+    ...account,
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    provider_account_id: "school@example.invalid",
+    display_name: "Synthetic School Account",
+  };
+  const schoolCalendar: GoogleCalendar = {
+    ...calendar,
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    account_id: schoolAccount.id,
+    provider_calendar_id: "school-calendar@example.invalid",
+    summary: "Synthetic School Calendar",
+    is_primary: false,
+  };
+  const disabledCalendar: GoogleCalendar = {
+    ...calendar,
+    id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    provider_calendar_id: "disabled-calendar@example.invalid",
+    summary: "Disabled Calendar",
+    enabled_in_ion: false,
+    is_primary: false,
+  };
+  const personalEvent = block(
+    "33333333-3333-4333-8333-333333333333",
+    "Personal focus",
+  );
+  const schoolEvent = block(
+    "44444444-4444-4444-8444-444444444444",
+    "School seminar",
+    {
+      calendar_id: schoolCalendar.id,
+      start_at: "2030-01-02T09:30:00Z",
+      end_at: "2030-01-02T10:30:00Z",
+    },
+  );
+  const allDayEvent = block(
+    "55555555-5555-4555-8555-555555555555",
+    "All-day marker",
+    {
+      calendar_id: schoolCalendar.id,
+      temporal_kind: "all_day",
+      start_date: "2030-01-02",
+      end_date: "2030-01-03",
+      start_at: null,
+      end_at: null,
+      start_timezone: null,
+      end_timezone: null,
+    },
+  );
+  const hiddenEvent = block(
+    "66666666-6666-4666-8666-666666666666",
+    "Must stay hidden",
+    { calendar_id: disabledCalendar.id },
+  );
+
+  const { container } = render(
+    <CalendarWorkspace
+      status={{
+        ...connected,
+        accounts: [account, schoolAccount],
+        calendars: [calendar, schoolCalendar, disabledCalendar],
+        blocks: [personalEvent, schoolEvent, allDayEvent, hiddenEvent],
+      }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+
+  expect(screen.getByText("Synthetic School Account")).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: /Personal focus/ }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: /School seminar/ }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: /All-day marker/ }),
+  ).toBeInTheDocument();
+  expect(screen.queryByText("Must stay hidden")).not.toBeInTheDocument();
+  const positioned = container.querySelectorAll<HTMLElement>(
+    ".calendar-timed-position",
+  );
+  expect(positioned).toHaveLength(2);
+  expect(positioned[0].style.width).toBe("50%");
+  expect(positioned[1].style.width).toBe("50%");
+});
+
+test("bounds month density and opens a useful read-only inspector without technical identifiers", () => {
+  const items = Array.from({ length: 5 }, (_, index) =>
+    block(
+      `77777777-7777-4777-8777-77777777777${index}`,
+      `Month event ${index + 1}`,
+      index === 0
+        ? {
+            description: "Synthetic description",
+            location: "Synthetic room",
+            start_timezone: "America/New_York",
+            end_timezone: "America/New_York",
+          }
+        : {},
+    ),
+  );
+  render(
+    <CalendarWorkspace
+      status={{ ...connected, blocks: items }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Month view" }));
+  expect(screen.getByText("+2 more")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /Month event 1/ }));
+
+  const inspector = screen.getByRole("complementary", {
+    name: "Event details",
+  });
+  expect(
+    within(inspector).getByText("Synthetic description"),
+  ).toBeInTheDocument();
+  expect(within(inspector).getByText("Synthetic room")).toBeInTheDocument();
+  expect(within(inspector).getByText("America/New_York")).toBeInTheDocument();
+  expect(
+    within(inspector).getByText("Synthetic Primary Calendar"),
+  ).toBeInTheDocument();
+  expect(
+    within(inspector).queryByText(items[0].provider_event_id),
+  ).not.toBeInTheDocument();
+  expect(within(inspector).queryByText(items[0].id)).not.toBeInTheDocument();
+  expect(
+    within(inspector).queryByRole("button", {
+      name: /edit|delete|move|resize/i,
+    }),
+  ).not.toBeInTheDocument();
+});
+
+test("keeps cached events visible when the provider account is offline", () => {
+  render(
+    <CalendarWorkspace
+      status={{
+        ...connected,
+        accounts: [{ ...account, auth_state: "disconnected" }],
+        calendars: [
+          {
+            ...calendar,
+            sync_state: "disconnected",
+            last_error_code: "reauth_required",
+          },
+        ],
+        blocks: [
+          block("88888888-8888-4888-8888-888888888888", "Cached offline event"),
+        ],
+      }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  expect(
+    screen.getByRole("button", { name: /Cached offline event/ }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("Google Calendar isn't connected. Showing saved events."),
+  ).toBeInTheDocument();
+  const sync = screen.getByRole("button", { name: "Sync calendars" });
+  expect(sync).toBeEnabled();
+  fireEvent.click(sync);
+  expect(
+    screen.getByText("Connect Google Calendar before syncing."),
+  ).toBeInTheDocument();
+  expect(invoke).not.toHaveBeenCalled();
+});
+
+test("starts closed and reopens the shared drawer in Filter mode", () => {
+  window.sessionStorage.clear();
+  const { unmount } = render(
+    <CalendarWorkspace status={connected} onStatus={() => undefined} />,
+  );
+  const trigger = screen.getByRole("button", {
+    name: "Toggle calendar sidebar",
+  });
+  expect(trigger).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText(account.display_name)).not.toBeInTheDocument();
+
+  fireEvent.click(trigger);
+  expect(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("tab", { name: "Filter" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(screen.queryByText(account.display_name)).not.toBeInTheDocument();
+  expect(window.sessionStorage.getItem("ion.calendar-sidebar.v1")).toBe("open");
+  fireEvent.click(screen.getByRole("tab", { name: "Calendars" }));
+  expect(screen.getByText(account.display_name)).toBeInTheDocument();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" }),
+  );
+  expect(screen.getByRole("tab", { name: "Filter" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  unmount();
+
+  render(<CalendarWorkspace status={connected} onStatus={() => undefined} />);
+  expect(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("tab", { name: "Filter" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+test("hides and restores calendars only through the fixed Ion-local command", async () => {
+  vi.mocked(invoke).mockResolvedValue(connected);
+  const { rerender } = render(
+    <CalendarWorkspace status={connected} onStatus={() => undefined} />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: `Hide ${calendar.summary} from Ion`,
+    }),
+  );
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_google_calendar_hidden", {
+      calendarId: calendar.id,
+      hidden: true,
+      expectedRevision: 1,
+    }),
+  );
+
+  vi.mocked(invoke).mockClear();
+  const hiddenCalendar = { ...calendar, hidden_in_ion: true, revision: 2 };
+  rerender(
+    <CalendarWorkspace
+      status={{ ...connected, calendars: [hiddenCalendar] }}
+      onStatus={() => undefined}
+    />,
+  );
+  fireEvent.click(screen.getByText("Hidden calendars · 1"));
+  fireEvent.click(screen.getByRole("button", { name: "Restore to Ion" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_google_calendar_hidden", {
+      calendarId: calendar.id,
+      hidden: false,
+      expectedRevision: 2,
+    }),
+  );
+  expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
+    "set_google_calendar_hidden",
+  ]);
+});
+
+test("persists density and adapts title detail to rendered event height", async () => {
+  const short = block("99999999-9999-4999-8999-999999999991", "Short event", {
+    start_at: "2030-01-02T09:00:00Z",
+    end_at: "2030-01-02T09:20:00Z",
+  });
+  const roomy = block("99999999-9999-4999-8999-999999999992", "Roomy event", {
+    start_at: "2030-01-02T11:00:00Z",
+    end_at: "2030-01-02T13:00:00Z",
+    category: "routine_physical",
+    category_subtype: "gym",
+    location: "Synthetic clinic",
+  });
+  const medium = block(
+    "99999999-9999-4999-8999-999999999993",
+    "Medium event with a useful second title line",
+    {
+      start_at: "2030-01-02T14:00:00Z",
+      end_at: "2030-01-02T14:35:00Z",
+    },
+  );
+  const { container } = render(
+    <CalendarWorkspace
+      status={{ ...connected, blocks: [short, roomy, medium] }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  expect(screen.getByRole("button", { name: /Short event/ })).toHaveClass(
+    "calendar-event--title",
+  );
+  expect(screen.getByRole("button", { name: /Roomy event/ })).toHaveClass(
+    "calendar-event--full",
+  );
+  expect(screen.getByRole("button", { name: /Medium event/ })).toHaveClass(
+    "calendar-event--title-two-line",
+  );
+  const roomyEvent = screen.getByRole("button", { name: /Roomy event/ });
+  expect(roomyEvent).not.toHaveTextContent("Routine");
+  expect(roomyEvent).not.toHaveTextContent("Synthetic clinic");
+
+  fireEvent.click(screen.getByRole("button", { name: "Calendar density" }));
+  const densityPopover = screen.getByRole("dialog", {
+    name: "Calendar density options",
+  });
+  expect(densityPopover).toHaveAttribute(
+    "data-portal-layer",
+    "calendar-toolbar",
+  );
+  expect(densityPopover.parentElement).toBe(document.body);
+  fireEvent.click(
+    within(densityPopover).getByRole("button", { name: "Expanded" }),
+  );
+  expect(
+    container
+      .querySelector<HTMLElement>(".calendar-time-view")
+      ?.style.getPropertyValue("--calendar-hours-height"),
+  ).toBe("1728px");
+  await waitFor(() =>
+    expect(window.localStorage.getItem("ion.calendar-density.v1")).toBe(
+      "expanded",
+    ),
+  );
+});
+
+test("filters by Ion category and edits only local category metadata", async () => {
+  const categorized = block(
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab",
+    "Categorized event",
+    {
+      category: "academic",
+      category_subtype: "class_section",
+      ion_metadata_revision: 4,
+    },
+  );
+  vi.mocked(invoke).mockResolvedValue(connected);
+  render(
+    <CalendarWorkspace
+      status={{ ...connected, blocks: [categorized] }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Categorized event/ }));
+  fireEvent.change(screen.getByLabelText("Categorized event Ion category"), {
+    target: { value: "career" },
+  });
+  expect(
+    screen.queryByRole("option", { name: "No subtype" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Save category" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_calendar_block_category", {
+      blockId: categorized.id,
+      category: "career",
+      categorySubtype: "internship_recruiting",
+      expectedRevision: 4,
+    }),
+  );
+  expect(vi.mocked(invoke).mock.calls.map(([command]) => command)).toEqual([
+    "set_calendar_block_category",
+  ]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Close event details" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Academic" }));
+  expect(
+    screen.queryByRole("button", { name: /Categorized event/ }),
+  ).not.toBeInTheDocument();
+});
+
+test("edits and filters subtype within its broad semantic color family", async () => {
+  const academicClass = block(
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaac",
+    "Synthetic class",
+    {
+      category: "academic",
+      category_subtype: "class_section",
+      ion_metadata_revision: 7,
+    },
+  );
+  vi.mocked(invoke).mockResolvedValue(connected);
+  render(
+    <CalendarWorkspace
+      status={{ ...connected, blocks: [academicClass] }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+
+  const event = screen.getByRole("button", { name: /Synthetic class/ });
+  expect(event).not.toHaveTextContent("Academic");
+  expect(event).not.toHaveTextContent("Uncategorized");
+  expect(event).not.toHaveTextContent(calendar.summary);
+  fireEvent.click(event);
+  expect(screen.getByText("Academic · Class / section")).toBeInTheDocument();
+  fireEvent.change(
+    screen.getByLabelText("Synthetic class Ion category subtype"),
+    { target: { value: "quiz_exam" } },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Save category" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_calendar_block_category", {
+      blockId: academicClass.id,
+      category: "academic",
+      categorySubtype: "quiz_exam",
+      expectedRevision: 7,
+    }),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Close event details" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Class / section" }));
+  expect(
+    screen.queryByRole("button", { name: /Synthetic class/ }),
+  ).not.toBeInTheDocument();
+});
+
+test("requires an explicit starter subtype without offering a null choice", async () => {
+  const legacyBroadOnly = block(
+    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaad",
+    "Broad-only academic event",
+    { category: "academic", category_subtype: null, ion_metadata_revision: 3 },
+  );
+  vi.mocked(invoke).mockResolvedValue(connected);
+  render(
+    <CalendarWorkspace
+      status={{ ...connected, blocks: [legacyBroadOnly] }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: /Broad-only academic event/ }),
+  );
+  expect(
+    screen.getByLabelText("Broad-only academic event Ion category subtype"),
+  ).toHaveValue("class_section");
+  expect(
+    screen.queryByRole("option", { name: "No subtype" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Save category" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_calendar_block_category", {
+      blockId: legacyBroadOnly.id,
+      category: "academic",
+      categorySubtype: "class_section",
+      expectedRevision: 3,
+    }),
+  );
+});
+
+test("keeps compact controls named and separates drawer scrolling from its pinned footer", () => {
+  const { container } = render(
+    <CalendarWorkspace
+      status={connected}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Week view" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.getByRole("heading")).toHaveTextContent("12/31–01/06");
+  expect(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" }),
+  ).toHaveAttribute("title", "Calendar sidebar");
+  const footer = container.querySelector(".calendar-sidebar-footer");
+  expect(footer).not.toBeNull();
+  const sidebar = container.querySelector(".calendar-sidebar");
+  const management = container.querySelector(".calendar-sidebar-management");
+  expect(footer?.parentElement).toBe(sidebar);
+  expect(management?.parentElement).toBe(sidebar);
+  expect(sidebar?.lastElementChild).toBe(footer);
+  expect(
+    within(footer as HTMLElement).getByRole("button", {
+      name: "Connect another account",
+    }),
+  ).toBeInTheDocument();
+  expect(
+    within(footer as HTMLElement).queryByRole("button", {
+      name: "Sync calendars",
+    }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "Sync calendars" }),
+  ).toBeInTheDocument();
+  expect(calendarStyles).toMatch(
+    /\.calendar-sidebar-management \{[\s\S]*?overflow-y: auto;/,
+  );
+  expect(calendarStyles).toMatch(
+    /\.calendar-sidebar-footer \{[\s\S]*?flex: 0 0 auto;/,
+  );
+  const pane = screen.getByRole("region", { name: "Calendar pane" });
+  expect(sidebar?.nextElementSibling).toBe(pane);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" }),
+  );
+  expect(
+    screen.queryByRole("complementary", { name: "Calendar sidebar" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Calendar pane" })).toBe(pane);
+});
+
+test("uses one mutually exclusive drawer region for calendars and filters", () => {
+  render(
+    <CalendarWorkspace
+      status={connected}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  expect(screen.getByText(account.display_name)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+  expect(screen.queryByText(account.display_name)).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("complementary", { name: "Calendar sidebar" }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("tab", { name: "Filter" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" }),
+  );
+  expect(
+    screen.queryByRole("complementary", { name: "Calendar sidebar" }),
+  ).not.toBeInTheDocument();
+});
+
+test("does not present provider-deleted calendar tombstones as active sources", () => {
+  render(
+    <CalendarWorkspace
+      status={{
+        ...connected,
+        calendars: [
+          calendar,
+          {
+            ...calendar,
+            id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            provider_calendar_id: "removed-calendar@example.invalid",
+            summary: "Untitled Google Calendar",
+            is_primary: false,
+            enabled_in_ion: false,
+            provider_deleted: true,
+          },
+        ],
+      }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  expect(
+    screen.queryByText("Untitled Google Calendar"),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText(calendar.summary)).toBeInTheDocument();
+});
+
+test("keeps one fixed toolbar row above one attached calendar scroll surface", () => {
+  const { container } = render(
+    <CalendarWorkspace
+      status={connected}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  const toolbar = screen.getByLabelText("Calendar controls");
+  expect(toolbar).toHaveAttribute("data-layout", "single-row");
+  expect(calendarStyles).toContain("height: 3.15rem;");
+  expect(calendarStyles).not.toContain("grid-template-rows: auto auto");
+
+  const navigation = screen.getByLabelText("Date navigation");
+  expect(
+    within(navigation)
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label") ?? button.textContent),
+  ).toEqual(["Previous period", "Today", "Next period", "Sync calendars"]);
+  const previous = screen.getByRole("button", { name: "Previous period" });
+  const next = screen.getByRole("button", { name: "Next period" });
+  expect(previous).toHaveClass("calendar-nav-arrow");
+  expect(next).toHaveClass("calendar-nav-arrow");
+  expect(previous.className).toBe(next.className);
+  expect(
+    screen.getByRole("button", { name: "Sync calendars" }),
+  ).not.toHaveTextContent("Sync");
+
+  expect(
+    screen
+      .getAllByLabelText(/^(Day|3 Day|Week|Next 7 Days|Month) view$/)
+      .map((button) => button.textContent),
+  ).toEqual(["D", "3", "W", "7", "M"]);
+  expect(screen.getByLabelText("Choose calendar view")).toBeInTheDocument();
+  expect(screen.queryByText(/^View$/)).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByLabelText("Choose calendar view"));
+  const viewPopover = screen.getByRole("dialog", {
+    name: "Choose calendar view options",
+  });
+  expect(viewPopover.parentElement).toBe(document.body);
+  expect(viewPopover.closest(".calendar-workspace")).toBeNull();
+
+  const surface = container.querySelector(".calendar-content-surface");
+  const header = container.querySelector(".calendar-grid-header");
+  const body = container.querySelector<HTMLElement>(".calendar-time-canvas");
+  const timeView = container.querySelector<HTMLElement>(".calendar-time-view");
+  const headings = container.querySelector<HTMLElement>(
+    ".calendar-day-headings",
+  );
+  const allDay = container.querySelector<HTMLElement>(".calendar-all-day-row");
+  expect(header?.closest(".calendar-content-surface")).toBe(surface);
+  expect(body?.closest(".calendar-content-surface")).toBe(surface);
+  expect(timeView?.style.getPropertyValue("--calendar-columns")).toBe(
+    "var(--calendar-time-gutter) repeat(7, minmax(0, 1fr))",
+  );
+  expect(timeView?.style.getPropertyValue("--calendar-min-width")).toBe("");
+  for (const owner of [headings, allDay, body]) {
+    expect(owner?.style.gridTemplateColumns).toBe("");
+    expect(owner?.style.minWidth).toBe("");
+    expect(owner?.closest(".calendar-time-view")).toBe(timeView);
+  }
+  expect(calendarStyles).toMatch(
+    /\.calendar-day-headings,[\s\S]*?\.calendar-all-day-row,[\s\S]*?\.calendar-time-canvas \{[\s\S]*?grid-template-columns: var\(--calendar-columns\);[\s\S]*?min-width: 0;/,
+  );
+  expect(calendarStyles).not.toContain(
+    ".calendar-grid-header {\n  position: sticky;",
+  );
+  expect(calendarStyles).not.toContain(
+    ".calendar-month-weekdays {\n  position: sticky;",
+  );
+  expect(calendarStyles).toMatch(
+    /\.app-shell\.is-calendar-active \{[\s\S]*?overflow: hidden;/,
+  );
+  expect(calendarStyles).toMatch(
+    /\.calendar-toolbar h2 \{[\s\S]*?pointer-events: none;/,
+  );
+  expect(calendarStyles).toMatch(
+    /\.calendar-stage \{[\s\S]*?overflow-x: hidden;[\s\S]*?overflow-y: auto;/,
+  );
+  expect(calendarStyles).toMatch(
+    /\.calendar-time-scroll \{[\s\S]*?overflow: visible;/,
+  );
+  expect(calendarStyles).toMatch(
+    /\.calendar-interface \{[\s\S]*?gap: 0\.65rem;/,
+  );
+  expect(calendarStyles).toMatch(
+    /\.calendar-pane \{[\s\S]*?border: 1px solid #29262f;/,
+  );
+  expect(calendarStyles).not.toContain("left: -2.55rem;");
+  expect(calendarStyles).toMatch(
+    /@container calendar-pane \(max-width: 46rem\)[\s\S]*?\.calendar-view-inline \{[\s\S]*?display: none;[\s\S]*?\.calendar-view-menu \{[\s\S]*?display: block;/,
+  );
+  expect(calendarStyles).toMatch(
+    /@container calendar-workspace \(max-width: 43rem\)[\s\S]*?\.calendar-sidebar \{[\s\S]*?position: absolute;/,
+  );
+
+  expect(container.querySelectorAll(".calendar-stage")).toHaveLength(1);
+  expect(
+    container.querySelectorAll(".calendar-sidebar-management"),
+  ).toHaveLength(1);
+  expect(container.querySelectorAll(".calendar-drawer-tabs")).toHaveLength(1);
+  expect(
+    within(container.querySelector(".calendar-drawer-tabs") as HTMLElement)
+      .getAllByRole("tab")
+      .map((tab) => tab.textContent),
+  ).toEqual(["Filter", "Calendars"]);
+  const sidebar = screen.getByRole("complementary", {
+    name: "Calendar sidebar",
+  });
+  const pane = screen.getByRole("region", { name: "Calendar pane" });
+  const paneHeader = container.querySelector(".calendar-pane-header");
+  expect(sidebar.nextElementSibling).toBe(pane);
+  expect(toolbar.parentElement).toBe(paneHeader);
+  expect(
+    screen.getByLabelText("Date navigation").closest(".calendar-pane"),
+  ).toBe(pane);
+  expect(container.querySelectorAll('[data-icon="sidebar"]')).toHaveLength(1);
+  expect(
+    container.querySelectorAll('[data-icon="density-spacing"]'),
+  ).toHaveLength(1);
+  expect(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" })
+      .nextElementSibling,
+  ).toHaveClass("calendar-drawer-tabs");
+  expect(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" })
+      .parentElement,
+  ).toHaveClass("calendar-drawer-header");
+});
+
+test("keeps reauthentication truthful and routes sync to a reachable reconnect action", async () => {
+  window.sessionStorage.clear();
+  const reauthentication: CalendarStatus = {
+    ...connected,
+    accounts: [{ ...account, auth_state: "reauth_required" }],
+    calendars: [
+      {
+        ...calendar,
+        sync_state: "reauth_required",
+        last_error_code: "reauth_required",
+      },
+    ],
+    blocks: [
+      block("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbc", "Saved reauth event"),
+    ],
+  };
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "connect_google_calendar") return connected;
+    if (command === "sync_google_calendars") return connected;
+    throw new Error(`Unexpected command: ${command}`);
+  });
+  render(
+    <CalendarWorkspace
+      status={reauthentication}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+
+  expect(
+    screen.getByText(/Google Calendar needs to reconnect/),
+  ).toBeInTheDocument();
+  const sync = screen.getByRole("button", { name: "Sync calendars" });
+  expect(sync).toBeEnabled();
+  fireEvent.click(sync);
+  expect(invoke).not.toHaveBeenCalled();
+  expect(
+    screen.getByRole("complementary", { name: "Calendar sidebar" }),
+  ).toBeInTheDocument();
+  expect(
+    screen.getAllByRole("button", { name: "Reconnect Google account" }),
+  ).not.toHaveLength(0);
+
+  fireEvent.click(
+    screen.getAllByRole("button", { name: "Reconnect Google account" })[0],
+  );
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("connect_google_calendar"),
+  );
+});
+
+test("selects responsive views from the calendar canvas width and closes drawers only across breakpoints", () => {
+  let resize: ResizeObserverCallback | undefined;
+  class MockResizeObserver implements ResizeObserver {
+    constructor(callback: ResizeObserverCallback) {
+      resize = callback;
+    }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal("ResizeObserver", MockResizeObserver);
+  window.sessionStorage.clear();
+  const { container } = render(
+    <CalendarWorkspace
+      status={connected}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  const canvas = screen.getByRole("main", { name: "Calendar canvas" });
+  const reportWidth = (width: number) => {
+    act(() => {
+      resize?.(
+        [
+          {
+            target: canvas,
+            contentRect: { width },
+          } as unknown as ResizeObserverEntry,
+        ],
+        {} as ResizeObserver,
+      );
+    });
+  };
+
+  reportWidth(900);
+  expect(screen.getByRole("button", { name: "Week view" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.getByRole("region", { name: "Calendar pane" })).toHaveAttribute(
+    "data-pane-width-class",
+    "wide",
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Month view" }));
+  reportWidth(900);
+  expect(screen.getByRole("button", { name: "Month view" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+
+  fireEvent.click(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" }),
+  );
+  expect(screen.getByRole("tab", { name: "Filter" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  reportWidth(700);
+  expect(screen.getByRole("button", { name: "3 Day view" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(
+    screen.queryByRole("complementary", { name: "Calendar sidebar" }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" }),
+  );
+  expect(screen.getByRole("tab", { name: "Filter" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Toggle calendar sidebar" }),
+  );
+
+  reportWidth(500);
+  expect(screen.getByRole("button", { name: "Day view" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  reportWidth(900);
+  expect(screen.getByRole("button", { name: "Week view" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(
+    screen.queryByRole("complementary", { name: "Calendar sidebar" }),
+  ).not.toBeInTheDocument();
+  expect(container.querySelectorAll('[data-icon="sidebar"]')).toHaveLength(1);
+});
+
+test("removes calendar zoom and keeps every active view inside one vertical scroll surface", () => {
+  const { container } = render(
+    <CalendarWorkspace
+      status={connected}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  const canvas = screen.getByRole("main", { name: "Calendar canvas" });
+  const geometry = container.querySelector<HTMLElement>(".calendar-time-view")!;
+  const sharedColumns = geometry.style.getPropertyValue("--calendar-columns");
+  expect(sharedColumns).toBe(
+    "var(--calendar-time-gutter) repeat(7, minmax(0, 1fr))",
+  );
+  expect(screen.queryByLabelText(/calendar zoom/i)).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /zoom calendar/i })).toBeNull();
+  expect(container.querySelector(".calendar-content-scale")).toBeNull();
+  expect(window.localStorage.getItem("ion.calendar-zoom.v1")).toBeNull();
+  const shortcut = new KeyboardEvent("keydown", {
+    key: "+",
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  canvas.dispatchEvent(shortcut);
+  expect(shortcut.defaultPrevented).toBe(false);
+  const change = new Event("gesturechange", {
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(change, "scale", { value: 1.2 });
+  canvas.dispatchEvent(change);
+  expect(change.defaultPrevented).toBe(false);
+  expect(geometry.style.getPropertyValue("--calendar-columns")).toBe(
+    sharedColumns,
+  );
+  expect(document.documentElement.style.getPropertyValue("zoom")).toBe("");
+  expect(calendarStyles).not.toContain("calendar-zoom-control");
+  expect(calendarStyles).not.toContain("--calendar-min-width");
+  expect(calendarStyles).toMatch(/\.calendar-month \{[\s\S]*?min-width: 0;/);
+});
+
+test("sets a compact minimum desktop window that preserves a usable Day view", () => {
+  const mainWindow = tauriConfig.app.windows.find(
+    (window) => window.label === "main",
+  );
+  expect(mainWindow?.minWidth).toBe(540);
+  expect(mainWindow?.minHeight).toBe(560);
 });

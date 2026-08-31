@@ -6,6 +6,14 @@ All notable repository changes are documented here.
 
 ### Fixed
 
+- Phase 2B startup now completes the exact interrupted unreleased `0006`
+  presentation schemas already used during owner testing, preserving existing
+  rows while adding a missing subtype column or replacing the obsolete broad
+  category constraint without a second migration revision. This fixes Career,
+  Routine / physical, Personal project, and Fun category saves on an existing
+  Phase 2B database while preserving retired work/meals/health classifications
+  under the extensible Routine family.
+
 - Phase 2A Google Calendar synchronization now uses the canonical account and
   calendar route prefixes, persists safe sync failures instead of returning an
   unchanged `Never synced` projection, constructs the documented Events.list
@@ -14,6 +22,19 @@ All notable repository changes are documented here.
   sync failure diagnostics.
 
 ### Added
+
+- Phase 2B primary read-only Calendar interface with Day, consecutive 3 Day,
+  Monday-first Week, rolling Next 7 Days, and Monday-first Month views; bounded recurrence and
+  exception projection; two-level category-family/subtype semantic color and
+  filtering with required starter subtypes and a graphite Fun family;
+  title-first adaptive event detail; compact/default/expanded vertical density;
+  calendar-pane Week/3-Day/Day recommendations without manual zoom or horizontal
+  day navigation; responsive compact controls; all-day, overlap, current-time, month-overflow,
+  mutually exclusive source/filter drawers, pinned account connection,
+  reversible Ion-local hide/restore, inspector, and product-language saved-data
+  treatments; plus Today
+  CalendarBlock occupancy and truthful opaque-block free gaps without
+  scheduling Tasks or writing Google data.
 
 - Phase 2A Google Calendar read-sync foundation: Rust-owned Desktop OAuth with
   PKCE/state and ephemeral loopback callback, macOS Keychain refresh tokens,

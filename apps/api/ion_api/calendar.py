@@ -11,7 +11,9 @@ from sqlalchemy import Engine, insert, select, update
 
 from ion_api.calendar_contracts import (
     CalendarBlockOutput,
+    CalendarCategoryInput,
     CalendarStatusOutput,
+    CalendarVisibilityInput,
     GoogleAccountConnectInput,
     GoogleAccountOutput,
     GoogleCalendarOutput,
@@ -36,6 +38,7 @@ from ion_api.schema import (
 )
 
 logger = logging.getLogger("ion")
+UNTITLED_GOOGLE_CALENDAR = "Untitled Google Calendar"
 
 
 class CalendarNotFoundError(LookupError):
@@ -117,6 +120,7 @@ def _calendar_output(row, *, internal: bool = False):
         "provider_selected": bool(row.provider_selected),
         "provider_hidden": bool(row.provider_hidden),
         "enabled_in_ion": bool(row.enabled_in_ion),
+        "hidden_in_ion": bool(row.hidden_in_ion),
         "provider_deleted": bool(row.provider_deleted),
         "has_sync_token": row.next_sync_token is not None,
         "sync_state": row.sync_state,
@@ -137,7 +141,7 @@ class CalendarService:
 
     @staticmethod
     def _row(connection, table, identifier: str, column=None):
-        key = column or table.c.id
+        key = column if column is not None else table.c.id
         row = connection.execute(select(table).where(key == identifier)).one_or_none()
         if row is None:
             raise CalendarNotFoundError(identifier)
@@ -220,8 +224,11 @@ class CalendarService:
                         == item.provider_calendar_id,
                     )
                 ).one_or_none()
+                if row is None and item.provider_deleted:
+                    # A provider tombstone with no local state has nothing to
+                    # preserve and must not become a new anonymous calendar.
+                    continue
                 provider_values = {
-                    "summary": item.summary,
                     "description": item.description,
                     "location": item.location,
                     "timezone": item.timezone,
@@ -233,6 +240,12 @@ class CalendarService:
                     "provider_deleted": item.provider_deleted,
                     "updated_at": now,
                 }
+                if item.summary is not None:
+                    provider_values["summary"] = item.summary
+                elif not item.provider_deleted:
+                    # Only a genuinely active unnamed CalendarList entry gets
+                    # a presentation fallback. Tombstones retain local titles.
+                    provider_values["summary"] = UNTITLED_GOOGLE_CALENDAR
                 readable = item.access_role not in ("none", "freeBusyReader")
                 if row is None:
                     connection.execute(
@@ -245,6 +258,7 @@ class CalendarService:
                                 and not item.provider_deleted
                                 and (item.is_primary or item.provider_selected)
                             ),
+                            hidden_in_ion=False,
                             next_sync_token=None,
                             sync_state="idle",
                             active_sync_generation=None,
@@ -255,6 +269,7 @@ class CalendarService:
                             next_retry_at=None,
                             created_at=now,
                             revision=1,
+                            summary=provider_values.pop("summary"),
                             **provider_values,
                         )
                     )
@@ -313,10 +328,19 @@ class CalendarService:
                     calendar_blocks,
                     calendar_block_ion_metadata.c.flexibility,
                     calendar_block_ion_metadata.c.notes,
+                    calendar_block_ion_metadata.c.category,
+                    calendar_block_ion_metadata.c.category_subtype,
+                    calendar_block_ion_metadata.c.revision.label(
+                        "ion_metadata_revision"
+                    ),
                     google_event_links.c.calendar_id,
                     google_event_links.c.provider_event_id,
                     google_event_links.c.ical_uid,
                     google_event_links.c.recurring_event_id,
+                    google_event_links.c.original_start_kind,
+                    google_event_links.c.original_start_date,
+                    google_event_links.c.original_start_at,
+                    google_event_links.c.original_start_timezone,
                 )
                 .join(
                     calendar_block_ion_metadata,
@@ -376,8 +400,15 @@ class CalendarService:
             recurrence_rules=json.loads(row.recurrence_rules or "[]"),
             recurrence_master_block_id=row.recurrence_master_block_id,
             recurring_event_id=row.recurring_event_id,
+            original_start_kind=row.original_start_kind,
+            original_start_date=row.original_start_date,
+            original_start_at=row.original_start_at,
+            original_start_timezone=row.original_start_timezone,
             flexibility=row.flexibility,
             notes=row.notes,
+            category=row.category,
+            category_subtype=row.category_subtype,
+            ion_metadata_revision=row.ion_metadata_revision,
             provider_deleted_at=row.provider_deleted_at,
             revision=row.revision,
         )
@@ -419,6 +450,90 @@ class CalendarService:
                     authority="direct",
                     source="desktop",
                     from_revision=row.revision,
+                    to_revision=revision,
+                    command_id=command_id,
+                )
+        return self.status()
+
+    def set_visibility(
+        self, calendar_id: str, input: CalendarVisibilityInput
+    ) -> CalendarStatusOutput:
+        now = utc_now()
+        command_id = str(uuid4())
+        with self.engine.begin() as connection:
+            row = self._row(connection, google_calendars, calendar_id)
+            if row.revision != input.expected_revision:
+                raise CalendarConflictError(calendar_id)
+            if bool(row.hidden_in_ion) != input.hidden:
+                revision = row.revision + 1
+                connection.execute(
+                    update(google_calendars)
+                    .where(
+                        google_calendars.c.id == calendar_id,
+                        google_calendars.c.revision == row.revision,
+                    )
+                    .values(
+                        hidden_in_ion=input.hidden,
+                        updated_at=now,
+                        revision=revision,
+                    )
+                )
+                _audit(
+                    connection,
+                    entity_type="google_calendar",
+                    entity_id=calendar_id,
+                    action="hidden_from_ion" if input.hidden else "restored_to_ion",
+                    actor_kind="human",
+                    authority="direct",
+                    source="desktop",
+                    from_revision=row.revision,
+                    to_revision=revision,
+                    command_id=command_id,
+                )
+        return self.status()
+
+    def set_category(
+        self, block_id: str, input: CalendarCategoryInput
+    ) -> CalendarStatusOutput:
+        now = utc_now()
+        command_id = str(uuid4())
+        with self.engine.begin() as connection:
+            block = self._row(connection, calendar_blocks, block_id)
+            metadata_row = self._row(
+                connection,
+                calendar_block_ion_metadata,
+                block_id,
+                calendar_block_ion_metadata.c.calendar_block_id,
+            )
+            if metadata_row.revision != input.expected_revision:
+                raise CalendarConflictError(block_id)
+            if (
+                metadata_row.category != input.category
+                or metadata_row.category_subtype != input.category_subtype
+            ):
+                revision = metadata_row.revision + 1
+                connection.execute(
+                    update(calendar_block_ion_metadata)
+                    .where(
+                        calendar_block_ion_metadata.c.calendar_block_id == block_id,
+                        calendar_block_ion_metadata.c.revision == metadata_row.revision,
+                    )
+                    .values(
+                        category=input.category,
+                        category_subtype=input.category_subtype,
+                        updated_at=now,
+                        revision=revision,
+                    )
+                )
+                _audit(
+                    connection,
+                    entity_type="calendar_block",
+                    entity_id=block.id,
+                    action="category_changed",
+                    actor_kind="human",
+                    authority="direct",
+                    source="desktop",
+                    from_revision=metadata_row.revision,
                     to_revision=revision,
                     command_id=command_id,
                 )
@@ -763,6 +878,8 @@ class CalendarService:
                     calendar_block_id=block_id,
                     flexibility="locked",
                     notes=None,
+                    category=None,
+                    category_subtype=None,
                     created_at=now,
                     updated_at=now,
                     revision=1,

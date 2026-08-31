@@ -229,7 +229,9 @@ export function OrganizerShell({
   }
 
   return (
-    <main className="app-shell">
+    <main
+      className={`app-shell ${workspace === "calendar" ? "is-calendar-active" : ""}`}
+    >
       <nav className="workspace-switcher" aria-label="Ion workspaces">
         {workspaces.map((item) => (
           <button
@@ -269,6 +271,7 @@ export function OrganizerShell({
         <TodayWorkspace
           today={today}
           tasks={tasks}
+          calendar={calendar}
           onToday={(output) => {
             setToday(output);
             markHomeDirty();

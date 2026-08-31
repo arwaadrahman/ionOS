@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, Runtime, State};
 
-use crate::service::{product_request, ProductError, ServiceState};
+use crate::service::{product_request, ProductError, ProductErrorCode, ServiceState};
 
 const CALENDAR_LIST_SCOPE: &str = "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
 const EVENTS_READ_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events.readonly";
@@ -140,8 +140,15 @@ impl GoogleCommandError {
 }
 
 impl From<ProductError> for GoogleCommandError {
-    fn from(_: ProductError) -> Self {
-        Self::new("local_service_unavailable")
+    fn from(error: ProductError) -> Self {
+        Self::new(match error.code {
+            ProductErrorCode::Unavailable => "local_service_unavailable",
+            ProductErrorCode::RevisionConflict => "local_state_conflict",
+            ProductErrorCode::NotFound => "local_state_not_found",
+            ProductErrorCode::Validation
+            | ProductErrorCode::AssignmentUnavailable
+            | ProductErrorCode::TrashBlocked => "local_state_invalid",
+        })
     }
 }
 
@@ -179,6 +186,7 @@ pub struct GoogleCalendar {
     pub provider_selected: bool,
     pub provider_hidden: bool,
     pub enabled_in_ion: bool,
+    pub hidden_in_ion: bool,
     pub provider_deleted: bool,
     pub has_sync_token: bool,
     pub sync_state: String,
@@ -218,8 +226,16 @@ pub struct CalendarBlock {
     pub recurrence_rules: Vec<String>,
     pub recurrence_master_block_id: Option<String>,
     pub recurring_event_id: Option<String>,
+    pub original_start_kind: String,
+    pub original_start_date: Option<String>,
+    pub original_start_at: Option<String>,
+    pub original_start_timezone: Option<String>,
     pub flexibility: String,
     pub notes: Option<String>,
+    pub category: Option<String>,
+    #[serde(default)]
+    pub category_subtype: Option<String>,
+    pub ion_metadata_revision: i64,
     pub provider_deleted_at: Option<String>,
     pub revision: i64,
 }
@@ -246,6 +262,19 @@ struct EmptyInput {}
 #[derive(Serialize)]
 struct SelectionInput {
     enabled: bool,
+    expected_revision: i64,
+}
+
+#[derive(Serialize)]
+struct VisibilityInput {
+    hidden: bool,
+    expected_revision: i64,
+}
+
+#[derive(Serialize)]
+struct CategoryInput<'a> {
+    category: Option<&'a str>,
+    category_subtype: Option<&'a str>,
     expected_revision: i64,
 }
 
@@ -325,7 +354,7 @@ struct ProviderCalendarRaw {
 #[derive(Debug, Clone, Serialize)]
 struct ProviderCalendar {
     provider_calendar_id: String,
-    summary: String,
+    summary: Option<String>,
     description: Option<String>,
     location: Option<String>,
     timezone: Option<String>,
@@ -335,6 +364,36 @@ struct ProviderCalendar {
     provider_selected: bool,
     provider_hidden: bool,
     provider_deleted: bool,
+}
+
+fn provider_calendar(item: ProviderCalendarRaw) -> ProviderCalendar {
+    let summary = item
+        .summary_override
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            if item.summary.trim().is_empty() {
+                None
+            } else {
+                Some(item.summary)
+            }
+        });
+    ProviderCalendar {
+        provider_calendar_id: item.id,
+        summary,
+        description: item.description,
+        location: item.location,
+        timezone: item.time_zone,
+        access_role: if item.access_role.is_empty() {
+            "none".into()
+        } else {
+            item.access_role
+        },
+        provider_etag: item.etag,
+        is_primary: item.primary,
+        provider_selected: item.selected,
+        provider_hidden: item.hidden,
+        provider_deleted: item.deleted,
+    }
 }
 
 #[derive(Serialize)]
@@ -750,34 +809,7 @@ async fn discover_calendars(
             .json::<CalendarListPage>()
             .await
             .map_err(|_| GoogleCommandError::new("provider_response_invalid"))?;
-        calendars.extend(page.items.into_iter().map(|item| {
-            ProviderCalendar {
-                provider_calendar_id: item.id,
-                summary: item
-                    .summary_override
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| {
-                        if item.summary.trim().is_empty() {
-                            "Untitled Google calendar".into()
-                        } else {
-                            item.summary
-                        }
-                    }),
-                description: item.description,
-                location: item.location,
-                timezone: item.time_zone,
-                access_role: if item.access_role.is_empty() {
-                    "none".into()
-                } else {
-                    item.access_role
-                },
-                provider_etag: item.etag,
-                is_primary: item.primary,
-                provider_selected: item.selected,
-                provider_hidden: item.hidden,
-                provider_deleted: item.deleted,
-            }
-        }));
+        calendars.extend(page.items.into_iter().map(provider_calendar));
         page_token = page.next_page_token;
         if page_token.is_none() {
             break;
@@ -811,6 +843,13 @@ fn calendar_backend_route(id: &str, suffix: &str) -> Result<String, GoogleComman
 fn account_backend_route(id: &str, suffix: &str) -> Result<String, GoogleCommandError> {
     Ok(format!(
         "/v1/calendar/accounts/{}{suffix}",
+        validated_backend_id(id)?
+    ))
+}
+
+fn calendar_block_backend_route(id: &str, suffix: &str) -> Result<String, GoogleCommandError> {
+    Ok(format!(
+        "/v1/calendar/blocks/{}{suffix}",
         validated_backend_id(id)?
     ))
 }
@@ -891,6 +930,10 @@ pub async fn connect_google_calendar<R: Runtime>(
         .iter()
         .find(|calendar| calendar.is_primary && !calendar.provider_deleted)
         .ok_or_else(|| GoogleCommandError::new("provider_response_invalid"))?;
+    let primary_summary = primary
+        .summary
+        .as_deref()
+        .unwrap_or("Untitled Google calendar");
     let previous = internal_state(&service).await?;
     let old_locator = previous
         .accounts
@@ -905,7 +948,7 @@ pub async fn connect_google_calendar<R: Runtime>(
     SystemKeychain.set(&locator, refresh_token)?;
     let input = ConnectAccountInput {
         provider_account_id: &primary.provider_calendar_id,
-        display_name: &primary.summary,
+        display_name: primary_summary,
         granted_scopes: [CALENDAR_LIST_SCOPE, EVENTS_READ_SCOPE],
         keychain_locator: &locator,
         calendars: &calendars,
@@ -950,6 +993,88 @@ pub async fn set_google_calendar_enabled(
         &route,
         Some(&SelectionInput {
             enabled,
+            expected_revision,
+        }),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+#[tauri::command]
+pub async fn set_google_calendar_hidden(
+    service: State<'_, ServiceState>,
+    calendar_id: String,
+    hidden: bool,
+    expected_revision: i64,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    let route = calendar_backend_route(&calendar_id, "/visibility")?;
+    product_request(
+        &service,
+        reqwest::Method::PUT,
+        &route,
+        Some(&VisibilityInput {
+            hidden,
+            expected_revision,
+        }),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+fn valid_calendar_category(value: &str) -> bool {
+    matches!(
+        value,
+        "academic"
+            | "career"
+            | "personal_project"
+            | "routine_physical"
+            | "personal"
+            | "fun"
+            | "ion_focus"
+    )
+}
+
+fn calendar_category_requires_subtype(value: &str) -> bool {
+    !matches!(value, "ion_focus")
+}
+
+fn valid_calendar_category_subtype(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase() || (index > 0 && (byte.is_ascii_digit() || byte == b'_'))
+        })
+}
+
+#[tauri::command]
+pub async fn set_calendar_block_category(
+    service: State<'_, ServiceState>,
+    block_id: String,
+    category: Option<String>,
+    category_subtype: Option<String>,
+    expected_revision: i64,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    let valid_category = category
+        .as_deref()
+        .filter(|value| valid_calendar_category(value));
+    let valid_subtype = category_subtype
+        .as_deref()
+        .filter(|value| valid_calendar_category_subtype(value));
+    if (category.is_some() && valid_category.is_none())
+        || (category_subtype.is_some() && (valid_category.is_none() || valid_subtype.is_none()))
+        || (valid_category.is_some_and(calendar_category_requires_subtype)
+            && valid_subtype.is_none())
+    {
+        return Err(GoogleCommandError::new("local_state_invalid"));
+    }
+    let route = calendar_block_backend_route(&block_id, "/category")?;
+    product_request(
+        &service,
+        reqwest::Method::PUT,
+        &route,
+        Some(&CategoryInput {
+            category: valid_category,
+            category_subtype: valid_subtype,
             expected_revision,
         }),
     )
@@ -1475,6 +1600,51 @@ mod tests {
         }
     }
 
+    fn raw_calendar(
+        summary: &str,
+        summary_override: Option<&str>,
+        deleted: bool,
+    ) -> ProviderCalendarRaw {
+        ProviderCalendarRaw {
+            id: "synthetic-calendar@example.invalid".into(),
+            summary: summary.into(),
+            summary_override: summary_override.map(str::to_owned),
+            description: None,
+            location: None,
+            time_zone: Some("America/Los_Angeles".into()),
+            access_role: if deleted { "".into() } else { "reader".into() },
+            etag: Some("synthetic-etag".into()),
+            primary: false,
+            selected: !deleted,
+            hidden: false,
+            deleted,
+        }
+    }
+
+    #[test]
+    fn calendar_list_normalization_preserves_titles_and_keeps_tombstones_unnamed() {
+        let titled = provider_calendar(raw_calendar(
+            "Provider title",
+            Some("Owner override"),
+            false,
+        ));
+        assert_eq!(titled.summary.as_deref(), Some("Owner override"));
+        assert!(!titled.provider_deleted);
+
+        let tombstone = provider_calendar(raw_calendar("", None, true));
+        assert_eq!(tombstone.summary, None);
+        assert!(tombstone.provider_deleted);
+        assert_eq!(tombstone.access_role, "none");
+        assert_eq!(
+            serde_json::to_value(&tombstone).unwrap()["summary"],
+            serde_json::Value::Null
+        );
+
+        let active_unnamed = provider_calendar(raw_calendar("", None, false));
+        assert_eq!(active_unnamed.summary, None);
+        assert!(!active_unnamed.provider_deleted);
+    }
+
     #[test]
     fn pkce_and_authorization_are_scoped_and_do_not_expose_verifier() {
         let (verifier, challenge) = pkce_pair().unwrap();
@@ -1701,6 +1871,61 @@ maxResults=2500&showDeleted=true&singleEvents=false"
     }
 
     #[test]
+    fn ion_calendar_category_contract_accepts_extensible_safe_subtypes_only() {
+        for category in [
+            "academic",
+            "career",
+            "personal_project",
+            "routine_physical",
+            "personal",
+            "fun",
+            "ion_focus",
+        ] {
+            assert!(valid_calendar_category(category));
+        }
+        assert!(!valid_calendar_category("work"));
+        assert!(!valid_calendar_category("provider-write"));
+        for subtype in [
+            "class_section",
+            "homework_study",
+            "quiz_exam",
+            "future_extension_2",
+        ] {
+            assert!(valid_calendar_category_subtype(subtype));
+        }
+        for subtype in ["", "Class", "has-dash", "2starts_with_number"] {
+            assert!(!valid_calendar_category_subtype(subtype));
+        }
+        for category in [
+            "academic",
+            "career",
+            "personal_project",
+            "routine_physical",
+            "personal",
+            "fun",
+        ] {
+            assert!(calendar_category_requires_subtype(category));
+        }
+        assert!(!calendar_category_requires_subtype("ion_focus"));
+    }
+
+    #[test]
+    fn local_product_errors_keep_safe_category_failure_states_distinct() {
+        assert_eq!(
+            GoogleCommandError::from(ProductError::new(ProductErrorCode::Validation)).code,
+            "local_state_invalid"
+        );
+        assert_eq!(
+            GoogleCommandError::from(ProductError::new(ProductErrorCode::RevisionConflict)).code,
+            "local_state_conflict"
+        );
+        assert_eq!(
+            GoogleCommandError::from(ProductError::new(ProductErrorCode::Unavailable)).code,
+            "local_service_unavailable"
+        );
+    }
+
+    #[test]
     fn fixed_backend_routes_match_calendar_api_ownership() {
         let id = "11111111-1111-4111-8111-111111111111";
         assert_eq!(
@@ -1717,7 +1942,16 @@ maxResults=2500&showDeleted=true&singleEvents=false"
             account_backend_route(id, "/disconnect").unwrap(),
             format!("/v1/calendar/accounts/{id}/disconnect")
         );
+        assert_eq!(
+            calendar_backend_route(id, "/visibility").unwrap(),
+            format!("/v1/calendar/calendars/{id}/visibility")
+        );
+        assert_eq!(
+            calendar_block_backend_route(id, "/category").unwrap(),
+            format!("/v1/calendar/blocks/{id}/category")
+        );
         assert!(calendar_backend_route("../status", "/sync/begin").is_err());
+        assert!(calendar_block_backend_route("../status", "/category").is_err());
         assert!(account_backend_route("../status", "/disconnect").is_err());
     }
 

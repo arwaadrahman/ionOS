@@ -12,6 +12,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Task } from "./tasks";
 import { TodayWorkspace } from "./TodayWorkspace";
 import { DayPlan, TodayOutput, TodayPlanItem, TodayTask } from "./today";
+import { CalendarBlock, CalendarStatus, emptyCalendarStatus } from "./calendar";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -108,7 +109,13 @@ function output(): TodayOutput {
   };
 }
 
-function Harness({ initial = output() }: { initial?: TodayOutput }) {
+function Harness({
+  initial = output(),
+  calendar = emptyCalendarStatus(),
+}: {
+  initial?: TodayOutput;
+  calendar?: CalendarStatus;
+}) {
   const [today, setToday] = useState(initial);
   const [tasks, setTasks] = useState([
     first,
@@ -123,6 +130,7 @@ function Harness({ initial = output() }: { initial?: TodayOutput }) {
     <TodayWorkspace
       today={today}
       tasks={tasks}
+      calendar={calendar}
       onToday={setToday}
       onTaskConfirmed={(confirmed) =>
         setTasks((current) =>
@@ -259,4 +267,136 @@ test("retains confirmed completion when the separate Today refresh fails", async
     "complete_task",
     "get_today",
   ]);
+});
+
+test("shows real CalendarBlock occupancy and free gaps without scheduling Today Tasks", () => {
+  const accountId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const calendarId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const calendarBlock = (
+    id: string,
+    title: string,
+    start: string,
+    end: string,
+    overrides: Partial<CalendarBlock> = {},
+  ): CalendarBlock => ({
+    id,
+    calendar_id: calendarId,
+    provider_event_id: `provider-${id}`,
+    ical_uid: null,
+    title,
+    description: null,
+    location: null,
+    temporal_kind: "timed",
+    start_date: null,
+    end_date: null,
+    start_at: start,
+    end_at: end,
+    start_timezone: "UTC",
+    end_timezone: "UTC",
+    status: "confirmed",
+    transparency: "opaque",
+    recurrence_kind: "single",
+    recurrence_rules: [],
+    recurrence_master_block_id: null,
+    recurring_event_id: null,
+    original_start_kind: "none",
+    original_start_date: null,
+    original_start_at: null,
+    original_start_timezone: null,
+    flexibility: "locked",
+    notes: null,
+    category: null,
+    category_subtype: null,
+    ion_metadata_revision: 1,
+    provider_deleted_at: null,
+    revision: 1,
+    ...overrides,
+  });
+  const calendarStatus: CalendarStatus = {
+    configured: true,
+    configuration_path: "/synthetic/google-oauth.json",
+    accounts: [
+      {
+        id: accountId,
+        provider_account_id: "synthetic@example.invalid",
+        display_name: "Synthetic account",
+        granted_scopes: [],
+        auth_state: "connected",
+        last_auth_at: time,
+        created_at: time,
+        updated_at: time,
+        revision: 1,
+      },
+    ],
+    calendars: [
+      {
+        id: calendarId,
+        account_id: accountId,
+        provider_calendar_id: "synthetic@example.invalid",
+        summary: "Synthetic calendar",
+        description: null,
+        location: null,
+        timezone: "UTC",
+        access_role: "owner",
+        is_primary: true,
+        provider_selected: true,
+        provider_hidden: false,
+        enabled_in_ion: true,
+        hidden_in_ion: false,
+        provider_deleted: false,
+        has_sync_token: true,
+        sync_state: "idle",
+        last_synced_at: time,
+        last_error_code: null,
+        retry_count: 0,
+        next_retry_at: null,
+        revision: 1,
+      },
+    ],
+    blocks: [
+      calendarBlock(
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "Occupied calendar interval",
+        "2030-01-02T08:00:00Z",
+        "2030-01-02T09:00:00Z",
+        { category: "academic" },
+      ),
+      calendarBlock(
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "Transparent calendar interval",
+        "2030-01-02T10:00:00Z",
+        "2030-01-02T11:00:00Z",
+        { transparency: "transparent" },
+      ),
+      calendarBlock(
+        "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "All-day context",
+        "2030-01-02T00:00:00Z",
+        "2030-01-03T00:00:00Z",
+        {
+          temporal_kind: "all_day",
+          start_date: "2030-01-02",
+          end_date: "2030-01-03",
+          start_at: null,
+          end_at: null,
+          start_timezone: null,
+          end_timezone: null,
+        },
+      ),
+    ],
+  };
+
+  render(<Harness calendar={calendarStatus} />);
+  expect(screen.getByText("Calendar occupancy")).toBeInTheDocument();
+  expect(screen.getByText("Occupied calendar interval")).toBeInTheDocument();
+  expect(screen.getByText("Transparent calendar interval")).toBeInTheDocument();
+  expect(screen.getByText("All-day context")).toBeInTheDocument();
+  expect(screen.getByText(/Academic · Synthetic calendar/)).toBeInTheDocument();
+  expect(screen.getByText("6 AM–8 AM")).toBeInTheDocument();
+  expect(screen.getByText("9 AM–11 PM")).toBeInTheDocument();
+  expect(
+    screen.getByText(/Today Tasks remain unscheduled/),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/assigned to open time/i)).toBeInTheDocument();
+  expect(invoke).not.toHaveBeenCalled();
 });

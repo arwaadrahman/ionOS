@@ -115,6 +115,21 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+test("locks the application viewport only while Calendar owns its canvas", () => {
+  const { container } = render(<OrganizerShell initialData={data} />);
+  const shell = container.querySelector(".app-shell");
+  expect(shell).not.toHaveClass("is-calendar-active");
+
+  fireEvent.click(screen.getByRole("button", { name: "Calendar" }));
+  expect(shell).toHaveClass("is-calendar-active");
+  expect(
+    screen.getByRole("main", { name: "Calendar canvas" }),
+  ).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Home" }));
+  expect(shell).not.toHaveClass("is-calendar-active");
+});
+
 test("accepts only fixed Home and Today navigation events", async () => {
   render(<OrganizerShell initialData={data} />);
   await waitFor(() => expect(listen).toHaveBeenCalledTimes(2));

@@ -37,6 +37,7 @@ remain proposed until intentionally accepted.
 - [0016 Recovery and history projection](0016-recovery-and-history-projection.md)
 - [0017 macOS menu-bar and instance lifecycle](0017-macos-menu-bar-and-instance-lifecycle.md)
 - [0018 Google Calendar read-sync foundation](0018-google-calendar-read-sync-foundation.md)
+- [0019 Calendar presentation metadata](0019-calendar-presentation-metadata.md)
 
 ## Decision Backlog
 

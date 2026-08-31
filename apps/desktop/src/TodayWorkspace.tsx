@@ -1,4 +1,5 @@
 import { ReactNode, useState } from "react";
+import { CalendarStatus } from "./calendar";
 import { asProductError, ProductError } from "./organizer";
 import { ProductErrorNotice } from "./ProductErrorNotice";
 import { Task, taskClient } from "./tasks";
@@ -14,10 +15,12 @@ import {
   sameTodayContext,
   todayClient,
 } from "./today";
+import { TodaySchedule } from "./TodaySchedule";
 
 type Props = {
   today: TodayOutput;
   tasks: Task[];
+  calendar: CalendarStatus;
   onToday(today: TodayOutput): void;
   onTaskConfirmed(task: Task): void;
   onDayChanged(): Promise<void>;
@@ -32,6 +35,7 @@ const roleLabels: Record<TodayRole, string> = {
 export function TodayWorkspace({
   today,
   tasks,
+  calendar,
   onToday,
   onTaskConfirmed,
   onDayChanged,
@@ -129,7 +133,7 @@ export function TodayWorkspace({
     <section className="workspace today-workspace" aria-label="Today">
       <header className="today-header">
         <div>
-          <p className="eyebrow">ION OS · PHASE 1C</p>
+          <p className="eyebrow">ION OS · PHASE 2B</p>
           <h1>Today</h1>
           <p className="summary">{formatFullDate(today)}</p>
         </div>
@@ -326,32 +330,11 @@ export function TodayWorkspace({
             )}
           </section>
         </div>
-        <aside className="schedule-context" aria-label="Schedule context">
-          <p className="eyebrow">Schedule context</p>
-          <h2>Calendar is not connected yet.</h2>
-          <p>Ion cannot calculate occupied or available time.</p>
-          <section>
-            <h3>Deadline markers</h3>
-            {today.deadlines.due_today.length === 0 ? (
-              <Empty>No deadlines fall on this local day.</Empty>
-            ) : (
-              <ul className="deadline-markers">
-                {today.deadlines.due_today.map((item) => (
-                  <li key={item.task.id}>
-                    <strong>{item.task.title}</strong>
-                    <span>{formatDeadline(item.task, today.timezone)}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-          <p className="context-note">
-            Selected Tasks are unscheduled. They do not occupy specific times.
-          </p>
-          <p className="context-note">
-            Focus Sessions are not available in Phase 1C.
-          </p>
-        </aside>
+        <TodaySchedule
+          calendar={calendar}
+          date={today.planning_date}
+          localTimeZone={today.timezone}
+        />
       </div>
     </section>
   );
@@ -489,24 +472,4 @@ function formatFullDate(today: TodayOutput) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(`${today.planning_date}T12:00:00Z`));
-}
-
-function formatDeadline(task: Task, localTimezone: string) {
-  if (task.deadline.kind === "date") return "Due today · no set time";
-  if (task.deadline.kind !== "instant") return "No deadline";
-  const instant = new Date(task.deadline.at);
-  const canonical = new Intl.DateTimeFormat(undefined, {
-    timeZone: task.deadline.timezone,
-    hour: "numeric",
-    minute: "2-digit",
-    timeZoneName: "short",
-  }).format(instant);
-  if (task.deadline.timezone === localTimezone) return canonical;
-  const local = new Intl.DateTimeFormat(undefined, {
-    timeZone: localTimezone,
-    hour: "numeric",
-    minute: "2-digit",
-    timeZoneName: "short",
-  }).format(instant);
-  return `${canonical} · ${local} locally`;
 }

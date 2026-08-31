@@ -7,7 +7,7 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 ## Status
 
 Current phase: **Phase 2 — Calendar**
-Current milestone: **Phase 2A — Google Account + Calendar Sync Foundation**
+Current milestone: **Phase 2B — Calendar Interface**
 
 Phase 0 established the secure local runtime. Phase 1A added the canonical
 organizer schema and Task vertical slice. Phase 1B makes Areas, Goals, Projects,
@@ -31,13 +31,17 @@ Phase 2A adds Rust-owned Google Desktop OAuth and Keychain credentials,
 multi-account CalendarList discovery, independent Ion selection, canonical
 offline CalendarBlocks, and full/incremental read sync without enabling Google
 event writes.
+Phase 2B adds the primary read-only Day, 3 Day, Week, Next 7 Days, and Month Calendar,
+bounded recurrence/exception rendering, Ion-local categories and hide/restore,
+adaptive density, and truthful CalendarBlock occupancy and free gaps in Today
+without scheduling Tasks or writing Google data.
 
 ## Start here
 
 - [Agent guide](AGENTS.md)
 - [Project context](docs/projectContext.md)
 - [Master Specification](docs/PRODUCT_SPEC.md)
-- [Phase 2A](docs/phases/PHASE_2A.md)
+- [Phase 2B](docs/phases/PHASE_2B.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decision index](docs/decisions/README.md)
 

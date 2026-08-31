@@ -23,7 +23,7 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
             )
         }
 
-    assert version == ("0005_google_calendar_foundation",)
+    assert version == ("0006_calendar_presentation_metadata",)
     assert {
         "areas",
         "goals",
@@ -51,3 +51,18 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
 
     assert "position" in milestone_columns
     assert "position" in project_milestone_columns
+
+    with sqlite3.connect(database_path) as connection:
+        calendar_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(google_calendars)")
+        }
+        metadata_columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(calendar_block_ion_metadata)"
+            )
+        }
+
+    assert "hidden_in_ion" in calendar_columns
+    assert "category" in metadata_columns
+    assert "category_subtype" in metadata_columns
