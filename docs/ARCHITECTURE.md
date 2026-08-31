@@ -9,14 +9,19 @@ separately labels proposed implementation choices.
 
 - Ion is local-first. Its authoritative data lives on the user's Mac; cloud
   services are integrations, not the primary datastore.
-- macOS is the active local-only platform. Mobile support is TBD and requires a
-  dedicated mobile/security architecture review plus explicit owner approval.
+- macOS is the active local-only platform. Mobile, cross-device sync, and
+  remote access are post-v1 platform expansion and require dedicated
+  architecture/security review plus explicit owner approval.
 - One canonical record may appear in multiple contextual views. Derived search,
   indexing, and cache structures must be rebuildable.
 - Structured records, Markdown knowledge, and original sources have distinct
   owners. An LLM is not a memory system.
 - The repository contains only synthetic data and configuration examples; real
   user data remains local and outside the repository.
+
+Future Aspirations/readiness/Skills relationships, Voice & Ambient Core, and
+multi-calendar mirroring are product direction only; their record model and
+runtime boundaries remain deferred in the [product / roadmap amendment](PRODUCT_SPEC.md#owner-approved-product--roadmap-amendment--2026-08-31).
 
 ## Proposed implementation baseline — subject to prototyping
 

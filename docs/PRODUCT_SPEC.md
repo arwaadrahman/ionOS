@@ -3090,3 +3090,101 @@ baseline approaching or exceeding approximately 500 MB requires investigation
 unless measured requirements justify it. External agents, IDEs, and Ollama are
 measured separately. Normal fluctuation is acceptable; memory must not grow
 materially and monotonically merely because Ion remains open for days.
+
+---
+
+## Owner-approved product / roadmap amendment — 2026-08-31
+
+This amendment is canonical product direction. It preserves the source
+transcription above while superseding its Phase 14 roadmap entry. It authorizes
+no implementation, schema, dependency, integration, or mobile-sync design.
+
+### Tasks, CalendarBlocks, and completion evidence
+
+Ion Task remains the canonical task system. Google Tasks and the previously
+considered Phase 2D bridge are optional future integration work, owner-deferred
+and not required for desktop v1. Tasks and Calendar events remain distinct
+canonical records and distinct visual concepts.
+
+A Task may have one or more scheduled Calendar work blocks without becoming an
+event; completion of a work block does not by itself complete its related Task.
+Future Today and Calendar surfaces may offer task completion where appropriate.
+Future integrations may provide completion evidence: deterministic evidence may
+update related canonical records under accepted authority, while uncertain
+inference requires confirmation. Meaningful completion/progress may propagate
+through related Milestones, Goals, readiness checkpoints, and Projects without
+duplicating the canonical Task.
+
+### Aspirations, readiness, and Skills
+
+The future product model may situate current Goal semantics in:
+
+```text
+Area → Aspiration → Goal / readiness checkpoint → Milestone → Task
+```
+
+Areas are continuing domains of growth and are not permanently completed.
+Aspirations express desired outcomes or directions. An Aspiration may have a
+finite current set of readiness/preparation checkpoints that maximize
+preparation for that outcome. Completing preparation checkpoints means a
+preparation target was achieved; it must not claim that an external outcome is
+guaranteed or achieved.
+
+Skills are cross-cutting relationships, not a strict tree. Coursework,
+projects, repositories, research, tasks, assessments, and other evidence may
+contribute to multiple Skills and readiness checkpoints without duplicating
+canonical records. Progression should remain evidence-backed and categorical
+unless a numeric measure has real meaning; fabricated percentages, XP, and
+false precision are prohibited. Future planning or AI may propose and revise
+readiness plans from known context and evidence, but direct owner edits and
+decisions outrank automation. User-specific aspirations and checkpoints remain
+runtime data, never product configuration.
+
+### Ion Core and knowledge relationship
+
+The sparse Home Core is the early representation of the future production Ion
+Core. Phase 13 evolves that same signature information/data lens into the
+polished spatial spherical relationship graph; it does not create a competing
+primary graph. Knowledge/Obsidian, Projects, Areas, Goals/Aspirations, Skills,
+research, and other canonical relationships may contribute to the unified Core.
+Obsidian may provide useful knowledge-specific views, but the signature Home
+visualization remains Ion Core.
+
+Core remains informational rather than decorative. Its restrained glow/pulse,
+reduced-motion support, visibility throttling, background suspension, and
+performance requirements remain binding.
+
+### Phase 14 — Voice & Ambient Core
+
+Phase 14 replaces Mobile Companion in the numbered desktop-v1 roadmap.
+
+Build direction:
+
+- Ask Ion may support optional voice input and optional spoken responses.
+- Core states may communicate listening, processing, and responding.
+- Microphone activation is explicit/push-to-talk or otherwise owner-triggered
+  by default. Always-listening and wake-word behavior require a separate
+  privacy/performance decision.
+- Speech resources are local, lazy/on-demand, and released after inactivity
+  where technically feasible. Voice respects local-first/privacy boundaries and
+  exposes visible microphone state.
+- Focus Mode may optionally enable music-reactive Core behavior from minimal,
+  ephemeral playback/beat/energy signals. It does not store raw audio.
+- Voice or music animation may affect pulse, glow, node displacement, or flow,
+  but never canonical relationship-graph structure. It respects reduced motion,
+  battery, memory, visibility, and `PERFORMANCE.md`.
+
+Mobile Companion, cross-device sync, and remote access move to post-v1 future
+platform expansion. Their synchronization, authentication, privacy, and
+architecture decisions remain deferred.
+
+### Deferred multi-calendar event mirroring
+
+After the normal single-provider event lifecycle is complete, an Ion event may
+eventually intentionally appear in multiple connected provider
+calendars/accounts. The preferred conceptual model is one canonical Ion
+CalendarBlock/event with multiple provider linkage/copy records, not duplicated
+canonical events and not attendee invitations. Future design must address
+partial provider failure, direct provider edits, deletion of one copy,
+permission loss, conflict behavior, and idempotency. This is deferred Calendar
+direction only and is not Phase 2C-3 scope.

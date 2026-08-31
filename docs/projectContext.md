@@ -28,14 +28,15 @@ actions as authoritative.
   compact audit, and fixed local routes. Phase 2C-2 adds explicit write
   re-consent plus `events.insert`/deterministic `events.get` reconciliation
   only. Existing accounts remain read-only until re-consent.
-- **Out of scope:** Google event edit/move/resize/delete, Google Tasks, Gmail,
+- **Out of scope:** Google event edit/move/resize/delete, Google Tasks bridge
+  (optional/deferred; not active Phase 2D desktop-v1 work), Gmail,
   push/webhooks, attendee/reminder/recurrence/conferencing/attachment writes,
   Task auto-scheduling, AI, provider free/busy
   planning, FocusSession, DailyReview, WeeklyPlan, semantic/conversational search,
   persisted search indexes/history, generic Undo/version history, automatic
   purge, inferred relationships, global shortcuts requiring a new plugin,
-  menu-bar AI/focus/planning, final Core Explore modes, mobile, and remote/LAN
-  access.
+  menu-bar AI/focus/planning, final Core Explore modes, and post-v1 mobile,
+  cross-device-sync, or remote/LAN platform expansion.
 
 ## Proposed stack baseline — subject to prototyping
 
@@ -83,8 +84,13 @@ performance-conscious.
 
 - Repository data is synthetic only; real databases, vaults, and secrets stay
   outside the repository.
-- The active trust boundary is macOS-local only. Mobile support is deferred
-  pending a dedicated mobile/security review and explicit owner approval.
+- The active trust boundary is macOS-local only. Mobile, cross-device sync, and
+  remote access are post-v1 platform expansion pending dedicated security and
+  architecture review plus explicit owner approval.
+- The owner-approved [product / roadmap amendment](PRODUCT_SPEC.md#owner-approved-product--roadmap-amendment--2026-08-31)
+  defines deferred Aspirations/readiness/Skills direction, the Phase 13 Core
+  evolution, Phase 14 Voice & Ambient Core, and deferred multi-calendar
+  mirroring without freezing an implementation schema.
 - Google refresh tokens stay in macOS Keychain, access tokens remain
   Rust-memory-only, and provider tokens never enter React, Python, SQLite, or
   logs.

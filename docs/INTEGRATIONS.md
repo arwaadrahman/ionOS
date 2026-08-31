@@ -8,6 +8,7 @@ primary storage. Google Calendar is the first active adapter under ADR 0018.
 | Integration                                    | Target phase/status                 |
 | ---------------------------------------------- | ----------------------------------- |
 | Google Calendar                                | Phase 2C write gate accepted        |
+| Google Tasks                                   | Optional future bridge; owner-deferred, not desktop v1 |
 | Canvas                                         | Phase 3, deferred                   |
 | Local AI                                       | Phase 4, deferred                   |
 | Gmail                                          | Phase 5, deferred                   |
@@ -15,10 +16,15 @@ primary storage. Google Calendar is the first active adapter under ADR 0018.
 | GitHub                                         | Phase 8, deferred                   |
 | External developer-agent bridge                | Narrow precursor allowed; deferred |
 | Cloud AI / Deep Ask                            | Phase 12, deferred                  |
-| Mobile companion                               | TBD; security-gated by ADR 0004     |
+| Mobile companion / cross-device sync           | Post-v1 platform expansion; security-gated |
 
 Any other integration requires a scoped route, privacy review, and owner
 approval before implementation.
+
+Google Tasks is not Ion's primary task system: canonical Ion Tasks remain
+primary. The owner-approved [product / roadmap amendment](PRODUCT_SPEC.md#owner-approved-product--roadmap-amendment--2026-08-31)
+keeps a future bridge optional and deferred, along with the future
+multi-calendar mirroring direction; neither is active Phase 2 work.
 
 ## External development-agent direction
 

@@ -23,6 +23,15 @@ All notable repository changes are documented here.
 
 ### Added
 
+- Owner-directed product/roadmap documentation checkpoint: canonical Ion Tasks
+  remain primary while Google Tasks is optional/deferred; future
+  Aspirations/readiness and cross-cutting evidence-backed Skills are recorded
+  without a schema; Phase 13 evolves the existing Ion Core; Phase 14 is Voice
+  & Ambient Core; mobile/cross-device/remote expansion is post-v1; and
+  multi-calendar event mirroring remains deferred after the single-provider
+  lifecycle. No implementation, migration, dependency, or integration was
+  added.
+
 - Phase 2C-2 idempotent Google Calendar create: explicit selected-account
   Calendar Events write re-consent, compact click/drag create UI, atomic
   local-first CalendarBlock/outbox persistence, attendee-free `events.insert`,
