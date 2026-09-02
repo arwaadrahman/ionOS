@@ -13,6 +13,15 @@ implemented through Phase 2B.
   authorization, usage, and audit boundaries.
 - AI suggestions remain candidates until Ion validates and stores an authorized
   structured result. Human actions outrank automated actions.
+- **Approval happens once.** An AI-originated change is authorized when the
+  owner accepts it; persisting, synchronizing to a provider, and settling are
+  consequences of that decision, not further decisions to approve. A direct
+  human action authorizes itself the same way. See the Master Specification's
+  *One authorization step, and only one*, and, for Calendar,
+  [Calendar interaction behavior](CALENDAR_BEHAVIOR.md).
+- Autonomous mutation without owner approval is not authorized. Any future
+  owner-configurable automation permission is a separate recorded product
+  decision, never inferred from an existing surface.
 
 `packages/ai-router` and any provider or embedding implementation are outside
 this milestone.

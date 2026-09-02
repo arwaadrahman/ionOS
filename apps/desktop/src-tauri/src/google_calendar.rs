@@ -19,7 +19,7 @@ use getrandom::fill;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::service::{product_request, ProductError, ProductErrorCode, ServiceState};
 
@@ -37,8 +37,24 @@ const MAX_CONFIG_BYTES: u64 = 65_536;
 const MAX_CALLBACK_BYTES: usize = 8_192;
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
+// A durable write's dispatch-slot wait is bounded, not an unbounded busy
+// loop: the gate is a single in-process AtomicBool (never a deadlock-prone
+// lock), and its only legitimate holder is one foreground sync or one write
+// dispatch batch of at most MAX_PROVIDER_WRITES_PER_TRIGGER items, each HTTP
+// call itself bounded by PROVIDER_TIMEOUT. 60s comfortably covers that
+// worst-case legitimate hold; a wait past it means the holder is stuck, and
+// the caller should get a safe, recoverable failure rather than hang
+// forever. The durable write intent is committed before this wait ever
+// starts, so a timeout here never loses or corrupts it -- it simply leaves
+// the ready/queued row for the next trigger (a later save, sync, or
+// restart) to dispatch normally.
+const WRITE_SLOT_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Emitted when Ion advances a Calendar write on its own, so the renderer
+/// reflects the settled state without the user triggering a refresh.
+const CALENDAR_STATUS_EVENT: &str = "ion:calendar-status";
 const MAX_PROVIDER_ATTEMPTS: u32 = 3;
 const MAX_PROVIDER_WRITE_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_PROVIDER_WRITES_PER_TRIGGER: u16 = 10;
 
 #[allow(dead_code)] // Write mode is deliberately unbound from a renderer command in 2C-1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +136,30 @@ impl GoogleState {
         Ok(SyncGuard(&self.sync_active))
     }
 
+    async fn wait_for_write_slot(&self) -> Result<SyncGuard<'_>, GoogleCommandError> {
+        self.wait_for_write_slot_bounded(WRITE_SLOT_WAIT_TIMEOUT)
+            .await
+    }
+
+    /// Bounded-timeout variant used directly by tests so the timeout path
+    /// can be exercised deterministically without a real 60s wait.
+    async fn wait_for_write_slot_bounded(
+        &self,
+        timeout: Duration,
+    ) -> Result<SyncGuard<'_>, GoogleCommandError> {
+        let poll = async {
+            loop {
+                if let Ok(guard) = self.begin_sync() {
+                    return guard;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        };
+        tokio::time::timeout(timeout, poll)
+            .await
+            .map_err(|_| GoogleCommandError::new("write_slot_unavailable"))
+    }
+
     fn cached_token(&self, account_id: &str) -> Option<String> {
         self.access_tokens
             .lock()
@@ -161,16 +201,48 @@ impl GoogleCommandError {
     }
 }
 
+fn safe_calendar_write_reason(reason: &str) -> bool {
+    matches!(
+        reason,
+        "account_read_only"
+            | "access_role_read_only"
+            | "attendees_present"
+            | "calendar_deleted"
+            | "calendar_disabled"
+            | "create_reconciliation_required"
+            | "locked_confirmation_required"
+            | "no_change_requested"
+            | "no_conflict_to_resolve"
+            | "provider_deleted"
+            | "provider_locked"
+            | "provider_unconfirmed"
+            | "reauth_required"
+            | "recurrence_identity_unresolved"
+            | "recurrence_split_at_first_occurrence"
+            | "recurrence_split_unsupported"
+            | "recurrence_unsupported"
+            | "special_event"
+            | "timezone_change_unsupported"
+            | "write_pending"
+    )
+}
+
 impl From<ProductError> for GoogleCommandError {
     fn from(error: ProductError) -> Self {
-        Self::new(match error.code {
+        let code = match error.code {
             ProductErrorCode::Unavailable => "local_service_unavailable",
             ProductErrorCode::RevisionConflict => "local_state_conflict",
             ProductErrorCode::NotFound => "local_state_not_found",
-            ProductErrorCode::Validation
-            | ProductErrorCode::AssignmentUnavailable
-            | ProductErrorCode::TrashBlocked => "local_state_invalid",
-        })
+            ProductErrorCode::Validation => error
+                .reason
+                .as_deref()
+                .filter(|reason| safe_calendar_write_reason(reason))
+                .unwrap_or("local_state_invalid"),
+            ProductErrorCode::AssignmentUnavailable | ProductErrorCode::TrashBlocked => {
+                "local_state_invalid"
+            }
+        };
+        Self::new(code)
     }
 }
 
@@ -262,6 +334,7 @@ pub struct CalendarBlock {
     pub transparency: String,
     pub recurrence_kind: String,
     pub recurrence_rules: Vec<String>,
+    pub recurrence_preset: String,
     pub recurrence_master_block_id: Option<String>,
     pub recurring_event_id: Option<String>,
     pub original_start_kind: String,
@@ -279,8 +352,22 @@ pub struct CalendarBlock {
     pub provider_write_capability: ProviderWriteCapability,
     pub provider_delete_capability: ProviderDeleteCapability,
     pub provider_write_operation: Option<String>,
+    pub provider_write_recurrence_scope: Option<String>,
+    pub provider_write_original_start: Option<ProviderDateTime>,
+    pub provider_write_overlay: Option<ProviderWriteOverlay>,
     pub provider_write_state: String,
     pub provider_write_detail: String,
+    pub provider_write_failure_class: Option<String>,
+    pub provider_write_failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ProviderWriteOverlay {
+    pub title: Option<String>,
+    pub start: Option<ProviderDateTime>,
+    pub end: Option<ProviderDateTime>,
+    pub recurrence: Option<Vec<String>>,
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -341,6 +428,15 @@ struct ProviderWriteValues {
     end: Option<ProviderDateTime>,
     recurrence: Option<Vec<String>>,
     status: Option<String>,
+    recurrence_identity: Option<ProviderRecurrenceIdentity>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ProviderRecurrenceIdentity {
+    master_provider_event_id: String,
+    master_provider_etag: String,
+    original_start: ProviderDateTime,
+    exception_calendar_block_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -354,6 +450,7 @@ pub struct CreateCalendarEventDraft {
     start_time: Option<String>,
     end_time: Option<String>,
     timezone: Option<String>,
+    recurrence: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -369,7 +466,19 @@ pub struct EditCalendarEventDraft {
     start_time: Option<String>,
     end_time: Option<String>,
     timezone: Option<String>,
+    recurrence_scope: String,
+    occurrence_original_start: Option<ProviderDateTime>,
+    recurrence: Option<String>,
+    recurrence_risk_confirmed: bool,
     locked_confirmed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConflictResolutionDraft {
+    command_id: String,
+    calendar_block_id: String,
+    expected_block_revision: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -378,6 +487,9 @@ pub struct DeleteCalendarEventDraft {
     command_id: String,
     calendar_block_id: String,
     expected_block_revision: i64,
+    recurrence_scope: String,
+    occurrence_original_start: Option<ProviderDateTime>,
+    series_confirmed: bool,
     locked_confirmed: bool,
 }
 
@@ -391,6 +503,7 @@ struct CreateProviderEventInput<'a> {
     start_time: Option<&'a str>,
     end_time: Option<&'a str>,
     timezone: Option<&'a str>,
+    recurrence: &'a str,
     provenance: &'static str,
 }
 
@@ -412,6 +525,10 @@ struct EditProviderEventInput<'a> {
     start_time: Option<&'a str>,
     end_time: Option<&'a str>,
     timezone: Option<&'a str>,
+    recurrence_scope: &'a str,
+    occurrence_original_start: Option<&'a ProviderDateTime>,
+    recurrence: Option<&'a str>,
+    recurrence_risk_confirmed: bool,
     locked_confirmed: bool,
     provenance: &'static str,
 }
@@ -427,6 +544,9 @@ struct DeleteProviderEventInput<'a> {
     command_id: &'a str,
     calendar_block_id: &'a str,
     expected_block_revision: i64,
+    recurrence_scope: &'a str,
+    occurrence_original_start: Option<&'a ProviderDateTime>,
+    series_confirmed: bool,
     locked_confirmed: bool,
     provenance: &'static str,
 }
@@ -436,6 +556,40 @@ struct DeleteProviderEventOutput {
     intent: Option<ProviderWriteIntentSummary>,
     status: CalendarStatus,
     resolution: String,
+}
+
+#[derive(Serialize)]
+struct ConflictResolutionInput<'a> {
+    command_id: &'a str,
+    calendar_block_id: &'a str,
+    expected_block_revision: i64,
+}
+
+#[derive(Deserialize)]
+struct ConflictResolutionOutput {
+    intent: ProviderWriteIntentSummary,
+    status: CalendarStatus,
+}
+
+#[derive(Serialize)]
+struct ReviewDifferencesRequest<'a> {
+    calendar_block_id: &'a str,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReviewDifferences {
+    pub calendar_block_id: String,
+    pub changed_fields: Vec<String>,
+    pub confirmed_title: Option<String>,
+    pub desired_title: Option<String>,
+    pub confirmed_start: Option<ProviderDateTime>,
+    pub confirmed_end: Option<ProviderDateTime>,
+    pub desired_start: Option<ProviderDateTime>,
+    pub desired_end: Option<ProviderDateTime>,
+    pub confirmed_recurrence: Option<Vec<String>>,
+    pub desired_recurrence: Option<Vec<String>>,
+    pub confirmed_status: Option<String>,
+    pub desired_status: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -517,6 +671,13 @@ struct ReconcileProviderDeleteInput<'a> {
     event: Option<&'a ProviderEvent>,
 }
 
+#[derive(Serialize)]
+struct ResolveProviderOccurrenceInput<'a> {
+    expected_state: &'static str,
+    master: &'a ProviderEvent,
+    instance: &'a ProviderEvent,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 struct ProviderWritePlan {
@@ -538,6 +699,10 @@ struct RecoveryResult {
     attempting_to_ambiguous: u16,
     retry_wait_to_ready: u16,
     reauth_required_to_ready: u16,
+    failed_occurrence_to_conflict: u16,
+    /// Seconds until the earliest still-waiting retry becomes due, if any.
+    #[serde(default)]
+    next_retry_in_seconds: Option<u64>,
 }
 
 #[allow(dead_code)]
@@ -768,11 +933,140 @@ struct ProviderDateTimeRaw {
     time_zone: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct ProviderDateTime {
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ProviderDateTime {
     date: Option<String>,
     date_time: Option<String>,
     timezone: Option<String>,
+}
+
+enum ProviderInstancesOutcome {
+    Confirmed(Vec<ProviderEvent>),
+    Failed(ProviderWriteResultClass),
+}
+
+fn provider_instances_request_at(
+    client: &Client,
+    access_token: &str,
+    api_base: &str,
+    provider_calendar_id: &str,
+    master_provider_event_id: &str,
+    original_start: &ProviderDateTime,
+) -> Result<reqwest::Request, GoogleCommandError> {
+    let original_start = original_start
+        .date_time
+        .as_deref()
+        .map(str::to_owned)
+        .or_else(|| {
+            original_start
+                .date
+                .as_deref()
+                .map(|value| format!("{value}T00:00:00Z"))
+        })
+        .ok_or_else(|| GoogleCommandError::new("provider_write_invalid"))?;
+    let mut url = provider_write_url_at(
+        api_base,
+        ProviderWriteMethod::Instances,
+        provider_calendar_id,
+        Some(master_provider_event_id),
+    )?;
+    url.query_pairs_mut()
+        .append_pair("originalStart", &original_start)
+        .append_pair("showDeleted", "true")
+        .append_pair("maxResults", "2");
+    client
+        .get(url)
+        .bearer_auth(access_token)
+        .build()
+        .map_err(|_| GoogleCommandError::new("provider_write_invalid"))
+}
+
+async fn execute_provider_instances_call(
+    client: &Client,
+    request: reqwest::Request,
+    fallback_timezone: &str,
+) -> ProviderInstancesOutcome {
+    let response = match client.execute(request).await {
+        Ok(response) => response,
+        Err(_) => {
+            return ProviderInstancesOutcome::Failed(ProviderWriteResultClass::RetryableTransport);
+        }
+    };
+    let status = response.status();
+    let bytes = match response.bytes().await {
+        Ok(bytes) if bytes.len() as u64 <= MAX_PROVIDER_WRITE_RESPONSE_BYTES => bytes,
+        _ => {
+            return ProviderInstancesOutcome::Failed(ProviderWriteResultClass::RetryableBackend);
+        }
+    };
+    let classification =
+        classify_write_provider_result(ProviderWriteMethod::Instances, status, &bytes);
+    if classification != ProviderWriteResultClass::Success {
+        return ProviderInstancesOutcome::Failed(classification);
+    }
+    match serde_json::from_slice::<EventsPage>(&bytes) {
+        Ok(page) if page.next_page_token.is_none() => ProviderInstancesOutcome::Confirmed(
+            page.items
+                .into_iter()
+                .map(|event| sanitize_event(event, fallback_timezone))
+                .collect(),
+        ),
+        _ => ProviderInstancesOutcome::Failed(ProviderWriteResultClass::InvalidTarget),
+    }
+}
+
+async fn execute_occurrence_resolution(
+    client: &Client,
+    api_base: &str,
+    access_token: &str,
+    provider_calendar_id: &str,
+    identity: &ProviderRecurrenceIdentity,
+    fallback_timezone: &str,
+) -> Result<(ProviderEvent, ProviderEvent), ProviderWriteResultClass> {
+    let master = execute_provider_create_call(
+        client,
+        &ProviderCreateCall {
+            api_base,
+            method: ProviderWriteMethod::Get,
+            access_token,
+            provider_calendar_id,
+            provider_event_id: &identity.master_provider_event_id,
+            expected_etag: None,
+            body: None,
+            fallback_timezone,
+        },
+    )
+    .await;
+    let master = match master {
+        ProviderCreateCallOutcome::Confirmed(event) => *event,
+        ProviderCreateCallOutcome::Failed(classification) => return Err(classification),
+        ProviderCreateCallOutcome::Deleted => return Err(ProviderWriteResultClass::InvalidTarget),
+    };
+    let request = provider_instances_request_at(
+        client,
+        access_token,
+        api_base,
+        provider_calendar_id,
+        &identity.master_provider_event_id,
+        &identity.original_start,
+    )
+    .map_err(|_| ProviderWriteResultClass::InvalidTarget)?;
+    let instances = execute_provider_instances_call(client, request, fallback_timezone).await;
+    let instances = match instances {
+        ProviderInstancesOutcome::Confirmed(instances) => instances,
+        ProviderInstancesOutcome::Failed(classification) => return Err(classification),
+    };
+    let mut matching = instances.into_iter().filter(|event| {
+        event.recurring_event_id.as_deref() == Some(&identity.master_provider_event_id)
+            && event.original_start.is_some()
+    });
+    let instance = matching
+        .next()
+        .ok_or(ProviderWriteResultClass::ProviderNotFound)?;
+    if matching.next().is_some() {
+        return Err(ProviderWriteResultClass::InvalidTarget);
+    }
+    Ok((master, instance))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1109,14 +1403,24 @@ impl ProviderWriteResultClass {
 fn create_provider_body(
     plan: &ProviderWritePlan,
 ) -> Result<AllowedProviderWriteBody, GoogleCommandError> {
+    let recurring = plan.summary.recurrence_scope == "series";
+    let expected_fields = if recurring {
+        vec![
+            "title".to_owned(),
+            "transparency".to_owned(),
+            "temporal".to_owned(),
+            "recurrence".to_owned(),
+        ]
+    } else {
+        vec![
+            "title".to_owned(),
+            "transparency".to_owned(),
+            "temporal".to_owned(),
+        ]
+    };
     if plan.summary.operation != "create"
-        || plan.summary.recurrence_scope != "single"
-        || plan.summary.changed_fields
-            != vec![
-                "title".to_owned(),
-                "transparency".to_owned(),
-                "temporal".to_owned(),
-            ]
+        || !matches!(plan.summary.recurrence_scope.as_str(), "single" | "series")
+        || plan.summary.changed_fields != expected_fields
         || plan.expected_provider_etag.is_some()
         || plan.schema_version != 1
     {
@@ -1135,8 +1439,13 @@ fn create_provider_body(
         || desired.end.is_none()
         || desired.description.is_some()
         || desired.location.is_some()
-        || desired.recurrence.is_some()
         || desired.status.is_some()
+        || desired.recurrence_identity.is_some()
+        || recurring
+            != desired
+                .recurrence
+                .as_ref()
+                .is_some_and(|rules| bounded_recurrence_rules(rules))
     {
         return Err(GoogleCommandError::new("provider_write_invalid"));
     }
@@ -1153,7 +1462,7 @@ fn create_provider_body(
         transparency: desired.transparency.clone(),
         start: desired.start.as_ref().map(convert_time),
         end: desired.end.as_ref().map(convert_time),
-        recurrence: None,
+        recurrence: desired.recurrence.clone(),
         status: None,
     })
 }
@@ -1161,14 +1470,22 @@ fn create_provider_body(
 fn patch_provider_body(
     plan: &ProviderWritePlan,
 ) -> Result<AllowedProviderWriteBody, GoogleCommandError> {
-    if plan.summary.operation != "patch"
-        || plan.summary.recurrence_scope != "single"
+    let occurrence_cancel = plan.summary.operation == "cancel_occurrence";
+    if !matches!(
+        plan.summary.operation.as_str(),
+        "patch" | "cancel_occurrence"
+    ) || !matches!(
+        plan.summary.recurrence_scope.as_str(),
+        "single" | "occurrence" | "series"
+    ) || occurrence_cancel != (plan.summary.recurrence_scope == "occurrence")
+        && occurrence_cancel
         || plan.summary.changed_fields.is_empty()
-        || plan
-            .summary
-            .changed_fields
-            .iter()
-            .any(|field| !matches!(field.as_str(), "title" | "temporal"))
+        || plan.summary.changed_fields.iter().any(|field| {
+            !matches!(
+                field.as_str(),
+                "title" | "temporal" | "recurrence" | "status"
+            )
+        })
         || plan.expected_provider_etag.as_deref().map_or(true, |etag| {
             etag.is_empty() || etag == "*" || etag.len() > 4096
         })
@@ -1191,12 +1508,35 @@ fn patch_provider_body(
         .changed_fields
         .iter()
         .any(|field| field == "temporal");
+    let changes_recurrence = plan
+        .summary
+        .changed_fields
+        .iter()
+        .any(|field| field == "recurrence");
+    let changes_status = plan
+        .summary
+        .changed_fields
+        .iter()
+        .any(|field| field == "status");
     if desired.schema_version != 1
         || desired.description.is_some()
         || desired.location.is_some()
         || desired.transparency.is_some()
-        || desired.recurrence.is_some()
-        || desired.status.is_some()
+        || desired.recurrence_identity.is_some()
+        || changes_recurrence != desired.recurrence.is_some()
+        || changes_status != desired.status.is_some()
+        || changes_recurrence
+            && (plan.summary.recurrence_scope != "series"
+                || !desired
+                    .recurrence
+                    .as_ref()
+                    .is_some_and(|rules| bounded_recurrence_rules(rules)))
+        || changes_status && (!occurrence_cancel || desired.status.as_deref() != Some("cancelled"))
+        || occurrence_cancel
+            && (plan.summary.changed_fields != vec!["status".to_owned()]
+                || changes_title
+                || changes_temporal
+                || changes_recurrence)
     {
         return Err(GoogleCommandError::new("provider_write_invalid"));
     }
@@ -1231,9 +1571,56 @@ fn patch_provider_body(
         transparency: None,
         start: desired.start.as_ref().map(convert_time),
         end: desired.end.as_ref().map(convert_time),
-        recurrence: None,
-        status: None,
+        recurrence: desired.recurrence.clone(),
+        status: desired.status.clone(),
     })
+}
+
+const RECURRENCE_PRESET_RULES: [&str; 5] = [
+    "RRULE:FREQ=DAILY",
+    "RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+    "RRULE:FREQ=WEEKLY",
+    "RRULE:FREQ=MONTHLY",
+    "RRULE:FREQ=YEARLY",
+];
+
+/// The owner-authorized recurrence body contract: exactly the five bounded
+/// preset families, optionally terminated by a domain-generated `UNTIL` for a
+/// `this and following` series split.
+///
+/// The renderer can never reach this: recurrence text is derived inside the
+/// Python domain from the persisted preset plus the selected occurrence's
+/// immutable identity. This function is the last gate, so it accepts no other
+/// FREQ, no other BY* clause, no COUNT, and no free-form rule text.
+fn bounded_recurrence_rules(rules: &[String]) -> bool {
+    let [rule] = rules else {
+        return false;
+    };
+    let (base, until) = match rule.split_once(";UNTIL=") {
+        Some((base, until)) => (base, Some(until)),
+        None => (rule.as_str(), None),
+    };
+    if !RECURRENCE_PRESET_RULES.contains(&base) {
+        return false;
+    }
+    match until {
+        None => true,
+        Some(value) => bounded_recurrence_until(value),
+    }
+}
+
+/// `YYYYMMDD` for an all-day series, or basic UTC `YYYYMMDDTHHMMSSZ` for a timed
+/// one, matching RFC 5545's requirement that a timed UNTIL be UTC.
+fn bounded_recurrence_until(value: &str) -> bool {
+    let digits = |slice: &str| slice.bytes().all(|byte| byte.is_ascii_digit());
+    match value.len() {
+        8 => digits(value),
+        16 => {
+            let bytes = value.as_bytes();
+            bytes[8] == b'T' && bytes[15] == b'Z' && digits(&value[..8]) && digits(&value[9..15])
+        }
+        _ => false,
+    }
 }
 
 enum ProviderCreateCallOutcome {
@@ -1772,6 +2159,48 @@ async fn delete_provider_write_intent(
     .map_err(Into::into)
 }
 
+async fn keep_google_write_version(
+    state: &ServiceState,
+    input: &ConflictResolutionInput<'_>,
+) -> Result<ConflictResolutionOutput, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/write-intents/keep-google-version",
+        Some(input),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+async fn apply_ion_write_changes(
+    state: &ServiceState,
+    input: &ConflictResolutionInput<'_>,
+) -> Result<ConflictResolutionOutput, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/write-intents/apply-ion-changes",
+        Some(input),
+    )
+    .await
+    .map_err(Into::into)
+}
+
+async fn review_write_differences(
+    state: &ServiceState,
+    input: &ReviewDifferencesRequest<'_>,
+) -> Result<ReviewDifferences, GoogleCommandError> {
+    product_request(
+        state,
+        reqwest::Method::POST,
+        "/v1/calendar/internal/write-intents/review-differences",
+        Some(input),
+    )
+    .await
+    .map_err(Into::into)
+}
+
 #[allow(dead_code)]
 async fn ready_provider_write_intents(
     state: &ServiceState,
@@ -1895,6 +2324,17 @@ async fn reconcile_provider_delete(
         .map_err(Into::into)
 }
 
+async fn resolve_provider_occurrence(
+    state: &ServiceState,
+    intent_id: &str,
+    input: &ResolveProviderOccurrenceInput<'_>,
+) -> Result<ProviderWritePlan, GoogleCommandError> {
+    let route = write_intent_backend_route(intent_id, "/resolve-occurrence")?;
+    product_request(state, reqwest::Method::POST, &route, Some(input))
+        .await
+        .map_err(Into::into)
+}
+
 async fn local_status(state: &ServiceState) -> Result<CalendarStatus, GoogleCommandError> {
     product_request::<EmptyInput, CalendarStatus>(
         state,
@@ -1924,7 +2364,15 @@ fn configured_status<R: Runtime>(app: &AppHandle<R>, mut status: CalendarStatus)
 pub async fn get_google_calendar_status<R: Runtime>(
     app: AppHandle<R>,
     service: State<'_, ServiceState>,
+    google: State<'_, GoogleState>,
 ) -> Result<CalendarStatus, GoogleCommandError> {
+    let initial = configured_status(&app, local_status(&service).await?);
+    if initial.configured {
+        // App startup is an accepted bounded recovery trigger for already
+        // authorized durable writes. Dispatch remains behind the same Google
+        // gate as foreground sync and never expands OAuth authority.
+        let _ = dispatch_calendar_writes(&app, &service, &google, "recovery").await;
+    }
     local_status(&service)
         .await
         .map(|status| configured_status(&app, status))
@@ -2108,6 +2556,10 @@ pub async fn create_google_calendar_event<R: Runtime>(
     if title.is_empty()
         || title.len() > 512
         || draft.date.len() != 10
+        || !matches!(
+            draft.recurrence.as_str(),
+            "none" | "daily" | "weekdays" | "weekly" | "monthly" | "yearly"
+        )
         || (!valid_timed && !valid_all_day)
     {
         return Err(GoogleCommandError::new("local_state_invalid"));
@@ -2123,6 +2575,7 @@ pub async fn create_google_calendar_event<R: Runtime>(
             start_time: draft.start_time.as_deref(),
             end_time: draft.end_time.as_deref(),
             timezone: draft.timezone.as_deref(),
+            recurrence: &draft.recurrence,
             provenance: "direct_human",
         },
     )
@@ -2135,6 +2588,72 @@ pub async fn create_google_calendar_event<R: Runtime>(
         .unwrap_or_else(|_| configured_status(&app, created.status)))
 }
 
+/// Shape check for an edit draft at the renderer seam, before any local write.
+///
+/// Every scope the renderer can offer must be accepted here: a scope missing
+/// from this list is rejected as `local_state_invalid` and surfaces to the user
+/// as an unexplained refusal, even though the domain supports it.
+fn edit_draft_is_well_formed(draft: &EditCalendarEventDraft) -> bool {
+    // `occurrence` and `this_and_following` both resolve a specific occurrence, so
+    // both carry the immutable original start. Only a whole-series edit may
+    // restate the repeat rule.
+    let identifies_occurrence = matches!(
+        draft.recurrence_scope.as_str(),
+        "occurrence" | "this_and_following"
+    );
+    matches!(draft.edit_kind.as_str(), "edit" | "move" | "resize")
+        && matches!(
+            draft.recurrence_scope.as_str(),
+            "single" | "occurrence" | "series" | "this_and_following"
+        )
+        && !draft.recurrence.as_deref().is_some_and(|value| {
+            !matches!(
+                value,
+                "daily" | "weekdays" | "weekly" | "monthly" | "yearly"
+            )
+        })
+        && identifies_occurrence == draft.occurrence_original_start.is_some()
+        && (draft.recurrence_scope == "series" || draft.recurrence.is_none())
+        && draft.expected_block_revision >= 1
+        && !draft
+            .title
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty() || value.len() > 512)
+        && [draft.start_date.as_ref(), draft.end_date.as_ref()]
+            .into_iter()
+            .flatten()
+            .all(|value| value.len() == 10)
+        && [draft.start_time.as_ref(), draft.end_time.as_ref()]
+            .into_iter()
+            .flatten()
+            .all(|value| value.len() == 5)
+        && !draft
+            .timezone
+            .as_ref()
+            .is_some_and(|value| value.is_empty() || value.len() > 255)
+}
+
+/// Shape check for a delete draft at the renderer seam.
+fn delete_draft_is_well_formed(draft: &DeleteCalendarEventDraft) -> bool {
+    let identifies_occurrence = matches!(
+        draft.recurrence_scope.as_str(),
+        "occurrence" | "this_and_following"
+    );
+    // Deleting a whole series and truncating one at an occurrence both remove
+    // confirmed future occurrences, so both carry the destructive confirmation.
+    let removes_future_occurrences = matches!(
+        draft.recurrence_scope.as_str(),
+        "series" | "this_and_following"
+    );
+    draft.expected_block_revision >= 1
+        && matches!(
+            draft.recurrence_scope.as_str(),
+            "single" | "occurrence" | "series" | "this_and_following"
+        )
+        && identifies_occurrence == draft.occurrence_original_start.is_some()
+        && removes_future_occurrences == draft.series_confirmed
+}
+
 #[tauri::command]
 pub async fn edit_google_calendar_event<R: Runtime>(
     app: AppHandle<R>,
@@ -2144,25 +2663,7 @@ pub async fn edit_google_calendar_event<R: Runtime>(
 ) -> Result<CalendarStatus, GoogleCommandError> {
     validated_backend_id(&draft.command_id)?;
     validated_backend_id(&draft.calendar_block_id)?;
-    if !matches!(draft.edit_kind.as_str(), "edit" | "move" | "resize")
-        || draft.expected_block_revision < 1
-        || draft
-            .title
-            .as_ref()
-            .is_some_and(|value| value.trim().is_empty() || value.len() > 512)
-        || [draft.start_date.as_ref(), draft.end_date.as_ref()]
-            .into_iter()
-            .flatten()
-            .any(|value| value.len() != 10)
-        || [draft.start_time.as_ref(), draft.end_time.as_ref()]
-            .into_iter()
-            .flatten()
-            .any(|value| value.len() != 5)
-        || draft
-            .timezone
-            .as_ref()
-            .is_some_and(|value| value.is_empty() || value.len() > 255)
-    {
+    if !edit_draft_is_well_formed(&draft) {
         return Err(GoogleCommandError::new("local_state_invalid"));
     }
     let edited = edit_provider_write_intent(
@@ -2178,6 +2679,10 @@ pub async fn edit_google_calendar_event<R: Runtime>(
             start_time: draft.start_time.as_deref(),
             end_time: draft.end_time.as_deref(),
             timezone: draft.timezone.as_deref(),
+            recurrence_scope: &draft.recurrence_scope,
+            occurrence_original_start: draft.occurrence_original_start.as_ref(),
+            recurrence: draft.recurrence.as_deref(),
+            recurrence_risk_confirmed: draft.recurrence_risk_confirmed,
             locked_confirmed: draft.locked_confirmed,
             provenance: "direct_human",
         },
@@ -2200,7 +2705,7 @@ pub async fn delete_google_calendar_event<R: Runtime>(
 ) -> Result<CalendarStatus, GoogleCommandError> {
     validated_backend_id(&draft.command_id)?;
     validated_backend_id(&draft.calendar_block_id)?;
-    if draft.expected_block_revision < 1 {
+    if !delete_draft_is_well_formed(&draft) {
         return Err(GoogleCommandError::new("local_state_invalid"));
     }
     let deleted = delete_provider_write_intent(
@@ -2209,6 +2714,9 @@ pub async fn delete_google_calendar_event<R: Runtime>(
             command_id: &draft.command_id,
             calendar_block_id: &draft.calendar_block_id,
             expected_block_revision: draft.expected_block_revision,
+            recurrence_scope: &draft.recurrence_scope,
+            occurrence_original_start: draft.occurrence_original_start.as_ref(),
+            series_confirmed: draft.series_confirmed,
             locked_confirmed: draft.locked_confirmed,
             provenance: "direct_human",
         },
@@ -2223,6 +2731,77 @@ pub async fn delete_google_calendar_event<R: Runtime>(
         .await
         .map(|latest| configured_status(&app, latest))
         .unwrap_or_else(|_| configured_status(&app, deleted.status)))
+}
+
+#[tauri::command]
+pub async fn keep_google_calendar_version<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+    draft: ConflictResolutionDraft,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    validated_backend_id(&draft.command_id)?;
+    validated_backend_id(&draft.calendar_block_id)?;
+    if draft.expected_block_revision < 1 {
+        return Err(GoogleCommandError::new("local_state_invalid"));
+    }
+    let resolved = keep_google_write_version(
+        &service,
+        &ConflictResolutionInput {
+            command_id: &draft.command_id,
+            calendar_block_id: &draft.calendar_block_id,
+            expected_block_revision: draft.expected_block_revision,
+        },
+    )
+    .await?;
+    let _persisted_intent = &resolved.intent.id;
+    Ok(local_status(&service)
+        .await
+        .map(|latest| configured_status(&app, latest))
+        .unwrap_or_else(|_| configured_status(&app, resolved.status)))
+}
+
+#[tauri::command]
+pub async fn apply_ion_calendar_changes<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ServiceState>,
+    google: State<'_, GoogleState>,
+    draft: ConflictResolutionDraft,
+) -> Result<CalendarStatus, GoogleCommandError> {
+    validated_backend_id(&draft.command_id)?;
+    validated_backend_id(&draft.calendar_block_id)?;
+    if draft.expected_block_revision < 1 {
+        return Err(GoogleCommandError::new("local_state_invalid"));
+    }
+    let resolved = apply_ion_write_changes(
+        &service,
+        &ConflictResolutionInput {
+            command_id: &draft.command_id,
+            calendar_block_id: &draft.calendar_block_id,
+            expected_block_revision: draft.expected_block_revision,
+        },
+    )
+    .await?;
+    let _persisted_intent = &resolved.intent.id;
+    let _ = dispatch_calendar_writes(&app, &service, &google, "direct_human").await;
+    Ok(local_status(&service)
+        .await
+        .map(|latest| configured_status(&app, latest))
+        .unwrap_or_else(|_| configured_status(&app, resolved.status)))
+}
+
+#[tauri::command]
+pub async fn review_google_calendar_differences(
+    service: State<'_, ServiceState>,
+    calendar_block_id: String,
+) -> Result<ReviewDifferences, GoogleCommandError> {
+    validated_backend_id(&calendar_block_id)?;
+    review_write_differences(
+        &service,
+        &ReviewDifferencesRequest {
+            calendar_block_id: &calendar_block_id,
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2726,6 +3305,7 @@ async fn record_create_failure(
     stage: &str,
     classification: ProviderWriteResultClass,
 ) -> Result<ProviderWriteIntentSummary, GoogleCommandError> {
+    let safe_reason = provider_write_safe_reason(stage, classification);
     record_provider_write_result(
         service,
         intent_id,
@@ -2733,10 +3313,21 @@ async fn record_create_failure(
             expected_state: "attempting",
             stage,
             result_class: classification.contract_name(),
-            safe_reason: classification.safe_reason(),
+            safe_reason,
         },
     )
     .await
+}
+
+fn provider_write_safe_reason(
+    stage: &str,
+    classification: ProviderWriteResultClass,
+) -> &'static str {
+    if stage == "instance_resolution" && classification == ProviderWriteResultClass::InvalidTarget {
+        "occurrence_resolution_rejected"
+    } else {
+        classification.safe_reason()
+    }
 }
 
 async fn dispatch_create_plan<R: Runtime>(
@@ -2892,12 +3483,9 @@ async fn dispatch_patch_plan<R: Runtime>(
     plan: &ProviderWritePlan,
     executor_provenance: &str,
 ) -> Result<(), GoogleCommandError> {
-    if plan.summary.operation != "patch"
-        || !matches!(plan.summary.state.as_str(), "ready" | "ambiguous")
-    {
+    if !patch_plan_is_dispatchable(plan) {
         return Err(GoogleCommandError::new("provider_write_invalid"));
     }
-    let patch_body = patch_provider_body(plan)?;
     let claimed = begin_provider_write_attempt(
         service,
         &plan.summary.id,
@@ -2922,6 +3510,114 @@ async fn dispatch_patch_plan<R: Runtime>(
         .iter()
         .find(|item| item.calendar.id == plan.calendar_id)
         .ok_or_else(|| GoogleCommandError::new("local_state_not_found"))?;
+    let access_token = if let Some(token) = google.cached_token(&account.account.id) {
+        Ok(token)
+    } else {
+        refreshed_write_access_token(client, config, google, account).await
+    };
+    let initial_stage = if plan.summary.recurrence_scope == "occurrence" {
+        "instance_resolution"
+    } else if plan.summary.state == "ambiguous" {
+        "identity_lookup"
+    } else {
+        "patch"
+    };
+    let mut access_token = match access_token {
+        Ok(token) => token,
+        Err(classification) => {
+            record_create_failure(service, &plan.summary.id, initial_stage, classification).await?;
+            return Ok(());
+        }
+    };
+    let fallback_timezone = calendar.calendar.timezone.as_deref().unwrap_or("UTC");
+    let mut resolved_plan = plan.clone();
+    let mut resolved_instance = None;
+    if plan.summary.recurrence_scope == "occurrence" {
+        let identity = plan
+            .base_values
+            .as_ref()
+            .and_then(|values| values.recurrence_identity.as_ref())
+            .ok_or_else(|| GoogleCommandError::new("provider_write_invalid"))?;
+        let mut resolution = execute_occurrence_resolution(
+            client,
+            CALENDAR_API,
+            &access_token,
+            &calendar.calendar.provider_calendar_id,
+            identity,
+            fallback_timezone,
+        )
+        .await;
+        if matches!(
+            resolution,
+            Err(ProviderWriteResultClass::ReauthenticationRequired)
+        ) {
+            google.forget_account(&account.account.id);
+            resolution = match refreshed_write_access_token(client, config, google, account).await {
+                Ok(refreshed) => {
+                    access_token = refreshed;
+                    execute_occurrence_resolution(
+                        client,
+                        CALENDAR_API,
+                        &access_token,
+                        &calendar.calendar.provider_calendar_id,
+                        identity,
+                        fallback_timezone,
+                    )
+                    .await
+                }
+                Err(classification) => Err(classification),
+            };
+        }
+        let (master, instance) = match resolution {
+            Ok(resolution) => resolution,
+            Err(classification) => {
+                record_create_failure(
+                    service,
+                    &plan.summary.id,
+                    "instance_resolution",
+                    classification,
+                )
+                .await?;
+                return Ok(());
+            }
+        };
+        resolved_plan = resolve_provider_occurrence(
+            service,
+            &plan.summary.id,
+            &ResolveProviderOccurrenceInput {
+                expected_state: "attempting",
+                master: &master,
+                instance: &instance,
+            },
+        )
+        .await?;
+        if resolved_plan.summary.state != "attempting" {
+            return Ok(());
+        }
+        resolved_instance = Some(instance);
+    }
+
+    let occurrence_already_cancelled = plan.summary.operation == "cancel_occurrence"
+        && resolved_instance
+            .as_ref()
+            .is_some_and(|event| event.status == "cancelled");
+    if plan.summary.state == "ambiguous" || occurrence_already_cancelled {
+        if let Some(instance) = resolved_instance.as_ref() {
+            reconcile_provider_patch(
+                service,
+                &plan.summary.id,
+                &ReconcileProviderPatchInput {
+                    expected_state: "attempting",
+                    resolution_kind: "identity_lookup",
+                    event: instance,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+    }
+
+    let patch_body = patch_provider_body(&resolved_plan)?;
     let method = if plan.summary.state == "ambiguous" {
         ProviderWriteMethod::Get
     } else {
@@ -2934,23 +3630,10 @@ async fn dispatch_patch_plan<R: Runtime>(
     };
     let body = (method == ProviderWriteMethod::Patch).then_some(&patch_body);
     let expected_etag = if method == ProviderWriteMethod::Patch {
-        plan.expected_provider_etag.as_deref()
+        resolved_plan.expected_provider_etag.as_deref()
     } else {
         None
     };
-    let access_token = if let Some(token) = google.cached_token(&account.account.id) {
-        Ok(token)
-    } else {
-        refreshed_write_access_token(client, config, google, account).await
-    };
-    let mut access_token = match access_token {
-        Ok(token) => token,
-        Err(classification) => {
-            record_create_failure(service, &plan.summary.id, stage, classification).await?;
-            return Ok(());
-        }
-    };
-    let fallback_timezone = calendar.calendar.timezone.as_deref().unwrap_or("UTC");
     let mut outcome = execute_provider_create_call(
         client,
         &ProviderCreateCall {
@@ -2958,7 +3641,7 @@ async fn dispatch_patch_plan<R: Runtime>(
             method,
             access_token: &access_token,
             provider_calendar_id: &calendar.calendar.provider_calendar_id,
-            provider_event_id: &plan.provider_event_id,
+            provider_event_id: &resolved_plan.provider_event_id,
             expected_etag,
             body,
             fallback_timezone,
@@ -2980,7 +3663,7 @@ async fn dispatch_patch_plan<R: Runtime>(
                         method,
                         access_token: &access_token,
                         provider_calendar_id: &calendar.calendar.provider_calendar_id,
-                        provider_event_id: &plan.provider_event_id,
+                        provider_event_id: &resolved_plan.provider_event_id,
                         expected_etag,
                         body,
                         fallback_timezone,
@@ -3029,6 +3712,17 @@ async fn dispatch_patch_plan<R: Runtime>(
     Ok(())
 }
 
+fn patch_plan_is_dispatchable(plan: &ProviderWritePlan) -> bool {
+    let operation_scope_is_valid = matches!(
+        (
+            plan.summary.operation.as_str(),
+            plan.summary.recurrence_scope.as_str(),
+        ),
+        ("patch", "single" | "occurrence" | "series") | ("cancel_occurrence", "occurrence")
+    );
+    operation_scope_is_valid && matches!(plan.summary.state.as_str(), "ready" | "ambiguous")
+}
+
 async fn dispatch_delete_plan<R: Runtime>(
     app: &AppHandle<R>,
     service: &ServiceState,
@@ -3038,8 +3732,13 @@ async fn dispatch_delete_plan<R: Runtime>(
     plan: &ProviderWritePlan,
     executor_provenance: &str,
 ) -> Result<(), GoogleCommandError> {
-    if plan.summary.operation != "delete_event"
-        || plan.summary.recurrence_scope != "single"
+    if !matches!(
+        plan.summary.operation.as_str(),
+        "delete_event" | "delete_series"
+    ) || (plan.summary.operation == "delete_event")
+        != (plan.summary.recurrence_scope == "single")
+        || (plan.summary.operation == "delete_series")
+            != (plan.summary.recurrence_scope == "series")
         || plan.summary.changed_fields != vec!["status".to_owned()]
         || plan
             .expected_provider_etag
@@ -3207,65 +3906,147 @@ async fn dispatch_delete_plan<R: Runtime>(
     Ok(())
 }
 
+/// The longest Ion will hold a self-scheduled wake, so an implausible backoff
+/// can never pin a task open indefinitely.
+const MAX_RETRY_WAKE: Duration = Duration::from_secs(300);
+
+/// One bounded, self-cancelling wake for a retry that is waiting on the clock.
+///
+/// This is deliberately not a poller: it fires once, only when a durable write
+/// is actually waiting, and the dispatch it triggers schedules the next one if
+/// anything still remains. A healthy Calendar schedules nothing at all.
+fn schedule_retry_wake<R: Runtime>(app: &AppHandle<R>, next_retry_in_seconds: Option<u64>) {
+    let Some(seconds) = next_retry_in_seconds else {
+        return;
+    };
+    let delay = Duration::from_secs(seconds).min(MAX_RETRY_WAKE);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(delay).await;
+        let service = app.state::<ServiceState>();
+        let google = app.state::<GoogleState>();
+        let _ = dispatch_calendar_writes(&app, &service, &google, "recovery").await;
+        // The projection moved without the user asking, so tell the renderer
+        // rather than leaving it showing a state Ion has already passed.
+        if let Ok(status) = local_status(&service).await {
+            let _ = app.emit(CALENDAR_STATUS_EVENT, configured_status(&app, status));
+        }
+    });
+}
+
 async fn dispatch_calendar_writes<R: Runtime>(
     app: &AppHandle<R>,
     service: &ServiceState,
     google: &GoogleState,
     executor_provenance: &str,
 ) -> Result<(), GoogleCommandError> {
-    let _guard = google.begin_sync()?;
-    recover_provider_write_intents(service, &RecoverProviderWriteIntentsInput { limit: 100 })
-        .await?;
-    let plans =
-        ready_provider_write_intents(service, &ReadyProviderWriteIntentsInput { limit: 10 })
+    // Foreground/focus sync and direct-human writes share the Google boundary.
+    // A durable ready write must wait for that bounded operation rather than
+    // losing a `busy` race and remaining unattempted until a later launch.
+    let _guard = google.wait_for_write_slot().await?;
+    let recovery =
+        recover_provider_write_intents(service, &RecoverProviderWriteIntentsInput { limit: 100 })
             .await?;
+    // A write left waiting on a retry backoff must resume on its own. Without
+    // this the write sits until some unrelated user action triggers another
+    // dispatch, which is what makes a manual sync feel required.
+    schedule_retry_wake(app, recovery.next_retry_in_seconds);
+    let mut plans = ready_provider_write_intents(
+        service,
+        &ReadyProviderWriteIntentsInput {
+            limit: MAX_PROVIDER_WRITES_PER_TRIGGER,
+        },
+    )
+    .await?;
     if plans.is_empty() {
         return Ok(());
     }
     let config = load_oauth_config(&oauth_config_path(app)?)?;
     let client = google_client()?;
-    for plan in plans {
-        match plan.summary.operation.as_str() {
-            "create" => {
-                dispatch_create_plan(
-                    app,
-                    service,
-                    google,
-                    &client,
-                    &config,
-                    &plan,
-                    executor_provenance,
-                )
-                .await?;
+    let mut dispatched = 0;
+    // One durable write that cannot be dispatched must not strand every other
+    // ready write behind it. Provider outcomes are already recorded onto their
+    // own intent by the dispatch helpers, so an Err here is an unexpected local
+    // condition: skip that plan for the rest of this drain, keep draining the
+    // others, and surface the first error to the caller afterwards. `attempted`
+    // also guarantees termination, because a plan whose state did not change
+    // would otherwise be re-selected by the next ready query forever.
+    let mut attempted: HashSet<String> = HashSet::new();
+    let mut first_error: Option<GoogleCommandError> = None;
+    loop {
+        let mut progressed = false;
+        for plan in plans {
+            if !attempted.insert(plan.summary.id.clone()) {
+                continue;
             }
-            "patch" => {
-                dispatch_patch_plan(
-                    app,
-                    service,
-                    google,
-                    &client,
-                    &config,
-                    &plan,
-                    executor_provenance,
-                )
-                .await?;
+            progressed = true;
+            let outcome = match plan.summary.operation.as_str() {
+                "create" => {
+                    dispatch_create_plan(
+                        app,
+                        service,
+                        google,
+                        &client,
+                        &config,
+                        &plan,
+                        executor_provenance,
+                    )
+                    .await
+                }
+                "patch" | "cancel_occurrence" => {
+                    dispatch_patch_plan(
+                        app,
+                        service,
+                        google,
+                        &client,
+                        &config,
+                        &plan,
+                        executor_provenance,
+                    )
+                    .await
+                }
+                "delete_event" | "delete_series" => {
+                    dispatch_delete_plan(
+                        app,
+                        service,
+                        google,
+                        &client,
+                        &config,
+                        &plan,
+                        executor_provenance,
+                    )
+                    .await
+                }
+                _ => Err(GoogleCommandError::new("provider_write_invalid")),
+            };
+            if let Err(error) = outcome {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+                continue;
             }
-            "delete_event" => {
-                dispatch_delete_plan(
-                    app,
-                    service,
-                    google,
-                    &client,
-                    &config,
-                    &plan,
-                    executor_provenance,
-                )
-                .await?;
+            dispatched += 1;
+            if dispatched == MAX_PROVIDER_WRITES_PER_TRIGGER {
+                return first_error.map_or(Ok(()), Err);
             }
-            _ => return Err(GoogleCommandError::new("provider_write_invalid")),
+        }
+        if !progressed {
+            return first_error.map_or(Ok(()), Err);
+        }
+        // Python deliberately selects at most one ready intent per account.
+        // Re-query after each serial pass so multiple durable writes for one
+        // account do not require an unrelated future UI action to resume.
+        plans = ready_provider_write_intents(
+            service,
+            &ReadyProviderWriteIntentsInput {
+                limit: MAX_PROVIDER_WRITES_PER_TRIGGER - dispatched,
+            },
+        )
+        .await?;
+        if plans.is_empty() {
+            return first_error.map_or(Ok(()), Err);
         }
     }
-    Ok(())
 }
 
 async fn synchronize<R: Runtime>(
@@ -3402,6 +4183,11 @@ mod tests {
     };
 
     use super::*;
+
+    /// The loopback seam tests point `product_request` at a synthetic local
+    /// API by overriding a process-wide environment variable, so they must not
+    /// run concurrently with each other under the default parallel harness.
+    static SEAM_ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[derive(Default)]
     struct FakeTokenStore(Mutex<HashMap<String, String>>);
@@ -3768,6 +4554,7 @@ maxResults=2500&showDeleted=true&singleEvents=false"
                 end: None,
                 recurrence: None,
                 status: None,
+                recurrence_identity: None,
             }),
             desired_values: Some(desired),
             source_block_revision: 1,
@@ -3917,6 +4704,7 @@ maxResults=2500&showDeleted=true&singleEvents=false"
                 end: None,
                 recurrence: None,
                 status: None,
+                recurrence_identity: None,
             },
         );
         let title_body = patch_provider_body(&title_plan).unwrap();
@@ -3943,6 +4731,7 @@ maxResults=2500&showDeleted=true&singleEvents=false"
                 }),
                 recurrence: None,
                 status: None,
+                recurrence_identity: None,
             },
         );
         let time_json = serde_json::to_string(&patch_provider_body(&time_plan).unwrap()).unwrap();
@@ -3964,6 +4753,158 @@ maxResults=2500&showDeleted=true&singleEvents=false"
         let mut wildcard = title_plan;
         wildcard.expected_provider_etag = Some("*".into());
         assert!(patch_provider_body(&wildcard).is_err());
+    }
+
+    #[test]
+    fn recurrence_write_bodies_are_bounded_by_scope_and_operation() {
+        let mut create = synthetic_patch_plan(
+            vec![
+                "title".into(),
+                "transparency".into(),
+                "temporal".into(),
+                "recurrence".into(),
+            ],
+            ProviderWriteValues {
+                schema_version: 1,
+                title: Some("Synthetic recurring event".into()),
+                description: None,
+                location: None,
+                transparency: Some("opaque".into()),
+                start: Some(ProviderDateTime {
+                    date: None,
+                    date_time: Some("2030-01-02T09:00:00-08:00".into()),
+                    timezone: Some("America/Los_Angeles".into()),
+                }),
+                end: Some(ProviderDateTime {
+                    date: None,
+                    date_time: Some("2030-01-02T10:00:00-08:00".into()),
+                    timezone: Some("America/Los_Angeles".into()),
+                }),
+                recurrence: Some(vec!["RRULE:FREQ=WEEKLY".into()]),
+                status: None,
+                recurrence_identity: None,
+            },
+        );
+        create.summary.operation = "create".into();
+        create.summary.recurrence_scope = "series".into();
+        create.expected_provider_etag = None;
+        create.base_values = None;
+        let create_json = serde_json::to_string(&create_provider_body(&create).unwrap()).unwrap();
+        assert!(create_json.contains(r#""recurrence":["RRULE:FREQ=WEEKLY"]"#));
+
+        let mut series = synthetic_patch_plan(
+            vec!["recurrence".into()],
+            ProviderWriteValues {
+                schema_version: 1,
+                title: None,
+                description: None,
+                location: None,
+                transparency: None,
+                start: None,
+                end: None,
+                recurrence: Some(vec!["RRULE:FREQ=WEEKLY".into()]),
+                status: None,
+                recurrence_identity: None,
+            },
+        );
+        series.summary.recurrence_scope = "series".into();
+        assert_eq!(
+            serde_json::to_string(&patch_provider_body(&series).unwrap()).unwrap(),
+            r#"{"recurrence":["RRULE:FREQ=WEEKLY"]}"#
+        );
+        series.desired_values.as_mut().unwrap().recurrence =
+            Some(vec!["RRULE:FREQ=WEEKLY;INTERVAL=2".into()]);
+        assert!(patch_provider_body(&series).is_err());
+
+        let mut occurrence_cancel = synthetic_patch_plan(
+            vec!["status".into()],
+            ProviderWriteValues {
+                schema_version: 1,
+                title: None,
+                description: None,
+                location: None,
+                transparency: None,
+                start: None,
+                end: None,
+                recurrence: None,
+                status: Some("cancelled".into()),
+                recurrence_identity: None,
+            },
+        );
+        occurrence_cancel.summary.operation = "cancel_occurrence".into();
+        occurrence_cancel.summary.recurrence_scope = "occurrence".into();
+        assert_eq!(
+            serde_json::to_string(&patch_provider_body(&occurrence_cancel).unwrap()).unwrap(),
+            r#"{"status":"cancelled"}"#
+        );
+        occurrence_cancel.summary.recurrence_scope = "series".into();
+        assert!(patch_provider_body(&occurrence_cancel).is_err());
+    }
+
+    #[test]
+    fn dispatch_guard_accepts_occurrence_patch_and_rejects_invalid_cancel_scope() {
+        let mut occurrence_patch = synthetic_patch_plan(
+            vec!["temporal".into()],
+            ProviderWriteValues {
+                schema_version: 1,
+                title: None,
+                description: None,
+                location: None,
+                transparency: None,
+                start: Some(ProviderDateTime {
+                    date: None,
+                    date_time: Some("2030-01-09T13:15:00-08:00".into()),
+                    timezone: Some("America/Los_Angeles".into()),
+                }),
+                end: Some(ProviderDateTime {
+                    date: None,
+                    date_time: Some("2030-01-09T14:15:00-08:00".into()),
+                    timezone: Some("America/Los_Angeles".into()),
+                }),
+                recurrence: None,
+                status: None,
+                recurrence_identity: None,
+            },
+        );
+        occurrence_patch.summary.recurrence_scope = "occurrence".into();
+        assert!(patch_plan_is_dispatchable(&occurrence_patch));
+
+        occurrence_patch.summary.operation = "cancel_occurrence".into();
+        assert!(patch_plan_is_dispatchable(&occurrence_patch));
+        occurrence_patch.summary.recurrence_scope = "series".into();
+        assert!(!patch_plan_is_dispatchable(&occurrence_patch));
+    }
+
+    #[test]
+    fn occurrence_resolution_request_is_master_scoped_and_original_start_bounded() {
+        let request = provider_instances_request_at(
+            &Client::new(),
+            "synthetic-access-token",
+            CALENDAR_API,
+            "primary",
+            "synthetic-master",
+            &ProviderDateTime {
+                date: None,
+                date_time: Some("2030-01-08T09:00:00-08:00".into()),
+                timezone: Some("America/Los_Angeles".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(request.method(), reqwest::Method::GET);
+        assert!(request
+            .url()
+            .path()
+            .ends_with("/synthetic-master/instances"));
+        let query: std::collections::HashMap<_, _> =
+            request.url().query_pairs().into_owned().collect();
+        assert_eq!(
+            query.get("originalStart").map(String::as_str),
+            Some("2030-01-08T09:00:00-08:00")
+        );
+        assert_eq!(query.get("showDeleted").map(String::as_str), Some("true"));
+        assert_eq!(query.get("maxResults").map(String::as_str), Some("2"));
+        assert!(request.body().is_none());
+        assert!(!request.url().as_str().contains("synthetic-access-token"));
     }
 
     #[test]
@@ -4053,6 +4994,17 @@ maxResults=2500&showDeleted=true&singleEvents=false"
         assert_eq!(
             classify_write_transport_failure(ProviderWriteMethod::Delete),
             ProviderWriteResultClass::RetryableTransport
+        );
+        assert_eq!(
+            provider_write_safe_reason(
+                "instance_resolution",
+                ProviderWriteResultClass::InvalidTarget,
+            ),
+            "occurrence_resolution_rejected"
+        );
+        assert_eq!(
+            provider_write_safe_reason("patch", ProviderWriteResultClass::InvalidTarget),
+            "provider_rejected_target"
         );
     }
 
@@ -4229,6 +5181,296 @@ maxResults=2500&showDeleted=true&singleEvents=false"
             GoogleCommandError::from(ProductError::new(ProductErrorCode::Unavailable)).code,
             "local_service_unavailable"
         );
+        let mut write_pending = ProductError::new(ProductErrorCode::Validation);
+        write_pending.reason = Some("write_pending".into());
+        assert_eq!(
+            GoogleCommandError::from(write_pending).code,
+            "write_pending"
+        );
+        for reason in [
+            "timezone_change_unsupported",
+            "recurrence_identity_unresolved",
+            "no_change_requested",
+        ] {
+            let mut safe = ProductError::new(ProductErrorCode::Validation);
+            safe.reason = Some(reason.into());
+            assert_eq!(
+                GoogleCommandError::from(safe).code,
+                reason,
+                "a known safe backend reason must reach the renderer verbatim, not collapse to local_state_invalid",
+            );
+        }
+        let mut unsafe_detail = ProductError::new(ProductErrorCode::Validation);
+        unsafe_detail.reason = Some("private backend detail".into());
+        assert_eq!(
+            GoogleCommandError::from(unsafe_detail).code,
+            "local_state_invalid"
+        );
+    }
+
+    #[test]
+    fn reviewed_occurrence_write_waits_for_sync_contention_then_remains_dispatchable() {
+        tauri::async_runtime::block_on(async {
+            let google = GoogleState::default();
+            let foreground_guard = google.begin_sync().unwrap();
+            let waiting = google.wait_for_write_slot();
+            tokio::pin!(waiting);
+
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), &mut waiting)
+                    .await
+                    .is_err()
+            );
+            drop(foreground_guard);
+
+            let write_guard = tokio::time::timeout(Duration::from_millis(250), waiting)
+                .await
+                .expect("durable write should acquire the released Google slot")
+                .expect("write slot should resolve Ok once the gate is free");
+            assert_eq!(google.begin_sync().err().unwrap().code, "busy");
+            drop(write_guard);
+            assert!(google.begin_sync().is_ok());
+
+            let mut occurrence_patch = synthetic_patch_plan(
+                vec!["temporal".into()],
+                ProviderWriteValues {
+                    schema_version: 1,
+                    title: None,
+                    description: None,
+                    location: None,
+                    transparency: None,
+                    start: None,
+                    end: None,
+                    recurrence: None,
+                    status: None,
+                    recurrence_identity: None,
+                },
+            );
+            occurrence_patch.summary.recurrence_scope = "occurrence".into();
+            assert!(patch_plan_is_dispatchable(&occurrence_patch));
+        });
+    }
+
+    #[test]
+    fn write_slot_wait_is_bounded_and_leaves_the_gate_recoverable() {
+        // Audit finding: wait_for_write_slot previously polled begin_sync
+        // forever with no upper bound, so a stuck holder would hang the
+        // calling Tauri command indefinitely. It must now fail safely after
+        // a bounded wait, and -- critically -- must not itself corrupt the
+        // gate: once the real holder eventually releases, a later wait must
+        // still succeed normally.
+        tauri::async_runtime::block_on(async {
+            let google = GoogleState::default();
+            let stuck_guard = google.begin_sync().unwrap();
+
+            let timed_out = google
+                .wait_for_write_slot_bounded(Duration::from_millis(20))
+                .await;
+            assert_eq!(timed_out.err().unwrap().code, "write_slot_unavailable");
+            // The gate itself is untouched by the failed waiter: the
+            // original holder still exclusively owns it.
+            assert_eq!(google.begin_sync().err().unwrap().code, "busy");
+
+            drop(stuck_guard);
+            // Once genuinely free, a fresh bounded wait succeeds immediately
+            // -- the earlier timeout left the gate fully recoverable.
+            let recovered = google
+                .wait_for_write_slot_bounded(Duration::from_millis(250))
+                .await
+                .expect("gate should be acquirable once released");
+            drop(recovered);
+            assert!(google.begin_sync().is_ok());
+        });
+    }
+
+    #[test]
+    fn keep_google_version_round_trips_through_the_local_api_boundary() {
+        // Cross-process seam test: exercises the real `product_request` HTTP
+        // client against a genuine bound loopback listener standing in for
+        // the Python local API, rather than testing Rust request shape and
+        // Python route behavior only in isolation from each other.
+        let _env_guard = SEAM_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tauri::async_runtime::block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (sent, received) = mpsc::channel();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut buffer = [0_u8; 4096];
+                let read = stream.read(&mut buffer).unwrap();
+                sent.send(String::from_utf8_lossy(&buffer[..read]).into_owned())
+                    .unwrap();
+                let body = serde_json::json!({
+                    "intent": {
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "calendar_block_id": "22222222-2222-4222-8222-222222222222",
+                        "operation": "patch",
+                        "recurrence_scope": "single",
+                        "changed_fields": ["title"],
+                        "state": "cancelled",
+                        "attempt_count": 0,
+                        "next_attempt_at": null,
+                        "failure_class": null,
+                        "failure_reason": "conflict_resolved_keep_google",
+                        "created_at": "2030-01-01T00:00:00Z",
+                        "updated_at": "2030-01-01T00:00:00Z",
+                        "resolved_at": "2030-01-01T00:00:00Z",
+                        "provenance": "direct_human"
+                    },
+                    "status": {
+                        "configured": true,
+                        "configuration_path": "/synthetic/google-oauth.json",
+                        "accounts": [],
+                        "calendars": [],
+                        "blocks": []
+                    }
+                })
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            });
+
+            let previous_port = std::env::var("ION_API_PORT").ok();
+            std::env::set_var("ION_API_PORT", port.to_string());
+            let service = ServiceState::default();
+            let result = keep_google_write_version(
+                &service,
+                &ConflictResolutionInput {
+                    command_id: "33333333-3333-4333-8333-333333333333",
+                    calendar_block_id: "22222222-2222-4222-8222-222222222222",
+                    expected_block_revision: 1,
+                },
+            )
+            .await;
+            match previous_port {
+                Some(value) => std::env::set_var("ION_API_PORT", value),
+                None => std::env::remove_var("ION_API_PORT"),
+            }
+
+            let request = received.recv_timeout(Duration::from_secs(2)).unwrap();
+            server.join().unwrap();
+
+            assert!(request.starts_with(
+                "POST /v1/calendar/internal/write-intents/keep-google-version HTTP/1.1"
+            ));
+            assert!(request.contains("\"command_id\":\"33333333-3333-4333-8333-333333333333\""));
+            assert!(request.contains("\"expected_block_revision\":1"));
+
+            let output = result.expect("round trip through the synthetic local API should succeed");
+            assert_eq!(output.intent.state, "cancelled");
+            assert_eq!(
+                output.intent.failure_reason.as_deref(),
+                Some("conflict_resolved_keep_google")
+            );
+        });
+    }
+
+    #[test]
+    fn blocked_conflict_resolution_keeps_its_safe_reason_across_the_local_seam() {
+        // Cross-process seam: a *blocked* resolution must survive the real
+        // HTTP boundary with its safe reason intact. Testing Rust's translation
+        // table and Python's allowlist only in isolation cannot prove that the
+        // reason actually reaches the renderer through a live 422 response.
+        let _env_guard = SEAM_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tauri::async_runtime::block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer).unwrap();
+                let body = serde_json::json!({
+                    "detail": {
+                        "code": "validation",
+                        "blockers": [],
+                        "reason": "no_conflict_to_resolve"
+                    }
+                })
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 422 Unprocessable Entity\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            });
+
+            let previous_port = std::env::var("ION_API_PORT").ok();
+            std::env::set_var("ION_API_PORT", port.to_string());
+            let service = ServiceState::default();
+            let result = keep_google_write_version(
+                &service,
+                &ConflictResolutionInput {
+                    command_id: "33333333-3333-4333-8333-333333333333",
+                    calendar_block_id: "22222222-2222-4222-8222-222222222222",
+                    expected_block_revision: 1,
+                },
+            )
+            .await;
+            match previous_port {
+                Some(value) => std::env::set_var("ION_API_PORT", value),
+                None => std::env::remove_var("ION_API_PORT"),
+            }
+            server.join().unwrap();
+
+            // The renderer receives the specific safe reason, not a generic
+            // "local_state_invalid" fallback.
+            assert_eq!(result.err().unwrap().code, "no_conflict_to_resolve");
+        });
+    }
+
+    #[test]
+    fn recurrence_bodies_admit_only_presets_plus_generated_termination() {
+        // Owner-authorized contract: the five bounded preset families, plus a
+        // domain-generated UNTIL used only to terminate an old master during a
+        // `this and following` split.
+        for preset in RECURRENCE_PRESET_RULES {
+            assert!(bounded_recurrence_rules(&[preset.into()]));
+            assert!(bounded_recurrence_rules(&[format!(
+                "{preset};UNTIL=20300114T170000Z"
+            )]));
+            assert!(bounded_recurrence_rules(&[format!(
+                "{preset};UNTIL=20300114"
+            )]));
+        }
+        // Everything outside that contract stays rejected, including anything a
+        // renderer might try to smuggle through as "recurrence".
+        for forbidden in [
+            "RRULE:FREQ=HOURLY",
+            "RRULE:FREQ=WEEKLY;COUNT=5",
+            "RRULE:FREQ=WEEKLY;BYDAY=TU,TH",
+            "RRULE:FREQ=WEEKLY;UNTIL=whenever",
+            "RRULE:FREQ=WEEKLY;UNTIL=20300114T170000",
+            "RRULE:FREQ=WEEKLY;UNTIL=2030011",
+            "RRULE:FREQ=WEEKLY;INTERVAL=2",
+            "RRULE:FREQ=WEEKLY;UNTIL=20300114T170000Z;COUNT=2",
+            "EXDATE:20300114T170000Z",
+            "",
+        ] {
+            assert!(
+                !bounded_recurrence_rules(&[forbidden.into()]),
+                "unexpectedly accepted {forbidden}"
+            );
+        }
+        // Still exactly one rule per event.
+        assert!(!bounded_recurrence_rules(&[
+            "RRULE:FREQ=WEEKLY".into(),
+            "RRULE:FREQ=DAILY".into()
+        ]));
     }
 
     #[test]
@@ -4311,5 +5553,98 @@ maxResults=2500&showDeleted=true&singleEvents=false"
             "incremental",
             &ProviderFailure::Unavailable
         ));
+    }
+
+    fn edit_draft(scope: &str, identity: bool) -> EditCalendarEventDraft {
+        serde_json::from_value(serde_json::json!({
+            "command_id": "11111111-1111-4111-8111-111111111111",
+            "calendar_block_id": "22222222-2222-4222-8222-222222222222",
+            "edit_kind": "edit",
+            "expected_block_revision": 1,
+            "title": "Synthetic renamed event",
+            "start_date": null,
+            "end_date": null,
+            "start_time": null,
+            "end_time": null,
+            "timezone": null,
+            "recurrence_scope": scope,
+            "occurrence_original_start": identity.then(|| serde_json::json!({
+                "date": null,
+                "date_time": "2030-01-02T09:00:00Z",
+                "timezone": "UTC",
+            })),
+            "recurrence": null,
+            "recurrence_risk_confirmed": false,
+            "locked_confirmed": false,
+        }))
+        .unwrap()
+    }
+
+    /// Regression guard for a scope the domain supported but this seam silently
+    /// refused: the renderer offered `this and following`, the command rejected
+    /// it as `local_state_invalid`, and the user saw only a generic "couldn't be
+    /// saved". Every scope the chooser can offer must survive this check.
+    #[test]
+    fn every_offered_recurrence_scope_survives_the_edit_seam() {
+        for (scope, identity) in [
+            ("single", false),
+            ("occurrence", true),
+            ("series", false),
+            ("this_and_following", true),
+        ] {
+            assert!(
+                edit_draft_is_well_formed(&edit_draft(scope, identity)),
+                "{scope} must be accepted at the command seam"
+            );
+            // Occurrence identity is not optional: it is what makes the target
+            // immutable across a move, so the mismatched shape stays refused.
+            assert!(
+                !edit_draft_is_well_formed(&edit_draft(scope, !identity)),
+                "{scope} must require exactly its own occurrence identity"
+            );
+        }
+        assert!(!edit_draft_is_well_formed(&edit_draft("everything", false)));
+    }
+
+    fn delete_draft(scope: &str, identity: bool, confirmed: bool) -> DeleteCalendarEventDraft {
+        serde_json::from_value(serde_json::json!({
+            "command_id": "11111111-1111-4111-8111-111111111111",
+            "calendar_block_id": "22222222-2222-4222-8222-222222222222",
+            "expected_block_revision": 1,
+            "recurrence_scope": scope,
+            "occurrence_original_start": identity.then(|| serde_json::json!({
+                "date": null,
+                "date_time": "2030-01-02T09:00:00Z",
+                "timezone": "UTC",
+            })),
+            "series_confirmed": confirmed,
+            "locked_confirmed": false,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn deleting_future_occurrences_requires_its_explicit_confirmation() {
+        // Both scopes remove confirmed occurrences, so neither is accepted
+        // without the destructive confirmation.
+        for (scope, identity) in [("series", false), ("this_and_following", true)] {
+            assert!(delete_draft_is_well_formed(&delete_draft(
+                scope, identity, true
+            )));
+            assert!(!delete_draft_is_well_formed(&delete_draft(
+                scope, identity, false
+            )));
+        }
+        // Removing one occurrence is not a series deletion and must not claim to be.
+        assert!(delete_draft_is_well_formed(&delete_draft(
+            "occurrence",
+            true,
+            false
+        )));
+        assert!(!delete_draft_is_well_formed(&delete_draft(
+            "occurrence",
+            true,
+            true
+        )));
     }
 }

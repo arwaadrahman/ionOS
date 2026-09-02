@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, date, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import Engine, insert, select, update
+from sqlalchemy import Engine, case, insert, select, update
 
 from ion_api.calendar_contracts import (
     WRITE_GOOGLE_SCOPES,
@@ -25,6 +25,7 @@ from ion_api.calendar_contracts import (
     ProviderDeleteCapabilityOutput,
     ProviderEventInput,
     ProviderWriteCapabilityOutput,
+    ProviderWriteOverlayOutput,
     SelectionInput,
     SyncBeginInput,
     SyncCompleteInput,
@@ -44,6 +45,28 @@ from ion_api.schema import (
 
 logger = logging.getLogger("ion")
 UNTITLED_GOOGLE_CALENDAR = "Untitled Google Calendar"
+# Mirrors calendar_writes.NONTERMINAL_INTENT_STATES. Duplicated (not imported)
+# to avoid a circular import: calendar_writes imports CalendarService from
+# this module. Keep in sync with that module's definition.
+NONTERMINAL_INTENT_STATES = (
+    "queued",
+    "ready",
+    "attempting",
+    "retry_wait",
+    "reauth_required",
+    "ambiguous",
+)
+RECURRENCE_PRESETS = {
+    ("RRULE:FREQ=DAILY",): "daily",
+    ("RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",): "weekdays",
+    ("RRULE:FREQ=WEEKLY",): "weekly",
+    ("RRULE:FREQ=MONTHLY",): "monthly",
+    ("RRULE:FREQ=YEARLY",): "yearly",
+}
+
+
+def _recurrence_preset(rules: list[str]) -> str:
+    return "none" if not rules else RECURRENCE_PRESETS.get(tuple(rules), "custom")
 
 
 class CalendarNotFoundError(LookupError):
@@ -92,6 +115,37 @@ def _audit(
     )
 
 
+# Every outcome a person still has to act on maps to exactly one specific
+# condition. There is no generic member on purpose: the old model let any
+# unclassified provider disagreement become a "review this" decision, which is
+# how ordinary drift kept reaching the owner. An outcome that matches nothing
+# here is not a decision -- it is Ion's problem to finish.
+_RECOVERY_KINDS: dict[str, str] = {
+    "automatic_rebase_exhausted": "retry_available",
+    "provider_event_absent_during_refresh": "provider_deleted",
+    "provider_deleted": "provider_deleted",
+    "provider_target_changed": "recurrence_target_changed",
+    "recurrence_master_changed": "recurrence_target_changed",
+    "occurrence_identity_changed": "recurrence_target_changed",
+    "deterministic_id_collision": "duplicate_identity",
+}
+_RECOVERY_CLASSES: dict[str, str] = {
+    "provider_not_found": "provider_deleted",
+    "reauthentication_required": "reauthentication_required",
+    "terminal_provider_rejection": "provider_rejected",
+    "invalid_target": "provider_rejected",
+}
+
+
+def _recovery_kind(write_state, failure_class, failure_reason):
+    """The specific condition blocking this write, or None if Ion owns it."""
+    if write_state not in ("conflict", "failed"):
+        return None
+    if failure_reason in _RECOVERY_KINDS:
+        return _RECOVERY_KINDS[failure_reason]
+    return _RECOVERY_CLASSES.get(failure_class)
+
+
 def _write_conflict_audit(
     connection, row, occurred_at: str, *, reason: str, reason_class: str
 ) -> None:
@@ -127,22 +181,30 @@ def _event_matches_write_intent(row, event: ProviderEventInput) -> bool:
         expected_start = desired.get("start", {})
         expected_end = desired.get("end", {})
         if event.start.date is not None:
-            return event.start.date == expected_start.get(
-                "date"
-            ) and event.end.date == expected_end.get("date")
-        try:
-            actual_start = datetime.fromisoformat(event.start.date_time)
-            actual_end = datetime.fromisoformat(event.end.date_time)
-            desired_start = datetime.fromisoformat(expected_start["date_time"])
-            desired_end = datetime.fromisoformat(expected_end["date_time"])
-        except (KeyError, TypeError, ValueError):
-            return False
-        return (
-            actual_start == desired_start
-            and actual_end == desired_end
-            and event.start.timezone == expected_start.get("timezone")
-            and event.end.timezone == expected_end.get("timezone")
-        )
+            if not (
+                event.start.date == expected_start.get("date")
+                and event.end.date == expected_end.get("date")
+            ):
+                return False
+        else:
+            try:
+                actual_start = datetime.fromisoformat(event.start.date_time)
+                actual_end = datetime.fromisoformat(event.end.date_time)
+                desired_start = datetime.fromisoformat(expected_start["date_time"])
+                desired_end = datetime.fromisoformat(expected_end["date_time"])
+            except (KeyError, TypeError, ValueError):
+                return False
+            if not (
+                actual_start == desired_start
+                and actual_end == desired_end
+                and event.start.timezone == expected_start.get("timezone")
+                and event.end.timezone == expected_end.get("timezone")
+            ):
+                return False
+    if "recurrence" in changed and event.recurrence != desired.get("recurrence"):
+        return False
+    if "status" in changed and event.status != desired.get("status"):
+        return False
     return True
 
 
@@ -440,11 +502,18 @@ class CalendarService:
                 )
             ).all()
             accounts_by_id = {row.id: row for row in account_rows}
+            canonical_write_block_id = case(
+                (
+                    calendar_blocks.c.recurrence_kind == "exception",
+                    calendar_blocks.c.recurrence_master_block_id,
+                ),
+                else_=calendar_blocks.c.id,
+            )
             latest_write_state = (
                 select(calendar_provider_write_intents.c.state)
                 .where(
                     calendar_provider_write_intents.c.calendar_block_id
-                    == calendar_blocks.c.id
+                    == canonical_write_block_id
                 )
                 .order_by(calendar_provider_write_intents.c.sequence.desc())
                 .limit(1)
@@ -455,7 +524,29 @@ class CalendarService:
                 select(calendar_provider_write_intents.c.desired_values_json)
                 .where(
                     calendar_provider_write_intents.c.calendar_block_id
-                    == calendar_blocks.c.id
+                    == canonical_write_block_id
+                )
+                .order_by(calendar_provider_write_intents.c.sequence.desc())
+                .limit(1)
+                .correlate(calendar_blocks)
+                .scalar_subquery()
+            )
+            latest_write_base_values = (
+                select(calendar_provider_write_intents.c.base_values_json)
+                .where(
+                    calendar_provider_write_intents.c.calendar_block_id
+                    == canonical_write_block_id
+                )
+                .order_by(calendar_provider_write_intents.c.sequence.desc())
+                .limit(1)
+                .correlate(calendar_blocks)
+                .scalar_subquery()
+            )
+            latest_write_recurrence_scope = (
+                select(calendar_provider_write_intents.c.recurrence_scope)
+                .where(
+                    calendar_provider_write_intents.c.calendar_block_id
+                    == canonical_write_block_id
                 )
                 .order_by(calendar_provider_write_intents.c.sequence.desc())
                 .limit(1)
@@ -466,7 +557,7 @@ class CalendarService:
                 select(calendar_provider_write_intents.c.operation)
                 .where(
                     calendar_provider_write_intents.c.calendar_block_id
-                    == calendar_blocks.c.id
+                    == canonical_write_block_id
                 )
                 .order_by(calendar_provider_write_intents.c.sequence.desc())
                 .limit(1)
@@ -477,7 +568,7 @@ class CalendarService:
                 select(calendar_provider_write_intents.c.attempt_count)
                 .where(
                     calendar_provider_write_intents.c.calendar_block_id
-                    == calendar_blocks.c.id
+                    == canonical_write_block_id
                 )
                 .order_by(calendar_provider_write_intents.c.sequence.desc())
                 .limit(1)
@@ -488,7 +579,29 @@ class CalendarService:
                 select(calendar_provider_write_intents.c.changed_fields_json)
                 .where(
                     calendar_provider_write_intents.c.calendar_block_id
-                    == calendar_blocks.c.id
+                    == canonical_write_block_id
+                )
+                .order_by(calendar_provider_write_intents.c.sequence.desc())
+                .limit(1)
+                .correlate(calendar_blocks)
+                .scalar_subquery()
+            )
+            latest_write_failure_class = (
+                select(calendar_provider_write_intents.c.failure_class)
+                .where(
+                    calendar_provider_write_intents.c.calendar_block_id
+                    == canonical_write_block_id
+                )
+                .order_by(calendar_provider_write_intents.c.sequence.desc())
+                .limit(1)
+                .correlate(calendar_blocks)
+                .scalar_subquery()
+            )
+            latest_write_failure_reason = (
+                select(calendar_provider_write_intents.c.failure_reason)
+                .where(
+                    calendar_provider_write_intents.c.calendar_block_id
+                    == canonical_write_block_id
                 )
                 .order_by(calendar_provider_write_intents.c.sequence.desc())
                 .limit(1)
@@ -502,7 +615,13 @@ class CalendarService:
                     latest_write_operation.label("latest_write_operation"),
                     latest_write_attempt_count.label("latest_write_attempt_count"),
                     latest_write_desired_values.label("latest_write_desired_values"),
+                    latest_write_base_values.label("latest_write_base_values"),
+                    latest_write_recurrence_scope.label(
+                        "latest_write_recurrence_scope"
+                    ),
                     latest_write_changed_fields.label("latest_write_changed_fields"),
+                    latest_write_failure_class.label("latest_write_failure_class"),
+                    latest_write_failure_reason.label("latest_write_failure_reason"),
                     calendar_block_ion_metadata.c.flexibility,
                     calendar_block_ion_metadata.c.notes,
                     calendar_block_ion_metadata.c.category,
@@ -583,7 +702,80 @@ class CalendarService:
 
     @staticmethod
     def _block_output(row) -> CalendarBlockOutput:
-        write_state = row.latest_write_state
+        canonical_write_state = row.latest_write_state
+        latest_base = (
+            json.loads(row.latest_write_base_values)
+            if row.latest_write_base_values
+            else {}
+        )
+        recurrence_identity = latest_base.get("recurrence_identity") or {}
+        original_start = recurrence_identity.get("original_start") or {}
+        targeted_exception = (
+            row.recurrence_kind == "exception"
+            and row.latest_write_recurrence_scope == "occurrence"
+            and (
+                (
+                    row.original_start_kind == "date"
+                    and original_start.get("date") == row.original_start_date
+                )
+                or (
+                    row.original_start_kind == "instant"
+                    and original_start.get("date_time")
+                    and datetime.fromisoformat(
+                        original_start["date_time"].replace("Z", "+00:00")
+                    )
+                    == datetime.fromisoformat(
+                        row.original_start_at.replace("Z", "+00:00")
+                    )
+                )
+            )
+        )
+        # A resolved-but-reviewable predecessor (conflict/failed) only keeps
+        # serializing the rest of the master when it is still genuinely
+        # unresolved (nonterminal) or when it was not scoped to one specific
+        # occurrence (series/single scope covers the whole master). A
+        # conflict/failed outcome scoped to one occurrence releases every
+        # other, unrelated occurrence of the same master. This mirrors
+        # `_predecessor_blocks_new_write` in calendar_writes.py.
+        write_is_active = canonical_write_state in NONTERMINAL_INTENT_STATES
+        hides_state_for_sibling = (
+            row.recurrence_kind == "exception"
+            and canonical_write_state not in (None, "completed", "cancelled")
+            and not targeted_exception
+        )
+        serialized_recurrence_sibling = hides_state_for_sibling and (
+            write_is_active or row.latest_write_recurrence_scope != "occurrence"
+        )
+        write_state = None if hides_state_for_sibling else canonical_write_state
+        write_intent_visible = write_state in (
+            "queued",
+            "ready",
+            "attempting",
+            "retry_wait",
+            "reauth_required",
+            "ambiguous",
+            "failed",
+        )
+        # A conflict or terminal failure recorded before any exception block
+        # existed is only ever visible on the master's own row (which also
+        # stands in for every not-yet-materialized occurrence). Unlike the
+        # overlay -- which stops being shown once a write is no longer
+        # actively pending -- the identity of *which* occurrence a resolved
+        # write concerned must stay visible so the renderer can still single
+        # out that exact occurrence for review and release every other
+        # sibling. It clears once there is nothing left to review at all.
+        identity_visible = write_state not in (None, "completed", "cancelled")
+        # Only surface failure_class/failure_reason while they describe the
+        # active outcome for *this* row: a still-open retry/reauth/conflict/
+        # failed state. A `completed` row may carry a stale failure_class
+        # from an earlier retry attempt before it eventually succeeded, and a
+        # hidden sibling's write_state is already None (see above).
+        failure_detail_visible = write_state in (
+            "retry_wait",
+            "reauth_required",
+            "conflict",
+            "failed",
+        )
         provider_write_state = (
             "failed"
             if write_state == "failed"
@@ -630,8 +822,54 @@ class CalendarService:
             and not bool(row.has_attendees)
             and row.status != "cancelled"
             and row.provider_deleted_at is None
-            and row.recurrence_kind == "single"
-            and provider_write_state == "synced"
+            # Deliberately not gated on settled provider state: deleting is a
+            # direct human action like any other, and Ion supersedes or queues
+            # it behind whatever is already in flight.
+            and not (
+                # A create whose provider outcome is unknown is the exception:
+                # deleting before Ion knows whether Google made the event could
+                # orphan it. That case is reported separately below.
+                row.latest_write_operation == "create"
+                and row.latest_write_state
+                in (
+                    "attempting",
+                    "ambiguous",
+                    "retry_wait",
+                    "reauth_required",
+                    "failed",
+                    "conflict",
+                )
+            )
+        )
+        recurrence_rules = json.loads(row.recurrence_rules or "[]")
+        latest_desired = (
+            json.loads(row.latest_write_desired_values)
+            if row.latest_write_desired_values
+            else {}
+        )
+        latest_changed = (
+            set(json.loads(row.latest_write_changed_fields))
+            if row.latest_write_changed_fields
+            else set()
+        )
+        overlay = (
+            ProviderWriteOverlayOutput(
+                title=latest_desired.get("title")
+                if "title" in latest_changed
+                else None,
+                start=latest_desired.get("start")
+                if "temporal" in latest_changed
+                else None,
+                end=latest_desired.get("end") if "temporal" in latest_changed else None,
+                recurrence=latest_desired.get("recurrence")
+                if "recurrence" in latest_changed
+                else None,
+                status=latest_desired.get("status")
+                if "status" in latest_changed
+                else None,
+            )
+            if latest_changed and write_intent_visible
+            else None
         )
         values = {
             "title": row.title,
@@ -656,6 +894,7 @@ class CalendarService:
             )
             and row.latest_write_desired_values
             and row.latest_write_changed_fields
+            and row.latest_write_recurrence_scope != "occurrence"
         ):
             desired = json.loads(row.latest_write_desired_values)
             changed_fields = set(json.loads(row.latest_write_changed_fields))
@@ -702,7 +941,8 @@ class CalendarService:
             status=row.status,
             transparency=row.transparency,
             recurrence_kind=row.recurrence_kind,
-            recurrence_rules=json.loads(row.recurrence_rules or "[]"),
+            recurrence_rules=recurrence_rules,
+            recurrence_preset=_recurrence_preset(recurrence_rules),
             recurrence_master_block_id=row.recurrence_master_block_id,
             recurring_event_id=row.recurring_event_id,
             original_start_kind=row.original_start_kind,
@@ -731,8 +971,10 @@ class CalendarService:
                     and not bool(row.has_attendees)
                     and row.status != "cancelled"
                     and row.provider_deleted_at is None
-                    and row.recurrence_kind == "single"
-                    and provider_write_state == "synced"
+                    # Deliberately not gated on settled provider state: see the
+                    # reason branch below. Eligibility describes whether Ion can
+                    # accept a direct human write, not whether the provider is
+                    # idle.
                 ),
                 reason=(
                     "reauth_required"
@@ -758,10 +1000,12 @@ class CalendarService:
                     if row.link_state != "confirmed"
                     or not row.provider_etag
                     or row.provider_etag == "*"
-                    else "recurrence_unsupported"
-                    if row.recurrence_kind != "single"
-                    else "write_pending"
-                    if provider_write_state != "synced"
+                    # Unsettled provider work no longer makes an event
+                    # ineligible. The owner may act again immediately; Ion
+                    # supersedes or queues the write behind the one in flight.
+                    # Reporting `write_pending` here removed the Edit button
+                    # and the drag handles outright, so provider serialization
+                    # became "you cannot edit yet" in the most literal way.
                     else "eligible"
                 ),
             ),
@@ -807,10 +1051,6 @@ class CalendarService:
                         "failed",
                         "conflict",
                     )
-                    else "recurrence_unsupported"
-                    if row.recurrence_kind != "single"
-                    else "write_pending"
-                    if provider_write_state != "synced"
                     else "provider_unconfirmed"
                     if row.link_state != "confirmed"
                     or not row.provider_etag
@@ -818,9 +1058,35 @@ class CalendarService:
                     else "provider_unconfirmed"
                 ),
             ),
-            provider_write_operation=row.latest_write_operation,
+            provider_write_operation=(
+                row.latest_write_operation if identity_visible else None
+            ),
+            provider_write_recurrence_scope=(
+                row.latest_write_recurrence_scope if identity_visible else None
+            ),
+            provider_write_original_start=(
+                ProviderDateTime.model_validate(recurrence_identity["original_start"])
+                if recurrence_identity.get("original_start") and identity_visible
+                else None
+            ),
+            provider_write_overlay=(None if serialized_recurrence_sibling else overlay),
             provider_write_state=provider_write_state,
             provider_write_detail=provider_write_detail,
+            provider_write_failure_class=(
+                row.latest_write_failure_class if failure_detail_visible else None
+            ),
+            provider_recovery_kind=(
+                _recovery_kind(
+                    write_state,
+                    row.latest_write_failure_class,
+                    row.latest_write_failure_reason,
+                )
+                if failure_detail_visible
+                else None
+            ),
+            provider_write_failure_reason=(
+                row.latest_write_failure_reason if failure_detail_visible else None
+            ),
         )
 
     def set_selection(
@@ -1401,7 +1667,9 @@ class CalendarService:
             select(calendar_provider_write_intents)
             .where(
                 calendar_provider_write_intents.c.calendar_block_id == existing.id,
-                calendar_provider_write_intents.c.operation == "patch",
+                calendar_provider_write_intents.c.operation.in_(
+                    ("patch", "cancel_occurrence")
+                ),
                 calendar_provider_write_intents.c.state.in_(
                     (
                         "queued",
@@ -1416,11 +1684,64 @@ class CalendarService:
             .order_by(calendar_provider_write_intents.c.sequence.desc())
             .limit(1)
         ).one_or_none()
+        if pending_patch is None and event.recurring_event_id and event.original_start:
+            master_block_id = connection.execute(
+                select(google_event_links.c.calendar_block_id).where(
+                    google_event_links.c.calendar_id == calendar.id,
+                    google_event_links.c.provider_event_id == event.recurring_event_id,
+                )
+            ).scalar_one_or_none()
+            if master_block_id:
+                candidates = connection.execute(
+                    select(calendar_provider_write_intents)
+                    .where(
+                        calendar_provider_write_intents.c.calendar_block_id
+                        == master_block_id,
+                        calendar_provider_write_intents.c.recurrence_scope
+                        == "occurrence",
+                        calendar_provider_write_intents.c.operation.in_(
+                            ("patch", "cancel_occurrence")
+                        ),
+                        calendar_provider_write_intents.c.state.in_(
+                            (
+                                "queued",
+                                "ready",
+                                "attempting",
+                                "retry_wait",
+                                "reauth_required",
+                                "ambiguous",
+                            )
+                        ),
+                    )
+                    .order_by(calendar_provider_write_intents.c.sequence.desc())
+                ).all()
+                pending_patch = next(
+                    (
+                        candidate
+                        for candidate in candidates
+                        if candidate.provider_event_id == event.provider_event_id
+                        and (
+                            original_identity := json.loads(
+                                candidate.base_values_json or "{}"
+                            )
+                            .get("recurrence_identity", {})
+                            .get("original_start")
+                        )
+                        is not None
+                        and (
+                            ProviderDateTime.model_validate(original_identity)
+                            == event.original_start
+                        )
+                    ),
+                    None,
+                )
         pending_delete = connection.execute(
             select(calendar_provider_write_intents)
             .where(
                 calendar_provider_write_intents.c.calendar_block_id == existing.id,
-                calendar_provider_write_intents.c.operation == "delete_event",
+                calendar_provider_write_intents.c.operation.in_(
+                    ("delete_event", "delete_series")
+                ),
                 calendar_provider_write_intents.c.state.in_(
                     (
                         "queued",
@@ -1445,23 +1766,26 @@ class CalendarService:
                 _event_matches_write_intent(pending_patch, event)
             ):
                 confirmed_patch = pending_patch
+            elif pending_patch.state in ("attempting", "ambiguous"):
+                # A dispatch is in flight against the old ETag. Google will
+                # reject it, and the write path rebases from there; stepping in
+                # here would race that attempt.
+                pass
             else:
+                # Automatic convergence. A background refresh discovering newer
+                # provider state is not a decision for the user: the pending
+                # intent simply re-aims at the state just confirmed above, and
+                # keeps its own narrow field mask, so this refresh's changes to
+                # other fields survive and the user's pending change still
+                # lands. Marking it conflicted here was the "needs review after
+                # a sync" dead end.
                 connection.execute(
                     update(calendar_provider_write_intents)
                     .where(calendar_provider_write_intents.c.id == pending_patch.id)
                     .values(
-                        state="conflict",
-                        failure_class="stale_precondition",
-                        failure_reason="provider_etag_changed_during_refresh",
+                        expected_provider_etag=event.provider_etag,
                         updated_at=now,
                     )
-                )
-                _write_conflict_audit(
-                    connection,
-                    pending_patch,
-                    now,
-                    reason="provider_etag_changed_during_refresh",
-                    reason_class="stale_precondition",
                 )
         if pending_delete is not None:
             if event.status == "cancelled":
@@ -1483,23 +1807,22 @@ class CalendarService:
                         prune_after=prune_after,
                     )
                 )
-            elif event.provider_etag != pending_delete.expected_provider_etag:
+            elif (
+                event.provider_etag != pending_delete.expected_provider_etag
+                and pending_delete.state not in ("attempting", "ambiguous")
+            ):
+                # Same automatic convergence as a pending patch. A deletion
+                # carries no field mask to preserve -- the desired end state is
+                # absence -- so re-aiming it at freshly confirmed authority is
+                # deterministic. A dispatch already in flight is left alone so
+                # this does not race its own attempt.
                 connection.execute(
                     update(calendar_provider_write_intents)
                     .where(calendar_provider_write_intents.c.id == pending_delete.id)
                     .values(
-                        state="conflict",
-                        failure_class="stale_precondition",
-                        failure_reason="provider_etag_changed_during_refresh",
+                        expected_provider_etag=event.provider_etag,
                         updated_at=now,
                     )
-                )
-                _write_conflict_audit(
-                    connection,
-                    pending_delete,
-                    now,
-                    reason="provider_etag_changed_during_refresh",
-                    reason_class="stale_precondition",
                 )
 
         connection.execute(

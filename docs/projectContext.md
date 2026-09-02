@@ -10,8 +10,8 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 2 — Calendar
-- **Milestone:** Phase 2C-4 Google Calendar delete and cancellation implemented;
-  owner real-delete acceptance pending
+- **Milestone:** Phase 2C-5 bounded Google Calendar recurrence writes
+  implemented; owner real-write acceptance pending
 - **In scope:** a primary Calendar over cached canonical
   CalendarBlocks; Day, consecutive 3 Day, Monday-first Week, rolling Next 7
   Days, and Monday-first Month views; bounded recurrence/exception projection;
@@ -22,8 +22,10 @@ actions as authoritative.
   exclusive source/filter drawers; an event inspector with bounded editing;
   explicit account-scoped Calendar write re-consent; local-first creation of
   ordinary attendee-free events plus explicit-save title/time edits and
-  direct-human timed move/resize review and explicit confirmed single-event
-  delete for eligible events; local cancellation of unattempted creates; and
+  direct-human move/resize review; bounded daily, weekday, weekly, monthly, and
+  yearly recurrence create/edit; explicit one-occurrence or whole-series
+  mutation scopes; confirmed event/series delete and occurrence cancellation;
+  local cancellation of unattempted creates; and
   truthful CalendarBlock occupancy/free gaps in Today.
 - **Write scope:** migration `0007` provides the durable typed outbox,
   safe capability evidence, deterministic create ID, retry/restart state,
@@ -32,11 +34,13 @@ actions as authoritative.
   changed-field-only `events.patch` with exact `If-Match` and `events.get`
   ambiguity reconciliation. Existing accounts remain read-only until
   re-consent. Phase 2C-4 adds exact-ETag `events.delete`, same-event ambiguity
-  lookup, and already-absent reconciliation.
-- **Out of scope:** recurring-event writes, timed/all-day
+  lookup, and already-absent reconciliation. Phase 2C-5 adds master plus
+  original-start `events.instances` resolution, conditional exact-instance
+  patches/cancellation, and conditional whole-series master mutation.
+- **Out of scope:** unrestricted recurrence and `this and following`, timed/all-day
   conversion, cross-calendar move, Google Tasks bridge
   (optional/deferred; not active Phase 2D desktop-v1 work), Gmail,
-  push/webhooks, attendee/reminder/recurrence/conferencing/attachment writes,
+  push/webhooks, attendee/reminder/conferencing/attachment writes,
   Task auto-scheduling, AI, provider free/busy
   planning, FocusSession, DailyReview, WeeklyPlan, semantic/conversational search,
   persisted search indexes/history, generic Undo/version history, automatic
@@ -78,8 +82,8 @@ Task capture; Phase 1H hardens the complete Phase 1 flow. Phase 2A adds a
 restrained Calendar read-sync foundation. Phase 2B adds the primary read-only
 Calendar and truthful CalendarBlock occupancy in Today. Phase 2C-2 adds the
 first explicit, local-first create path; Phase 2C-3 adds bounded local-first
-edit, move, and resize; Phase 2C-4 adds bounded delete/cancel while recurrence
-writes, Task scheduling,
+edit, move, and resize; Phase 2C-4 adds bounded delete/cancel; and Phase 2C-5
+adds bounded recurrence writes while Task scheduling,
 Explore, semantic search, and AI remain deferred.
 
 Design/motion ladder: process guidance (`IMPECCABLE`, `EMIL-MOTION`); CSS for
@@ -99,6 +103,12 @@ performance-conscious.
   defines deferred Aspirations/readiness/Skills direction, the Phase 13 Core
   evolution, Phase 14 Voice & Ambient Core, and deferred multi-calendar
   mirroring without freezing an implementation schema.
+- The owner-approved [Calendar authority amendment](PRODUCT_SPEC.md#owner-approved-calendar-authority-amendment--2026-09-01)
+  establishes that direct human Calendar action is itself authorization, that
+  `flexibility` (`locked`/`flexible`/`Ion-controlled`) constrains Ion's own
+  automation rather than the owner, that Ion ↔ Google convergence is automatic,
+  and that ordinary provider version drift is sync concurrency rather than a
+  semantic conflict.
 - Google refresh tokens stay in macOS Keychain, access tokens remain
   Rust-memory-only, and provider tokens never enter React, Python, SQLite, or
   logs.
@@ -116,7 +126,11 @@ performance-conscious.
 
 ## Canonical documents
 
-- [Master Specification](PRODUCT_SPEC.md)
+`PRODUCT_SPEC.md` is the **only** Master Specification. Untracked bootstrap or
+transcription artifacts outside `docs/` are historical inputs, never authority.
+
+- [Master Specification](PRODUCT_SPEC.md) — product philosophy and authority;
+  its appended owner amendments supersede the preserved source transcription
 - [Research playbook](research/ionResearch.md)
 - [Task router](agent/taskRouter.md)
 - [Approved Ion reference snapshot](references/approvedReferences.md)
@@ -127,6 +141,8 @@ performance-conscious.
 - [Accepted Phase 2C gate](phases/PHASE_2C.md)
 - [Accepted Calendar write
   decision](decisions/0021-google-calendar-write-outbox-and-conflicts.md)
+- [Calendar interaction behavior](CALENDAR_BEHAVIOR.md) — the detailed Calendar
+  interaction contract, mandatory reading before any Calendar behavior change
 
 The approved-reference snapshot derives from `projectReference.md` version
 **1.1.0** (updated 2026-08-27). Project-local decisions override it.

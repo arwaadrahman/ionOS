@@ -2,8 +2,8 @@
 
 ## Status
 
-**Architecture/security gate accepted; Phase 2C-4 delete/cancel implemented
-and pending owner real-delete acceptance.** The owner accepted ADR 0021 and the seven decisions
+**Architecture/security gate accepted; Phase 2C-5 bounded recurrence writes
+implemented and pending owner real-write acceptance.** The owner accepted ADR 0021 and the seven decisions
 in this gate on 2026-08-30, then separately authorized the bounded 2C-1
 foundation. Migration `0007`, the typed Python outbox/state API, safe
 capability projection, deterministic ID/retry/recovery/audit helpers, one
@@ -15,9 +15,51 @@ inspector editing, direct timed move/resize review, changed-field
 `events.patch` with exact `If-Match`, and bounded same-event reconciliation.
 Phase 2C-4 adds explicit single-event delete confirmation, conditional
 `events.delete`, absence reconciliation, and local cancellation before a create
-has reached the provider.
-No real OAuth or Calendar mutation was used during automated verification.
-Recurring event writes remain unavailable until Phase 2C-5.
+has reached the provider. Phase 2C-5 adds bounded recurrence presets,
+master/original-start instance resolution, one-occurrence patch/cancellation,
+and explicit whole-series patch/delete. Owner acceptance found that the
+recurring-write projection kept a completed occurrence edit's operation,
+scope, and original-start identity visible after that write reached a
+terminal state; the renderer's sibling-occurrence guard then treated every
+other occurrence of that master as a serialized write in progress and refused
+to open it for editing. The projection now clears those fields once the write
+is no longer active (matching the existing overlay gating), so a recurring
+master stays editable occurrence-by-occurrence after each write completes.
+Renderer error mapping was also widened so `timezone_change_unsupported`,
+`recurrence_identity_unresolved`, and `no_change_requested` reach the user
+truthfully instead of collapsing to the generic local-state message. A second
+owner-acceptance pass found that a terminal, reviewable conflict or failure
+on one occurrence still serialized every other occurrence of the same
+master indefinitely: the write-path predecessor check matched only on the
+shared master id, not on which occurrence a nonterminal-vs-resolved
+predecessor actually targeted, and the read projection cleared a resolved
+write's identity too eagerly for the renderer to single out the reviewed
+occurrence. Serialization is now scoped to genuinely nonterminal writes (or
+the exact occurrence a resolved write concerned); an unrelated sibling
+releases back to current confirmed provider state once that write resolves,
+without retrying or mutating the reviewed occurrence's own stored intent.
+A bounded stabilization pass then found the same coarse rule still applied
+to an already-*materialized* occurrence (its own `exception` CalendarBlock
+row, as opposed to a virtual not-yet-materialized one): the read projection's
+sibling gate used the older "any nonterminal state blocks" check rather than
+the refined per-occurrence rule, so a materialized sibling could stay
+permanently locked out after an unrelated occurrence's conflict/failure. Both
+gates now agree, with a regression test covering two independently
+materialized exception rows. The same pass wired `recurrence_unsupported`
+through every safe-copy layer (Python route allowlist, Rust translation,
+renderer copy) with route-level and cross-source parity test coverage;
+exposed a bounded `provider_write_failure_class`/`_reason` so retryable
+quota/backend/transport failures, reauthentication, stale/conflict, and
+terminal rejection reach the renderer distinctly instead of one generic
+label; implemented the three already-accepted ADR 0021 conflict-resolution
+actions (Keep Google's version, Apply my Ion change, Review differences)
+end to end through new fixed Ion-ID routes/commands using the existing
+outbox schema; added a bounded timeout to `wait_for_write_slot` so a stuck
+Google-gate holder fails safely instead of hanging a write command
+indefinitely; and fixed resize-handle discoverability, Escape-to-cancel, and
+a restrained Inspector-selected visual state in the Calendar grid. No real
+OAuth or Calendar mutation was used during automated verification, and no
+migration was introduced.
 
 ## Objective
 
@@ -276,9 +318,12 @@ reconciliation.
 ## Optimistic concurrency and field authority
 
 Every patch, occurrence cancellation, and delete carries the last confirmed
-event ETag in `If-Match`; the wildcard `If-Match: *` is forbidden. A 412 is an
-explicit conflict. Before retrying any ambiguous non-create result, Rust gets
-the current event and Python compares only the normalized intent field mask.
+event ETag in `If-Match`; the wildcard `If-Match: *` is forbidden. A 412 on an
+ordinary supported mutation re-reads confirmed provider state and rebases the
+pending write onto it, bounded by the automatic attempt budget; only drift that
+outlasts that budget becomes an explicit conflict. Before retrying any ambiguous
+non-create result, Rust gets the current event and Python compares only the
+normalized intent field mask.
 
 Field classes:
 
@@ -286,13 +331,19 @@ Field classes:
 | --- | --- |
 | Google-confirmed/provider-authoritative | title, description, location, status, transparency, checked time union, recurrence rules and provider recurrence/exception identity |
 | Ion-only | flexibility, notes, category/subtype, local enabled/hidden state; never sent to Google and never discarded by provider reconciliation |
-| Review-mergeable | scalar title, description, location, and transparency when only one side changed that field relative to the stored base; first implementation may propose a rebase but must not silently write it |
-| Conflict-sensitive atomic groups | temporal kind/start/end/timezones, delete/status, recurrence rules, master/exception/original-start identity, and any same field changed differently on both sides |
+| Automatically rebased | any provider field the pending write did not change: the provider's latest confirmed value is adopted, because the narrow changed-field body never overwrites it *(amended 2026-09-01; previously "review-mergeable", proposed but not written)* |
+| Pending-human-owned | the exact provider fields the direct-human action changed: that value wins its own field for this settlement cycle, including when Google changed the same field, and ownership ends when the write confirms *(amended 2026-09-01)* |
+| Structurally conflict-sensitive | master/exception/original-start identity, provider deletion, and transformation into an unsupported provider structure — contradictions no rebase can honestly resolve |
 
-The initial safe rule is that a provider version mismatch stops dispatch and
-opens conflict resolution. Even a mechanically disjoint rebase becomes a new
-explicitly accepted intent until owner acceptance later authorizes a narrower
-automatic merge rule.
+*(Amended 2026-09-01 — the owner acceptance this paragraph anticipated has been
+granted.)* A provider version mismatch on an ordinary supported mutation no
+longer stops dispatch. Ion re-reads confirmed provider state and rebases the
+pending write's own changed-field mask onto it automatically, within the bounded
+attempt budget. Whole-event merge, silent last-write-wins, and timestamp
+authority remain refused, and `If-Match` stays exact and non-wildcard. Conflict
+resolution is now reserved for drift that outlasts the budget and for
+contradictions that cannot be reconciled deterministically. See
+[Calendar interaction behavior](../CALENDAR_BEHAVIOR.md).
 
 Conflict actions:
 
@@ -383,7 +434,11 @@ series and inserting another, which resets later exceptions and creates a new
 identity boundary. Arbitrary RRULE text entry is not exposed. Phase 2C-5 must
 define the bounded recurrence patterns Ion can create/edit, validate them
 deterministically, and add destructive confirmation when a rule/time change
-would remove, duplicate, or shift existing occurrences or exceptions.
+would remove, duplicate, or shift existing occurrences or exceptions. The
+implemented bounded presets are: no recurrence for ordinary create, plus
+daily, weekdays, weekly, monthly, and yearly recurrence. Existing custom rules
+remain readable and are preserved during scalar edits, but their raw RRULE text
+is never editable.
 
 ## Time and all-day invariants
 
@@ -453,13 +508,24 @@ Phase 2B Calendar layout and deferred holistic polish remain accepted. Phase
 - clear pending, saved-offline, terminal-failed, reauthentication, and conflict
   treatments; and
 - a bounded conflict detail surface with Keep Google, Apply my Ion changes, and
-  Review differences.
+  Review differences; and
+- Undo for a confirmed edit, as an ordinary reverse write rather than a
+  rollback or an undo stack.
 
-Drag/drop or resize commits nothing until the target time validates. Failed UI
-refresh after a confirmed mutation preserves the confirmed result and marks
-only the projection stale. Provider-ineligible events remain inspectable and
-explain why editing is unavailable. No attendee, invitation, Meet, reminder,
-calendar-management, AI scheduling, or Task-to-block affordance appears.
+Calendar interaction semantics follow [`CALENDAR_BEHAVIOR.md`](../CALENDAR_BEHAVIOR.md),
+which is the contract for this surface: explicit confirmation is required only
+where an interaction removes confirmed occurrences, and the recurrence-scope
+chooser is a focus-trapped modal whose Cancel mutates nothing.
+
+Pointer-captured movement or resize renders only transient grid feedback while
+the pointer is down, then commits the validated interval at release. A recurring
+event asks for scope at that moment, and that choice is the last action
+required; no review step and no second save stand between the gesture and the
+write. Movement may cross visible day columns; resize exposes both timed edges. Failed UI refresh after a confirmed mutation preserves the
+confirmed result and marks only the projection stale. Provider-ineligible
+events remain inspectable and explain why editing is unavailable. No attendee,
+invitation, Meet, reminder, calendar-management, AI scheduling, or
+Task-to-block affordance appears.
 
 ## Auditability
 
@@ -497,9 +563,10 @@ provider errors.
 | Provider 404 on edit | Treat as missing/inaccessible, refresh access and event state, then conflict or fail; never create blindly. |
 | Provider 404/410 after ambiguous delete | Confirm target absence/deleted state and reconcile delete success; ordinary 410 sync-token handling remains full resync. |
 | Recurrence exception disappeared | Re-resolve by master plus original start; if absent, create an occurrence-missing conflict rather than targeting another instance. |
+| Occurrence resolution was rejected and the confirmed master later changed | Reclassify the legacy failure as a stale-identity conflict during bounded recovery; do not retry the old mutation. |
 | Google changes event while Ion intent pending | Preserve intent, reconcile newest confirmed provider base, and conflict before replay. |
 | Permission/access role changes | Stop writes, refresh CalendarList capability, retain intent as failed/conflict, and require a valid writable target or Keep Google resolution. |
-| Non-retryable 400/403 | Persist terminal safe reason; do not loop. |
+| Non-retryable 400/403 | Persist a terminal safe reason; occurrence-resolution target rejection is instead a reviewable identity conflict. Do not loop. |
 | Retryable quota/5xx/transport failure | Persist next retry with bounded backoff and attempt ceiling; unrelated blocks continue. |
 
 ## Performance and lifecycle
@@ -529,7 +596,6 @@ provider errors.
 - moving an event between calendars or changing organizer;
 - calendar creation/deletion, CalendarList mutation, ACL/sharing, or ownership
   transfer;
-- `this and following` recurrence splitting;
 - arbitrary RRULE editing outside an accepted bounded rule set;
 - Google Tasks, Gmail, webhooks/push channels, cloud relay, LAN, mobile, or a
   generic provider framework;
@@ -549,12 +615,19 @@ require explicit authorization of the test account/calendar and exact actions:
 - deterministic client-supplied provider IDs;
 - the outbox/capability migration and interrupted-migration recovery plan;
 - automatic replay of previously authorized pending intent after reconnect;
-- confirmation copy and behavior for locked, delete, occurrence, and
-  entire-series actions;
+- confirmation copy and behavior for delete, occurrence, and entire-series
+  actions *(amended 2026-09-01: `locked` no longer gates a direct human edit —
+  it constrains Ion's own automation)*;
 - any future relaxation of event eligibility still requires new owner
   acceptance, especially attendee events,
   `writerWithoutPrivateAccess`, special event types, or cross-calendar moves;
-- any automatic disjoint-field merge still requires new owner acceptance; and
+- *(granted 2026-09-01.)* Automatic reconciliation of ordinary provider version
+  drift is now accepted owner direction: a pending direct-human write re-aims at
+  freshly confirmed provider state and retries its own changed-field mask, so
+  fields the human did not touch are never overwritten. This remains bounded and
+  ETag-conditional; whole-event merge, silent last-write-wins, and timestamp
+  authority are still refused. See
+  [Calendar interaction behavior](../CALENDAR_BEHAVIOR.md); and
 - any broader scope, notification, provider feature, trust boundary, or
   autonomous authority.
 
@@ -569,8 +642,11 @@ require explicit authorization of the test account/calendar and exact actions:
 3. **Attendee events:** keep attendee/invite-bearing events entirely read-only;
    do not mutate attendees, invitations, RSVP state, organizer semantics, or
    conferencing.
-4. **Conflict merging:** every initial ETag mismatch is explicit. No automatic
-   merge and no silent last-write-wins.
+4. **Conflict merging:** *(amended 2026-09-01 by owner decision.)* Ordinary
+   ETag drift rebases automatically onto freshly confirmed provider state,
+   re-sending only the user's changed fields. No whole-event merge, no silent
+   last-write-wins, and no timestamp authority. Drift outlasting the bounded
+   attempt budget, and genuinely unmergeable contradictions, stay explicit.
 5. **Delete recoverability:** use confirmation plus tombstone/audit without
    provider Undo; recreation gets new identity and whole-series deletion uses
    stronger blocking confirmation.
@@ -619,8 +695,9 @@ verification uses only synthetic provider data and does not initiate OAuth or
 Google mutations.
 
 - Add inspector edit plus direct-human timed move/resize and keyboard path.
-- Use bounded patches and `If-Match`; add locked confirmation and pending
-  overlays.
+- Use bounded patches and `If-Match`; add pending overlays. *(Amended
+  2026-09-01: the `locked` flexibility flag governs Ion's automation, not the
+  owner's direct action, so it adds no confirmation to a human edit.)*
 - Acceptance: stale ETags never overwrite; unrelated provider fields remain
   untouched; temporal conversions require explicit action.
 
@@ -638,6 +715,10 @@ whole-series deletion remain deliberately assigned to Phase 2C-5.
 
 ### 2C-5 — Recurrence writes
 
+**Implemented; owner real-write acceptance pending.** Migration `0007` remains
+sufficient. Automated verification uses synthetic recurrence state and does
+not initiate OAuth or mutate Google Calendar.
+
 - Resolve instances by master plus original start; support one occurrence and
   whole series for edit/move/resize/cancel/delete.
 - Define and test the bounded recurrence rule surface and destructive
@@ -647,8 +728,59 @@ whole-series deletion remain deliberately assigned to Phase 2C-5.
 
 ### 2C-6 — Conflict, offline, and acceptance hardening
 
-- Complete Keep Google / Apply Ion / Review differences, reconnect ordering,
-  permission changes, failure copy, bounded retention, and soak tests.
+**Keep Google / Apply Ion / Review differences implemented in a bounded
+stabilization pass; owner real-write acceptance pending.** *(Historical record.
+Owner acceptance in 2026-09-01 superseded the policy that routed ordinary
+version drift here: these actions remain, but only for drift that outlasts the
+automatic attempt budget and for genuinely unmergeable contradictions. They are
+not ordinary Calendar workflow.)* A conflicted block
+now has a complete human exit path through three new fixed Ion-ID routes and
+Tauri commands, using the existing `0007` outbox schema (no migration): Keep
+Google's version cancels only the conflicting intent and preserves Ion-only
+metadata; Apply my Ion change rebases the stored field mask onto the freshly
+confirmed provider ETag as a new explicit write authorization (never the
+stale conflict row's ETag, never `If-Match: *`, and never a silent
+resurrection of a provider-deleted event); Review differences returns a
+bounded, normalized comparison with no raw provider object. Automated
+verification used only synthetic conflict state.
+
+Owner acceptance of the first conflict-resolution build found three
+remaining defects, now repaired: Apply my Ion changes stalled on a recurring
+occurrence because the rebase refreshed only the intent's own ETag and not the
+master ETag embedded in its recurrence identity, so the new write failed its
+own dispatch preflight and re-conflicted; a conflicted occurrence displays on
+the master row (it never materializes an exception), but resolution skipped
+occurrence-scoped intents for master rows, so those rows reported "no conflict
+to resolve" forever; and a terminally failed write had no human exit at all,
+permanently serializing its block. Resolution now selects exactly what the
+projection displays, the rebase refreshes every piece of provider authority
+while preserving identity, and Keep Google / Apply my Ion changes also resolve
+a failed pending intent (the latter as the accepted explicit manual retry).
+Reconnect ordering, permission/capability loss, retention, and bounded
+synthetic soak coverage are implemented and green.
+
+**`This and following events` implemented (2026-09-01) under explicit owner
+authorization.** The owner authorized a narrow extension of the recurrence
+provider-body contract: the same five bounded preset families, plus a
+domain-generated `UNTIL` terminator used only to end an old master before a
+selected occurrence. Ion implements Google's real series-split semantics --
+conditionally trim the old master, then create a new recurring master beginning
+at the selected occurrence -- never a sweep of per-occurrence exceptions. Both
+provider operations, the new canonical master, its inherited Ion-only metadata,
+and its deterministic provider identity are persisted in one transaction before
+any Google call. Ordering is durable: the new master is stored `queued` with
+`predecessor_intent_id` pointing at the trim and is released only when the trim
+is provider-confirmed; a trim that is cancelled retires the future master with
+it, while `Apply my Ion changes` re-chains it onto the re-authorized trim. The
+option is offered only where Ion can faithfully continue the pattern and where
+it differs from `All events`: a custom provider RRULE and the first occurrence
+both withhold it truthfully. Delete `this and following` is the trim alone. No
+migration, no new provider method, and no new OAuth scope were required.
+
+Remaining for this substep:
+
+- Owner real-calendar acceptance of the repaired conflict and failure exits,
+  and of the series split.
 - Run the repository gate, migration matrix, fresh ARM64 sidecar/Tauri package,
   packaged startup/authentication/shutdown/listener/orphan/security checks, and
   an owner-authorized synthetic then real-account mutation acceptance plan.

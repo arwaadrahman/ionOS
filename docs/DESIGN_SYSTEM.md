@@ -23,6 +23,22 @@ The package is not yet implemented as a standalone design-system package.
   restrained visual language, semantic color, purposeful motion, and the Ion
   Core rather than unnecessary reinvention of common controls.
 
+- **Google Calendar behavioral default (owner rule).** Unless the owner has
+  explicitly specified different behavior, ordinary Calendar interaction
+  mechanics follow Google Calendar conventions as closely as possible while
+  preserving Ion's visual identity, local-first architecture, security model,
+  and currently supported provider semantics. This applies especially to
+  recurring-event scope choice, edit confirmation behavior, move/resize
+  expectations, destructive confirmation, and overall interaction flow. Where
+  Google offers an option Ion cannot yet support safely, Ion exposes only its
+  currently supported safe choices and never simulates the unsupported one.
+  The supported recurrence scopes are **This event**, **This and following
+  events**, and **All events**, chosen after the change is described. `This and
+  following` performs a real series split and is offered only where Ion can
+  faithfully continue the pattern; where it cannot, the option is withheld with
+  a plain explanation rather than faked. The durable interaction contract lives
+  in [Calendar interaction behavior](CALENDAR_BEHAVIOR.md).
+
 - Progressive disclosure is preferred over permanently visible secondary
   controls. Frequently used information and actions remain immediately
   accessible; configuration, provider state, metadata, and infrequent controls
@@ -103,14 +119,26 @@ The package is not yet implemented as a standalone design-system package.
 - Event details remain keyboard-focusable and accessible through one inspector.
   Phase 2C-2 adds a compact local-first create surface and explicit account
   capability state. Phase 2C-3 adds explicit-save title/date/time editing for
-  eligible events plus direct timed move/resize gestures that open the same
-  review surface before any provider call. Pending, syncing, retry,
+  eligible events plus pointer-captured timed movement across visible day
+  columns, transient position feedback, and top/bottom edge resizing. A gesture
+  previews while in flight and commits at drop, with no review step; a recurring
+  event asks for scope at that moment. Pending, syncing, retry,
   reauthentication, failure, and conflict states use calm truthful copy;
   ineligible Google events remain inspectable with a reason. Ion-owned
   presentation metadata remains independently editable where supported.
   Phase 2C-4 adds a distinct destructive confirmation with explicit
-  single-event scope, Google-removal consequence, no-Undo copy, and an extra
-  confirmation for Ion-locked events.
+  single-event scope, Google-removal consequence, and no-Undo copy.
+  Phase 2C-5 adds bounded recurrence preset labels and blocking confirmation
+  for series deletion. Recurrence scope is
+  chosen through one shared post-action chooser (This event / This and
+  following events / All events) rendered as a centered focus-trapped modal,
+  rather than a control inside each surface, matching Google's order; see
+  [Calendar interaction behavior](CALENDAR_BEHAVIOR.md). Raw RRULE entry
+  remains intentionally absent.
+  Confirmation is reserved for interactions that remove confirmed occurrences.
+  Ordinary edits — including non-destructive whole-series and this-and-following
+  changes — commit on Save and are offered back as Undo, so reversibility is
+  demonstrated rather than asserted through a checkbox.
 
 ## Motion ownership ladder
 

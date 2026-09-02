@@ -1,7 +1,24 @@
 # ADR 0021: Google Calendar write outbox and conflict boundary
 
-**Status:** Accepted  
+**Status:** Accepted; conflict policy amended 2026-09-01
+
 **Date:** 2026-08-30
+
+> **Amendment (2026-09-01, owner-directed after acceptance testing).** The
+> conflict rule below — that a stale precondition or newly observed provider
+> version creates an explicit human conflict — is **superseded for ordinary
+> supported mutations**. In real use it made every ordinary edit a review task.
+> Ordinary ETag drift now re-reads confirmed provider state and rebases the
+> pending write onto it automatically, bounded by the existing automatic
+> attempt budget. `Keep Google version` / `Apply my Ion changes` /
+> `Review differences` remain, but only for drift that outlasts that budget and
+> for genuinely unmergeable contradictions.
+>
+> Everything else in this ADR stands unchanged: exact non-wildcard `If-Match`,
+> no silent last-write-wins, no timestamp authority, the narrow changed-field
+> provider body, deterministic create identity, and durable local intent. The
+> current interaction contract is
+> [Calendar interaction behavior](../CALENDAR_BEHAVIOR.md).
 
 ## Context
 
@@ -62,11 +79,15 @@ also reconciled rather than generating a second ID.
 
 Existing-event patch and delete/cancel requests carry the last confirmed ETag
 in `If-Match`. Ion never uses `If-Match: *`. A 412 response or a newly observed
-provider version creates an explicit conflict; there is no silent
-last-write-wins. `Keep Google version` discards the pending provider-field
-intent. `Apply my Ion changes` is a new explicit human resolution rebased onto
-the freshly retrieved ETag. `Review differences` may select a new bounded field
-mask. Ion-only metadata never participates in a provider conflict.
+provider version is resolved by re-reading confirmed provider state and
+rebasing the pending write onto it (see the amendment above); there is no
+silent last-write-wins and no timestamp authority. Only drift that outlasts the
+bounded automatic attempt budget, or a contradiction that cannot be merged
+truthfully, becomes an explicit conflict. `Keep Google version` discards the
+pending provider-field intent. `Apply my Ion changes` is an explicit human
+resolution rebased onto the freshly retrieved ETag. `Review differences` may
+select a new bounded field mask. Ion-only metadata never participates in a
+provider conflict.
 
 The first provider body allowlist is summary, description, location,
 transparency, the checked start/end union, and explicitly authorized recurrence
@@ -79,8 +100,10 @@ Initial writes are restricted to non-deleted, enabled Google calendars with
 provider-locked and have no attendees. `writerWithoutPrivateAccess`, attendee
 events, special event types, and resources whose full safe mutation capability
 cannot be established remain read-only. Ion's separate `locked` flexibility
-classification requires direct confirmation before a human-requested change;
-it is not confused with Google's provider-locked flag.
+classification constrains Ion's own scheduling and future automation, not the
+owner's direct action *(amended 2026-09-01; it previously required direct
+confirmation before a human-requested change)*; it is not confused with
+Google's provider-locked flag.
 
 The accepted Phase 2C OAuth set replaces Events read-only with the event-only read/write
 scope while retaining CalendarList read-only:
@@ -135,16 +158,21 @@ The owner accepted this ADR and gate on 2026-08-30 with these locked decisions:
    no provider lock, no attendees, and explicit re-consent to the write scope.
 3. Attendee/invite events remain entirely read-only. Ion does not mutate
    attendees, invitations, RSVP state, organizer semantics, or conferencing.
-4. Every initial ETag mismatch requires explicit conflict handling. There is
-   no automatic merge or silent last-write-wins.
+4. *(Amended 2026-09-01.)* Ordinary ETag drift is reconciled automatically by
+   re-reading confirmed provider state and rebasing the pending write's own
+   changed-field mask onto it. There is still no whole-event merge, no silent
+   last-write-wins, and no timestamp authority. Explicit conflict handling
+   remains for drift that outlasts the bounded automatic attempt budget and for
+   contradictions that cannot be reconciled deterministically.
 5. Provider deletion uses confirmation plus local tombstone/audit evidence and
    makes no provider Undo claim. Recreating an event produces new identity;
    whole-series deletion uses stronger blocking confirmation.
 6. Phase 2C-5 owns a bounded deterministic recurrence surface. Arbitrary RRULE
    entry and `this and following` remain deferred; exact editor choices remain
    a bounded 2C-5 product-design decision.
-7. Unresolved, failed, conflict, and ambiguous intents remain until explicitly
-   resolved. Successful intents may be pruned after 30 days while compact audit
+7. Unresolved, failed, and conflict intents remain until explicitly resolved.
+   (Amended: an `ambiguous` intent is now part of the automatic rebase cycle
+   rather than something awaiting a human.) Successful intents may be pruned after 30 days while compact audit
    remains durable. A measured reason to change 30 days is a stop-and-report
    owner decision, never a silent implementation change.
 

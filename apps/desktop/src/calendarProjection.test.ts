@@ -83,6 +83,7 @@ function block(
     transparency: "opaque",
     recurrence_kind: "single",
     recurrence_rules: [],
+    recurrence_preset: "none",
     recurrence_master_block_id: null,
     recurring_event_id: null,
     original_start_kind: "none",
@@ -106,8 +107,14 @@ function block(
       reason: "account_read_only",
     },
     provider_write_operation: null,
+    provider_write_recurrence_scope: null,
+    provider_write_original_start: null,
+    provider_write_overlay: null,
     provider_write_state: "synced",
     provider_write_detail: "confirmed",
+    provider_write_failure_class: null,
+    provider_write_failure_reason: null,
+    provider_recovery_kind: null,
     ...overrides,
   };
 }
@@ -284,6 +291,91 @@ describe("bounded recurrence and exception projection", () => {
     expect(projection.occurrences[1].recurrenceContext).toBe("exception");
   });
 
+  test("a confirmed whole-series move retires exceptions anchored to the old slot", () => {
+    // Owner-observed defect: after an "All events" time change that Google
+    // confirmed, the first visible instance still rendered the pre-change
+    // state. The old exception stayed anchored to the previous clock time, so
+    // it suppressed nothing and drew itself as a phantom event *before* the
+    // newly confirmed occurrence -- and opening it handed the Inspector the
+    // stale block, so re-entering the displayed value reported "no change".
+    const master = block("master", {
+      provider_event_id: "series",
+      recurrence_kind: "master",
+      recurrence_rules: ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+      // Confirmed new series time: 09:00 -> 11:00 America/Los_Angeles.
+      start_at: "2030-01-07T19:00:00Z",
+      end_at: "2030-01-07T20:00:00Z",
+      start_timezone: "America/Los_Angeles",
+      end_timezone: "America/Los_Angeles",
+    });
+    const staleException = block("stale", {
+      title: "Pre-change occurrence",
+      recurrence_kind: "exception",
+      recurrence_master_block_id: master.id,
+      recurring_event_id: "series",
+      original_start_kind: "instant",
+      original_start_at: "2030-01-07T17:00:00Z",
+      original_start_timezone: "America/Los_Angeles",
+      start_at: "2030-01-07T17:00:00Z",
+      end_at: "2030-01-07T18:00:00Z",
+    });
+    const projection = projectCalendar(
+      status([master, staleException]),
+      calendarRange("week", "2030-01-07"),
+      "America/Los_Angeles",
+    );
+    // Only the freshly confirmed series occurrence renders -- no phantom.
+    expect(projection.occurrences.map((item) => item.key)).toEqual([
+      `${master.id}|instant:2030-01-07T19:00:00.000Z`,
+    ]);
+    // The rendered occurrence carries the master's confirmed values, which is
+    // also exactly what the Inspector edits against.
+    expect(projection.occurrences[0].block.id).toBe(master.id);
+    expect(projection.occurrences[0].start?.toISOString()).toBe(
+      "2030-01-07T19:00:00.000Z",
+    );
+    expect(
+      projection.occurrences.some(
+        (item) => item.block.id === staleException.id,
+      ),
+    ).toBe(false);
+  });
+
+  test("keeps a genuine exception that is still anchored to a confirmed slot", () => {
+    // The retirement rule must not swallow legitimate exceptions: a moved
+    // occurrence keeps its immutable original start, which the confirmed rule
+    // still produces, so it continues to override its slot.
+    const master = block("master", {
+      provider_event_id: "series",
+      recurrence_kind: "master",
+      recurrence_rules: ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+      start_at: "2030-01-07T17:00:00Z",
+      end_at: "2030-01-07T18:00:00Z",
+      start_timezone: "America/Los_Angeles",
+      end_timezone: "America/Los_Angeles",
+    });
+    const moved = block("moved", {
+      title: "Legitimately moved occurrence",
+      recurrence_kind: "exception",
+      recurrence_master_block_id: master.id,
+      recurring_event_id: "series",
+      original_start_kind: "instant",
+      original_start_at: "2030-01-14T17:00:00Z",
+      original_start_timezone: "America/Los_Angeles",
+      start_at: "2030-01-15T21:00:00Z",
+      end_at: "2030-01-15T22:00:00Z",
+    });
+    const projection = projectCalendar(
+      status([master, moved]),
+      calendarRange("week", "2030-01-14"),
+      "America/Los_Angeles",
+    );
+    const keys = projection.occurrences.map((item) => item.key);
+    expect(keys).toContain(moved.id);
+    // Its original slot stays suppressed rather than double-rendering.
+    expect(keys).not.toContain(`${master.id}|instant:2030-01-14T17:00:00.000Z`);
+  });
+
   test("retains a cancelled exception only as suppression metadata", () => {
     const master = block("master", {
       provider_event_id: "series",
@@ -308,6 +400,138 @@ describe("bounded recurrence and exception projection", () => {
       "America/Los_Angeles",
     );
     expect(projection.occurrences).toHaveLength(0);
+  });
+
+  test("applies a pending occurrence overlay only to its original-start identity", () => {
+    const master = block("master", {
+      provider_event_id: "series",
+      recurrence_kind: "master",
+      recurrence_rules: ["RRULE:FREQ=WEEKLY"],
+      recurrence_preset: "weekly",
+      provider_write_capability: { eligible: false, reason: "write_pending" },
+      provider_delete_capability: {
+        eligible: false,
+        mode: null,
+        reason: "write_pending",
+      },
+      provider_write_operation: "patch",
+      provider_write_recurrence_scope: "occurrence",
+      provider_write_original_start: {
+        date: null,
+        date_time: "2030-01-14T17:00:00Z",
+        timezone: "America/Los_Angeles",
+      },
+      provider_write_overlay: {
+        title: "Only this occurrence",
+        start: null,
+        end: null,
+        recurrence: null,
+        status: null,
+      },
+      provider_write_state: "pending",
+      provider_write_detail: "ready",
+    });
+    const projection = projectCalendar(
+      status([master]),
+      calendarRange("month", "2030-01-14"),
+      "America/Los_Angeles",
+    );
+    const target = projection.occurrences.find(
+      (item) => item.start?.toISOString() === "2030-01-14T17:00:00.000Z",
+    )!;
+    const neighbor = projection.occurrences.find(
+      (item) => item.start?.toISOString() === "2030-01-21T17:00:00.000Z",
+    )!;
+    expect(target.block.title).toBe("Only this occurrence");
+    expect(target.block.provider_write_state).toBe("pending");
+    expect(neighbor.block.title).toBe("Synthetic master");
+    expect(neighbor.block.provider_write_state).toBe("synced");
+  });
+
+  test("releases an unrelated occurrence once a sibling's write resolves to conflict", () => {
+    const master = block("master", {
+      provider_event_id: "series",
+      recurrence_kind: "master",
+      recurrence_rules: ["RRULE:FREQ=WEEKLY"],
+      recurrence_preset: "weekly",
+      provider_write_capability: { eligible: false, reason: "write_pending" },
+      provider_delete_capability: {
+        eligible: false,
+        mode: null,
+        reason: "write_pending",
+      },
+      provider_write_operation: "patch",
+      provider_write_recurrence_scope: "occurrence",
+      provider_write_original_start: {
+        date: null,
+        date_time: "2030-01-14T17:00:00Z",
+        timezone: "America/Los_Angeles",
+      },
+      provider_write_overlay: null,
+      provider_write_state: "conflict",
+      provider_write_detail: "conflict",
+    });
+    const projection = projectCalendar(
+      status([master]),
+      calendarRange("month", "2030-01-14"),
+      "America/Los_Angeles",
+    );
+    const conflicted = projection.occurrences.find(
+      (item) => item.start?.toISOString() === "2030-01-14T17:00:00.000Z",
+    )!;
+    const neighbor = projection.occurrences.find(
+      (item) => item.start?.toISOString() === "2030-01-21T17:00:00.000Z",
+    )!;
+    // The occurrence the conflict actually concerns keeps showing it.
+    expect(conflicted.block.provider_write_state).toBe("conflict");
+    expect(conflicted.block.provider_write_capability.eligible).toBe(false);
+    // An unrelated, untouched occurrence of the same master is released back
+    // to current confirmed provider state, not left blocked by A's conflict.
+    expect(neighbor.block.provider_write_state).toBe("synced");
+    expect(neighbor.block.provider_write_capability).toEqual({
+      eligible: true,
+      reason: "eligible",
+    });
+    expect(neighbor.block.provider_write_recurrence_scope).toBeNull();
+    expect(neighbor.block.provider_write_original_start).toBeNull();
+    expect(neighbor.block.title).toBe("Synthetic master");
+  });
+
+  test("keeps a sibling blocked while a differently-shaped ineligibility reason applies", () => {
+    const master = block("master", {
+      provider_event_id: "series",
+      recurrence_kind: "master",
+      recurrence_rules: ["RRULE:FREQ=WEEKLY"],
+      recurrence_preset: "weekly",
+      provider_write_capability: { eligible: false, reason: "reauth_required" },
+      provider_delete_capability: {
+        eligible: false,
+        mode: null,
+        reason: "reauth_required",
+      },
+      provider_write_operation: "patch",
+      provider_write_recurrence_scope: "occurrence",
+      provider_write_original_start: {
+        date: null,
+        date_time: "2030-01-14T17:00:00Z",
+        timezone: "America/Los_Angeles",
+      },
+      provider_write_overlay: null,
+      provider_write_state: "conflict",
+      provider_write_detail: "conflict",
+    });
+    const projection = projectCalendar(
+      status([master]),
+      calendarRange("month", "2030-01-14"),
+      "America/Los_Angeles",
+    );
+    const neighbor = projection.occurrences.find(
+      (item) => item.start?.toISOString() === "2030-01-21T17:00:00.000Z",
+    )!;
+    expect(neighbor.block.provider_write_capability.reason).toBe(
+      "reauth_required",
+    );
+    expect(neighbor.block.provider_write_capability.eligible).toBe(false);
   });
 
   test("preserves local wall time across DST and keeps all-day dates date-only", () => {

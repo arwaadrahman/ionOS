@@ -7,7 +7,7 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 ## Status
 
 Current phase: **Phase 2 — Calendar**
-Current milestone: **Phase 2C-4 — Google Calendar delete and cancellation**
+Current milestone: **Phase 2C-5 — Google Calendar recurrence writes**
 
 Phase 0 established the secure local runtime. Phase 1A added the canonical
 organizer schema and Task vertical slice. Phase 1B makes Areas, Goals, Projects,
@@ -42,6 +42,11 @@ offline intent and explicit ETag conflicts.
 Phase 2C-4 adds explicitly confirmed single-event deletion with conditional
 `events.delete`, deterministic ambiguity/404 reconciliation, and wholly local
 cancellation of provider-unattempted creates.
+Phase 2C-5 adds bounded daily/weekday/weekly/monthly/yearly recurrence create
+and edit, exact master-plus-original-start occurrence resolution, deliberate
+This occurrence / Entire series mutation scopes, occurrence cancellation, and
+conditional whole-series deletion while keeping raw RRULE and This and
+following unavailable.
 
 ## Start here
 

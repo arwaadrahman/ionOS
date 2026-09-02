@@ -1,6 +1,8 @@
 # Ion OS — Master Product & Engineering Specification
 
 > Canonical source transcription generated from the uploaded PDF. Page markers are preserved for traceability. The PDF remains the source artifact; this Markdown copy exists so local coding agents can read the specification reliably.
+>
+> **The transcription is preserved verbatim and is not edited in place.** Owner-approved amendments are appended at the end of this document and supersede the passages they name. Read them before relying on any rule above — several early passages have been superseded by decisions made during real acceptance testing.
 
 
 ---
@@ -3188,3 +3190,143 @@ canonical events and not attendee invitations. Future design must address
 partial provider failure, direct provider edits, deletion of one copy,
 permission loss, conflict behavior, and idempotency. This is deferred Calendar
 direction only and is not Phase 2C-3 scope.
+
+## Owner-approved Calendar authority amendment — 2026-09-01
+
+This amendment is canonical product direction, adopted after real owner
+acceptance testing of the Phase 2C Calendar. It preserves the source
+transcription above while superseding the passages named below. It authorizes
+no implementation, schema, dependency, or integration change by itself.
+
+It supersedes:
+
+- §11's flexibility rule, "Ion may not modify locked events without explicit
+  confirmation," **as applied to direct human action**;
+- §61's "Provide Retry" as the expected shape of ordinary Calendar write
+  recovery;
+- any reading of §62 that treats ordinary provider version drift as a
+  conflict the user must resolve.
+
+### Direct human action is authorization
+
+When the owner directly edits, drags, resizes, or deletes an event, or chooses
+a recurrence scope, **that action is the authorization.** Ion carries it out.
+
+Ion does not ask for an additional confirmation merely because an event is
+marked locked, because the change reaches a provider, or because the write is
+consequential. Confirmation is reserved for actions Ion cannot truthfully
+offer to reverse — principally destructive recurrence operations.
+
+For ordinary reversible actions Ion prefers **action → immediate result →
+Undo** over **action → confirmation → apply → sync**. A confirmation asks the
+owner to predict a mistake; an Undo lets them correct one. Calendar Undo stays
+bounded and provider-safe, and this establishes no general application-wide
+undo or event-sourcing requirement.
+
+### `flexibility` governs automation, not the owner
+
+`locked` / `flexible` / `Ion-controlled` remain meaningful planning metadata.
+Their purpose is to constrain **Ion's own scheduling and future AI**: the
+Scheduling Engine (§16) may freely place and move `flexible` time, and must
+not move a `locked` commitment without the owner's approval, exactly as §16
+already requires consequential proposed changes to be reviewed.
+
+That constraint governs Ion acting on its own. It is **not** a permission
+boundary between the owner and their own calendar. Every event synced from a
+provider is `locked` by default, so treating it as a human-edit gate put a
+confirmation in front of essentially every real edit — friction that taught
+nothing and protected nothing.
+
+> **Human direct action → already authorized.**
+> **Ion automation / autonomous rescheduling → governed by permission and
+> approval policy.**
+
+Safety language elsewhere in this specification about approval, review, and
+consequential automated action applies to the second, not the first.
+
+### One authorization step, and only one
+
+Ion has exactly two authorization models, and every Calendar action falls under
+one of them.
+
+| Origin | Authorization |
+| --- | --- |
+| The owner acting directly | the action itself |
+| Ion's scheduler, or AI/LLM proposing a change | the owner accepting the proposal |
+
+**Automation proposes; the owner approves; approval happens once.** An AI or
+scheduler-originated Calendar change is a candidate until the owner accepts it —
+"Move study block from 5 PM to 7 PM?" → **Apply**. That Apply *is* the
+authorization, and it is the last one.
+
+> After an authorization — human-direct or owner-approved — **nothing may ask
+> again.** Persisting, dispatching to the provider, reconciling a provider
+> version, and settling are consequences of the decision already made, not
+> further decisions. Provider synchronization is never a second approval step.
+
+This does not grant automation any standing permission. Autonomous Calendar
+mutation without owner approval is not authorized today; if Ion later offers
+owner-configurable automation permissions for specific categories, that is a
+separate product decision to be recorded explicitly, not inferred from this
+section. §16's requirement that the owner review consequential proposed changes
+is the automation half of this rule, unchanged.
+
+### Ion ↔ Google convergence is automatic
+
+§11's "true two-way synchronization" is a product requirement about behavior,
+not merely about capability:
+
+- a supported direct-human change in Ion propagates to Google automatically;
+- a supported change made in Google propagates back into Ion automatically.
+
+Manual synchronization is a refresh and troubleshooting affordance. It is
+never a step in a successful Calendar workflow, and neither are provider
+retry, apply, or reconciliation controls. Ion's outbox, provider versions, and
+write states are implementation detail and must not surface as user workflow.
+
+### Semantic conflict is not sync concurrency
+
+§62 is correct about **semantic conflict** — genuinely contradictory facts Ion
+cannot deterministically resolve, such as a syllabus saying Thursday while
+Canvas says Friday. Ion should surface that uncertainty and let the owner
+decide, because guessing would be dishonest.
+
+**Sync concurrency is a different thing and must not be presented as a
+conflict.** A provider version changing while an Ion edit was in flight is an
+ordinary distributed-systems event, not a disagreement about a fact. Where Ion
+can deterministically preserve the fields the human changed while adopting the
+provider's latest values for fields they did not touch, it reconciles
+automatically and says nothing.
+
+While a direct-human write is unsettled, Ion owns **only the provider fields
+that human explicitly changed**; the provider's latest state owns every other
+provider field; Ion-only metadata stays Ion's; and the pending human values
+stay visible until the write settles. Once it settles, that temporary
+ownership ends and later provider changes synchronize back normally. This is
+deliberately not timestamp last-write-wins.
+
+### What still deserves the owner's attention
+
+Genuinely exceptional conditions remain explicit, with recovery specific to
+the condition rather than a generic chooser: the provider event was deleted
+while an edit was pending, write permission was downgraded, reauthentication
+is required, a recurrence identity no longer resolves, the event became an
+unsupported provider structure, the provider rejected the change terminally,
+or bounded automatic recovery was exhausted. The goal is no routine conflict
+management — not concealing real contradictions.
+
+### Behavioral parity and where the detail lives
+
+Unless an Ion override is explicitly recorded, ordinary Calendar interaction
+mechanics follow familiar Google Calendar desktop behavior as closely as Ion's
+accepted architecture and security model safely allow. Ion keeps its own
+visual identity, local-first architecture, and trust boundary; parity is about
+interaction semantics, never branding or provider architecture.
+
+**[Calendar interaction behavior](CALENDAR_BEHAVIOR.md) is the detailed
+Calendar interaction contract** and the authority for how these principles are
+applied — drag and resize, save behavior, recurrence scope timing and its
+modal, confirmation, Undo, automatic convergence, and error treatment. This
+specification states the product philosophy and authority model; that document
+states the mechanics. Where this specification's preserved transcription and
+that contract disagree about Calendar interaction detail, the contract governs.

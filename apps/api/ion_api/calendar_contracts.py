@@ -283,6 +283,14 @@ class ProviderDeleteCapabilityOutput(CalendarModel):
     reason: str
 
 
+class ProviderWriteOverlayOutput(CalendarModel):
+    title: str | None = None
+    start: ProviderDateTime | None = None
+    end: ProviderDateTime | None = None
+    recurrence: list[str] | None = None
+    status: Literal["confirmed", "tentative", "cancelled"] | None = None
+
+
 class InternalGoogleCalendarOutput(GoogleCalendarOutput):
     next_sync_token: str | None
 
@@ -306,6 +314,9 @@ class CalendarBlockOutput(CalendarModel):
     transparency: str
     recurrence_kind: str
     recurrence_rules: list[str]
+    recurrence_preset: Literal[
+        "none", "daily", "weekdays", "weekly", "monthly", "yearly", "custom"
+    ]
     recurrence_master_block_id: str | None
     recurring_event_id: str | None
     original_start_kind: Literal["none", "date", "instant"]
@@ -325,6 +336,9 @@ class CalendarBlockOutput(CalendarModel):
         Literal["create", "patch", "cancel_occurrence", "delete_event", "delete_series"]
         | None
     )
+    provider_write_recurrence_scope: Literal["single", "occurrence", "series"] | None
+    provider_write_original_start: ProviderDateTime | None
+    provider_write_overlay: ProviderWriteOverlayOutput | None
     provider_write_state: Literal["pending", "synced", "failed", "conflict"]
     provider_write_detail: Literal[
         "queued",
@@ -337,6 +351,41 @@ class CalendarBlockOutput(CalendarModel):
         "conflict",
         "confirmed",
     ]
+    # A more specific, still-safe classification of *why* the block is
+    # retry_wait/reauth_required/conflict/failed. Augments (never replaces)
+    # provider_write_state/provider_write_detail above. Mirrors Rust's
+    # ProviderWriteResultClass allowlist; no raw Google error body/status.
+    provider_write_failure_class: (
+        Literal[
+            "retryable_transport",
+            "retryable_backend",
+            "retryable_quota",
+            "reauthentication_required",
+            "stale_precondition",
+            "duplicate_or_ambiguous_create",
+            "provider_not_found",
+            "invalid_target",
+            "terminal_provider_rejection",
+        ]
+        | None
+    ) = None
+    provider_write_failure_reason: str | None = None
+    # The specific condition a human still has to resolve, or None. Ordinary
+    # provider version drift is never one of these: it is reconciled
+    # automatically and the owner is not told about it. There is deliberately no
+    # generic "conflict" member -- an unclassifiable outcome must not become a
+    # decision handed to the user.
+    provider_recovery_kind: (
+        Literal[
+            "retry_available",
+            "provider_deleted",
+            "recurrence_target_changed",
+            "duplicate_identity",
+            "reauthentication_required",
+            "provider_rejected",
+        ]
+        | None
+    ) = None
 
 
 class CalendarStatusOutput(CalendarModel):

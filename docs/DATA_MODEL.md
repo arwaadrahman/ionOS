@@ -2,8 +2,8 @@
 
 ## Status
 
-**Phase 2C-4 local-first delete/cancel over the accepted Phase 2C-1 durable write
-foundation; owner real-delete acceptance pending.** The organizer schema begins in
+**Phase 2C-5 bounded recurrence writes over the accepted Phase 2C-1 durable
+write foundation; owner real-write acceptance pending.** The organizer schema begins in
 `0002_organizer_foundation`; `0003_milestone_ordering` adds canonical
 owner-scoped positions to Goal and Project Milestones, and
 `0004_today_planning` adds human day-planning intent over canonical Tasks.
@@ -128,14 +128,23 @@ plus extensible subtype; existing rows migrate to visible and uncategorized.
   last confirmed non-wildcard ETag remain the base while an unresolved outbox
   row stores only the bounded desired title/temporal overlay and changed-field
   mask. Pending projections apply that overlay without discarding the base.
-  Reconciliation either promotes a matching sanitized provider event or keeps
-  both base and intent as explicit conflict evidence; it never performs
+  Reconciliation promotes a matching sanitized provider event, or re-aims the
+  pending intent at freshly confirmed provider state so its changed-field mask
+  can be retried; both base and intent are kept as explicit evidence only when
+  reconciliation cannot proceed deterministically. It never performs
   last-write-wins.
 - Phase 2C-4 also requires no migration. `delete_event`, the `status` mask,
   exact ETag, retry states, compact audit, and terminal cancellation already
   exist in `0007`. Pending deletion keeps the confirmed block visible;
   provider completion or confirmed absence tombstones that same block. An
   unattempted create cancels locally without a second intent or provider call.
+- Phase 2C-5 also requires no migration. Existing `recurrence_scope`,
+  `cancel_occurrence`, `delete_series`, recurrence changed-field masks, and
+  base/desired JSON unions carry the typed master ETag plus original-start
+  identity. Generated occurrences stay derived; reconciliation creates or
+  updates only the exact provider exception row and never replaces an existing
+  exception identity. Series deletion tombstones the master and its retained
+  exception evidence without inventing per-occurrence deletes.
 
 See [Architecture](ARCHITECTURE.md) and ADR
 [0001](decisions/0001-local-first-data-ownership.md), plus accepted ADR

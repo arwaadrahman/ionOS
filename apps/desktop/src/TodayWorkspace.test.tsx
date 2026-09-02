@@ -297,6 +297,7 @@ test("shows real CalendarBlock occupancy and free gaps without scheduling Today 
     transparency: "opaque",
     recurrence_kind: "single",
     recurrence_rules: [],
+    recurrence_preset: "none",
     recurrence_master_block_id: null,
     recurring_event_id: null,
     original_start_kind: "none",
@@ -320,8 +321,14 @@ test("shows real CalendarBlock occupancy and free gaps without scheduling Today 
       reason: "account_read_only",
     },
     provider_write_operation: null,
+    provider_write_recurrence_scope: null,
+    provider_write_original_start: null,
+    provider_write_overlay: null,
     provider_write_state: "synced",
     provider_write_detail: "confirmed",
+    provider_write_failure_class: null,
+    provider_write_failure_reason: null,
+    provider_recovery_kind: null,
     ...overrides,
   });
   const calendarStatus: CalendarStatus = {

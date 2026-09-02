@@ -3,7 +3,7 @@
 ## Status
 
 **Accepted invariants with Phase 2A Google credentials and the implemented
-Phase 2C-4 bounded create/edit/delete path.**
+Phase 2C-5 bounded create/edit/delete and recurrence path.**
 
 - Ion is local-first. The public repository contains no real personal Ion data.
 - Tests, demos, screenshots, and fixtures use clearly synthetic records only.
@@ -65,7 +65,7 @@ data and prevents a second desktop process from starting another sidecar.
   behavior. Real account data and configuration remain in Application Support,
   Keychain, and the runtime database outside Git.
 
-## Phase 2C accepted write gate through Phase 2C-4 delete
+## Phase 2C accepted write gate through Phase 2C-5 recurrence
 
 - The accepted future OAuth set is exactly CalendarList read-only plus Calendar
   Events read/write. It replaces Events read-only after deliberate account
@@ -79,14 +79,26 @@ data and prevents a second desktop process from starting another sidecar.
 - Initial provider writes require `writer` or `owner`, ordinary/default event
   type, no provider lock, no attendees, and the accepted account scope.
   Attendee/invite events and `writerWithoutPrivateAccess` remain read-only.
+- **Authorization and provider-write safety are separate layers.** The first
+  decides whether Ion may act: a direct human action authorizes itself, and an
+  automation- or AI-originated change is authorized by the owner accepting it.
+  The second decides how Ion acts safely once it may: Ion IDs only, fixed typed
+  contracts, exact non-wildcard `If-Match`, the narrow body allowlist, and the
+  durable outbox. Relaxing a confirmation is a change to the first layer and
+  never weakens the second; the second never adds an approval step of its own.
 - React write commands use Ion IDs and fixed typed contracts; they cannot
   provide provider IDs, ETags, arbitrary bodies, URLs, methods, or headers as
   request authority. Rust constructs the allowlisted Google request.
 - Python commits canonical intent and a durable outbox before any provider
   request. The outbox contains no token, credential, attendee address, raw
   provider resource, or audit payload snapshot.
-- Every initial ETag mismatch stops as an explicit conflict. Wildcard
-  `If-Match: *`, silent last-write-wins, and automatic merge are forbidden.
+- An ETag mismatch on an ordinary supported mutation re-reads confirmed
+  provider state and rebases the pending write's own changed-field mask onto
+  it, bounded by the automatic attempt budget; drift that outlasts that budget,
+  or a contradiction that cannot be merged truthfully, stops as an explicit
+  conflict. Wildcard `If-Match: *`, silent last-write-wins, timestamp
+  authority, and whole-event merging remain forbidden: a rebase re-sends only
+  the fields the user changed, against freshly confirmed authority.
 - Provider errors and audit retain only allowlisted status/reason, operation,
   recurrence scope, internal IDs, revisions, and timestamps. Event content,
   account email, attendee identity, authorization material, and raw response
@@ -98,15 +110,33 @@ data and prevents a second desktop process from starting another sidecar.
   Ion-ID edit command whose title/time draft cannot supply provider identifiers,
   ETags, methods, URLs, headers, or arbitrary bodies. Production dispatch
   selects `events.insert` for ready creates, changed-field-only `events.patch`,
-  exact-ETag `events.delete` for confirmed single events, and bounded
+  exact-ETag `events.delete` for confirmed events/series, and bounded
   same-event `events.get` for
   ambiguity reconciliation. Every patch uses the last confirmed non-wildcard
-  ETag as `If-Match`. Delete 404 reconciles confirmed absence. Update, move,
-  batch, instances, recurrence mutation, and calendar management remain
-  unreachable. Create and patch bodies exclude attendees,
-  reminders,
-  recurrence, Meet/conference, attachments, extended properties, event colors,
-  descriptions, and locations.
+  ETag as `If-Match`. Delete 404 reconciles confirmed absence. Recurrence
+  occurrence authority is derived only from a canonical master plus typed
+  original start; Rust performs master `events.get` and bounded
+  `events.instances` before an exact-instance conditional patch. Series scope
+  conditionally targets only the master. Update, move, batch, arbitrary RRULE,
+  and calendar management remain unreachable. Create and
+  patch bodies exclude attendees, reminders, Meet/conference, attachments,
+  extended properties, event colors, descriptions, and locations; recurrence
+  is admitted only as one allowlisted preset, optionally carrying a
+  domain-generated termination (see below), and cancellation only as
+  `status=cancelled` on an exact occurrence.
+- **Owner-authorized recurrence termination (2026-09-01).** The recurrence body
+  contract is exactly the five bounded preset families, plus an `UNTIL`
+  terminator generated inside the trusted domain for a `this and following`
+  series split. The terminator is derived only from the persisted preset, the
+  selected occurrence's immutable original start, and the block's own
+  timezone/all-day semantics: `YYYYMMDD` for an all-day series, or basic UTC
+  `YYYYMMDDTHHMMSSZ` for a timed one. The renderer submits only a closed scope
+  action plus trusted Ion identifiers, and can never supply recurrence text, a
+  FREQ, a BY* clause, `COUNT`, or a termination value. Rust re-validates the
+  full rule against this allowlist before dispatch. No new provider method and
+  no new OAuth scope: a split is an `events.patch` trim followed by an
+  `events.insert`, with bounded `events.get` for ambiguity. `events.update`
+  remains forbidden.
 
 See accepted ADR
 [0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md) and the

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import {
   CalendarCreateDraft,
   CalendarCreateSeed,
+  CalendarRecurrencePreset,
   GoogleCalendar,
 } from "./calendar";
 
@@ -27,6 +28,8 @@ export function CalendarCreatePanel({
   const [calendarId, setCalendarId] = useState(defaultCalendar?.id ?? "");
   const [date, setDate] = useState(seed.date);
   const [allDay, setAllDay] = useState(seed.allDay);
+  const [recurrence, setRecurrence] =
+    useState<CalendarRecurrencePreset>("none");
   const [startTime, setStartTime] = useState(seed.startTime ?? "09:00");
   const [endTime, setEndTime] = useState(seed.endTime ?? "10:00");
   const timezoneOptions = useMemo(
@@ -77,6 +80,7 @@ export function CalendarCreatePanel({
             start_time: allDay ? null : startTime,
             end_time: allDay ? null : endTime,
             timezone: allDay ? null : timezone,
+            recurrence,
           });
         }}
       >
@@ -123,6 +127,24 @@ export function CalendarCreatePanel({
             onChange={(event) => setAllDay(event.currentTarget.checked)}
           />
           <span>All day</span>
+        </label>
+        <label>
+          <span>Repeat</span>
+          <select
+            value={recurrence}
+            onChange={(event) =>
+              setRecurrence(
+                event.currentTarget.value as CalendarRecurrencePreset,
+              )
+            }
+          >
+            <option value="none">Does not repeat</option>
+            <option value="daily">Daily</option>
+            <option value="weekdays">Every weekday</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+            <option value="yearly">Yearly</option>
+          </select>
         </label>
         {!allDay ? (
           <>

@@ -254,6 +254,15 @@ export type CalendarCreateSeed = {
   endTime: string | null;
 };
 
+export type CalendarRecurrencePreset =
+  "none" | "daily" | "weekdays" | "weekly" | "monthly" | "yearly";
+
+export type ProviderDateTime = {
+  date: string | null;
+  date_time: string | null;
+  timezone: string | null;
+};
+
 export type CalendarCreateDraft = {
   command_id: string;
   calendar_id: string;
@@ -263,12 +272,77 @@ export type CalendarCreateDraft = {
   start_time: string | null;
   end_time: string | null;
   timezone: string | null;
+  recurrence: CalendarRecurrencePreset;
 };
 
 export type CalendarEditKind = "edit" | "move" | "resize";
 
+/**
+ * One shared recurrence-scope model for every recurring interaction (inspector
+ * save, drag, resize, delete), so scope semantics are not redefined per
+ * surface. Ion follows Google Calendar's desktop convention of choosing scope
+ * *after* the change is described, using Google's own vocabulary.
+ *
+ * `this_and_following` is deliberately absent rather than simulated: it is a
+ * provider series split that Ion's accepted write contract cannot express yet
+ * (see docs/CALENDAR_BEHAVIOR.md).
+ */
+export type CalendarRecurrenceScope =
+  "occurrence" | "this_and_following" | "series";
+
+export type CalendarRecurrenceScopeOption = {
+  value: CalendarRecurrenceScope;
+  label: string;
+  description: string;
+};
+
+export const calendarRecurrenceScopeOptions: CalendarRecurrenceScopeOption[] = [
+  {
+    value: "occurrence",
+    label: "This event",
+    description: "Only the occurrence you opened changes.",
+  },
+  {
+    value: "this_and_following",
+    label: "This and following events",
+    description: "This occurrence and every later one change.",
+  },
+  {
+    value: "series",
+    label: "All events",
+    description: "Every occurrence in this series changes.",
+  },
+];
+
+/**
+ * "This and following" is a provider series split. Ion can only offer it where
+ * it can faithfully continue the series forward, and where it means something
+ * distinct from "All events".
+ */
+export function calendarSplitAvailability(
+  block: CalendarBlock,
+  occurrenceIsFirst: boolean,
+): { available: boolean; reason: string | null } {
+  if (
+    block.recurrence_preset === "custom" ||
+    block.recurrence_preset === "none"
+  ) {
+    return {
+      available: false,
+      reason:
+        "This series uses a recurrence pattern Ion can't split safely yet.",
+    };
+  }
+  if (occurrenceIsFirst) {
+    // Splitting at the first occurrence is exactly "All events".
+    return { available: false, reason: null };
+  }
+  return { available: true, reason: null };
+}
+
 export type CalendarEditSeed = {
   editKind: CalendarEditKind;
+  resizeEdge?: "start" | "end";
   startDate?: string;
   startTime?: string;
   endDate?: string;
@@ -286,6 +360,10 @@ export type CalendarEditDraft = {
   start_time: string | null;
   end_time: string | null;
   timezone: string | null;
+  recurrence_scope: "single" | CalendarRecurrenceScope;
+  occurrence_original_start: ProviderDateTime | null;
+  recurrence: Exclude<CalendarRecurrencePreset, "none"> | null;
+  recurrence_risk_confirmed: boolean;
   locked_confirmed: boolean;
 };
 
@@ -293,6 +371,9 @@ export type CalendarDeleteDraft = {
   command_id: string;
   calendar_block_id: string;
   expected_block_revision: number;
+  recurrence_scope: "single" | CalendarRecurrenceScope;
+  occurrence_original_start: ProviderDateTime | null;
+  series_confirmed: boolean;
   locked_confirmed: boolean;
 };
 
@@ -321,6 +402,7 @@ export type CalendarBlock = {
   transparency: "opaque" | "transparent";
   recurrence_kind: "single" | "master" | "exception";
   recurrence_rules: string[];
+  recurrence_preset: CalendarRecurrencePreset | "custom";
   recurrence_master_block_id: string | null;
   recurring_event_id: string | null;
   original_start_kind: "none" | "date" | "instant";
@@ -343,6 +425,15 @@ export type CalendarBlock = {
     | "delete_event"
     | "delete_series"
     | null;
+  provider_write_recurrence_scope: "single" | "occurrence" | "series" | null;
+  provider_write_original_start: ProviderDateTime | null;
+  provider_write_overlay: {
+    title: string | null;
+    start: ProviderDateTime | null;
+    end: ProviderDateTime | null;
+    recurrence: string[] | null;
+    status: "confirmed" | "tentative" | "cancelled" | null;
+  } | null;
   provider_write_state: "pending" | "synced" | "failed" | "conflict";
   provider_write_detail:
     | "queued"
@@ -354,6 +445,52 @@ export type CalendarBlock = {
     | "failed"
     | "conflict"
     | "confirmed";
+  provider_write_failure_class:
+    | "retryable_transport"
+    | "retryable_backend"
+    | "retryable_quota"
+    | "reauthentication_required"
+    | "stale_precondition"
+    | "duplicate_or_ambiguous_create"
+    | "provider_not_found"
+    | "invalid_target"
+    | "terminal_provider_rejection"
+    | null;
+  provider_write_failure_reason: string | null;
+  /**
+   * The specific condition a person still has to settle, or null. Ordinary
+   * provider version drift never appears here -- Ion resolves it and says
+   * nothing. There is deliberately no generic "conflict" member.
+   */
+  provider_recovery_kind:
+    | "retry_available"
+    | "provider_deleted"
+    | "recurrence_target_changed"
+    | "duplicate_identity"
+    | "reauthentication_required"
+    | "provider_rejected"
+    | null;
+};
+
+export type ConflictResolutionDraft = {
+  command_id: string;
+  calendar_block_id: string;
+  expected_block_revision: number;
+};
+
+export type ReviewDifferences = {
+  calendar_block_id: string;
+  changed_fields: string[];
+  confirmed_title: string | null;
+  desired_title: string | null;
+  confirmed_start: ProviderDateTime | null;
+  confirmed_end: ProviderDateTime | null;
+  desired_start: ProviderDateTime | null;
+  desired_end: ProviderDateTime | null;
+  confirmed_recurrence: string[] | null;
+  desired_recurrence: string[] | null;
+  confirmed_status: string | null;
+  desired_status: string | null;
 };
 
 export type CalendarStatus = {
@@ -401,6 +538,20 @@ export const googleCalendarClient = {
     invoke<CalendarStatus>("edit_google_calendar_event", { draft }),
   delete: (draft: CalendarDeleteDraft) =>
     invoke<CalendarStatus>("delete_google_calendar_event", { draft }),
+  keepGoogleVersion: (draft: ConflictResolutionDraft) =>
+    invoke<CalendarStatus>("keep_google_calendar_version", { draft }),
+  applyIonChanges: (draft: ConflictResolutionDraft) =>
+    invoke<CalendarStatus>("apply_ion_calendar_changes", { draft }),
+  /**
+   * Legacy recovery tooling, deliberately not mounted in ordinary Calendar use.
+   * Ion no longer asks the owner to compare provider versions: every condition
+   * they must settle is named specifically instead. Kept as an isolated escape
+   * hatch, not part of the human mutation path.
+   */
+  reviewDifferences: (calendarBlockId: string) =>
+    invoke<ReviewDifferences>("review_google_calendar_differences", {
+      calendarBlockId,
+    }),
   setEnabled: (calendar: GoogleCalendar, enabled: boolean) =>
     invoke<CalendarStatus>("set_google_calendar_enabled", {
       calendarId: calendar.id,

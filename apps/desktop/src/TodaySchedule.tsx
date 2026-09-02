@@ -30,8 +30,8 @@ export const TodaySchedule = memo(function TodaySchedule({
 }) {
   const range = useMemo(() => calendarRange("day", date), [date]);
   const projectionIndex = useMemo(
-    () => buildCalendarProjectionIndex(calendar),
-    [calendar],
+    () => buildCalendarProjectionIndex(calendar, localTimeZone),
+    [calendar, localTimeZone],
   );
   const projection = useMemo(
     () => projectCalendarIndex(projectionIndex, range, localTimeZone),

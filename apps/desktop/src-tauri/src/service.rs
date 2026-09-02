@@ -107,6 +107,8 @@ pub struct Blocker {
 pub struct ProductError {
     pub code: ProductErrorCode,
     pub blockers: Vec<Blocker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl ProductError {
@@ -114,6 +116,7 @@ impl ProductError {
         Self {
             code,
             blockers: Vec::new(),
+            reason: None,
         }
     }
 

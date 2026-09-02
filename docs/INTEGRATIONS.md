@@ -1,6 +1,6 @@
 # Integration Boundaries
 
-## Status: Phase 2C-4 bounded Google Calendar delete/cancel implemented
+## Status: Phase 2C-5 bounded Google Calendar recurrence writes implemented
 
 Integrations are adapters around Ion's local authority; they do not become its
 primary storage. Google Calendar is the first active adapter under ADR 0018.
@@ -67,7 +67,7 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   bounded retry, and safe 410 full resync.
 - Identity: provider event ID reconciles within one calendar. iCalUID is a
   separate non-unique correlation value. ETag/provider revision metadata is
-  retained for later explicit conflict handling.
+  retained for conditional writes and automatic rebase.
 - Failure: cached canonical blocks remain readable. Retry/reauth/failure is
   explicit; unavailable provider data is never invented. Provider rejection
   diagnostics retain only allowlisted status/reason classes and never the
@@ -82,7 +82,7 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   fields. Google selection, subscription, visibility, and event content remain
   untouched.
 
-## Phase 2C accepted write contract through implemented 2C-4 delete
+## Phase 2C accepted write contract through implemented 2C-5 recurrence
 
 - Accepted scopes: keep `calendar.calendarlist.readonly` and replace
   `calendar.events.readonly` with `calendar.events` only after deliberate
@@ -95,14 +95,18 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
 - Dispatch: Python/SQLite persists canonical direct-human intent and a durable
   typed outbox before Rust sends an allowlisted Google request. Rust remains the
   only Google/OAuth/token owner; React and Python gain no provider authority.
-- Concurrency: every initial ETag mismatch is an explicit conflict with Keep
-  Google, Apply Ion, or Review differences. No automatic merge or silent
-  last-write-wins exists.
+- Concurrency: ordinary ETag drift converges automatically — Ion re-reads
+  confirmed provider state and rebases the pending changed-field mask onto it,
+  bounded by the automatic attempt budget. Keep Google / Apply Ion / Review
+  differences remain for drift that outlasts that budget and for genuinely
+  unmergeable contradictions. No whole-event merge, silent last-write-wins, or
+  timestamp authority exists.
 - Idempotency/recovery: Ion-created events use stable deterministic provider
   IDs; ambiguous requests reconcile before retry; retries are bounded and
   restart-safe.
 - Recurrence: one occurrence and whole series are the only accepted scopes.
-  Arbitrary RRULE and `this and following` remain deferred.
+  Daily, weekdays, weekly, monthly, and yearly are the only writable rules.
+  Arbitrary RRULE entry and `this and following` remain deferred.
 - Retention: unresolved, failed, conflict, and ambiguous intents remain until
   explicit resolution. Successfully completed intent rows may be pruned after
   30 days while compact audit remains durable.
@@ -116,17 +120,35 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   persists the last confirmed provider base, the desired title/temporal
   overlay, and its changed-field mask before dispatch. Rust sends only
   `events.patch` with the persisted target and exact non-wildcard `If-Match`;
-  ambiguous outcomes use `events.get`. HTTP 412, refresh drift, missing events,
-  and capability loss stop as explicit conflicts rather than overwriting
+  ambiguous outcomes and stale preconditions use `events.get` to rebase onto
+  confirmed state. Missing events, capability loss, and drift that outlasts the
+  automatic attempt budget stop as explicit conflicts rather than overwriting
   Google. Timed move/resize preserve IANA timezone semantics; all-day edits use
-  civil exclusive-end dates. Timed/all-day conversion is deferred.
+  civil exclusive-end dates. Foreground sync and provider writes retain one
+  shared Rust-owned Google gate; a durable ready write waits for the current
+  bounded sync instead of abandoning dispatch on `busy`. Timed/all-day
+  conversion is deferred. Direct saves, Sync, re-consent, and startup status
+  recovery re-query the ready selector serially for at most 10 total writes, so
+  multiple durable intents on one account resume without concurrent Google
+  calls or an unrelated future UI action.
 - Delete/cancel: a fixed command persists direct-human delete intent before
   exact-ETag `events.delete`. Transport ambiguity checks only the same event;
   404/tombstone is provider-complete, live changed ETag conflicts, and a
   never-attempted create cancels wholly locally without provider traffic.
-- Exclusions: update, move, batch, instances dispatch, recurrence,
+- Recurring occurrences resolve by canonical master plus immutable original
+  start through bounded `events.instances`; exact-instance edit/move/resize and
+  cancellation use conditional `events.patch`. Whole-series patch/delete
+  conditionally target only the master. Existing exceptions retain identity;
+  ambiguity or identity drift stops safely. Any nonterminal master outbox
+  operation disables sibling occurrence writes, while a one-occurrence overlay
+  is rendered only for its exact original-start target. A provider-rejected
+  occurrence resolution is a reviewable identity conflict. Bounded recovery
+  also repairs a legacy occurrence-resolution failure to `stale_precondition`
+  when a later confirmed master ETag proves the durable identity is stale; it
+  never retries that old mutation or weakens the conditional write.
+- Exclusions: update, move, batch, arbitrary recurrence,
   attendee, reminder, conferencing, attachment, and special-event writes are
-  not reachable from the Phase 2C-4 commands or renderer.
+  not reachable from the Phase 2C-5 commands or renderer.
 
 See [ADR 0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md)
 and the [Phase 2C gate](phases/PHASE_2C.md).

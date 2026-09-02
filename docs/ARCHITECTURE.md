@@ -253,13 +253,15 @@ visible but do not fabricate timed occupancy. Today Tasks keep their existing
 planning semantics and are never converted to, or implied to be,
 CalendarBlocks. Cached Calendar content stays visible when Google is offline.
 
-## Phase 2C two-way write boundary through implemented 2C-4 delete
+## Phase 2C two-way write boundary through implemented 2C-5 recurrence
 
 The Phase 2C architecture/security gate is accepted. Phase 2C-1 established
 the reviewed durable outbox/capability migration and typed boundaries. Phase
 2C-2 exposes one fixed create command and an explicit selected-account
 write-scope re-consent command. Phase 2C-3 exposes one fixed edit command and
-Phase 2C-4 one fixed delete command for eligible existing events. Each command
+Phase 2C-4 one fixed delete command for eligible existing events. Phase 2C-5
+extends those commands with typed recurrence presets and explicit occurrence
+or series authority. Each command
 first commits direct-human
 canonical intent and a durable Python/SQLite outbox
 transaction. Only then may Rust use its existing token and Google HTTPS
@@ -270,7 +272,9 @@ authority, and Python never receives a token or calls Google.
 Google remains authoritative for last-confirmed provider fields. Existing
 edits use durable desired overlays rather than silently rewriting that base;
 new Google-backed blocks remain visibly unconfirmed until provider
-reconciliation. Every initial ETag mismatch is an explicit conflict. Creates
+reconciliation. An ETag mismatch on an ordinary mutation rebases automatically
+onto freshly confirmed provider state; only drift that outlasts the bounded
+attempt budget becomes an explicit conflict. Creates
 use a stable deterministic provider event ID, and ambiguous results reconcile
 before retry. Recurring instances resolve through the master and original-start
 union; generated occurrences remain derived.
@@ -279,7 +283,7 @@ The accepted initial provider boundary is attendee-free ordinary events on
 `writer` or `owner` calendars, with no provider lock and an account that has
 explicitly re-consented to Calendar Events write access. Attendee/invite
 events, `writerWithoutPrivateAccess`, special event types, automatic conflict
-merges, arbitrary RRULE, and `this and following` remain outside Phase 2C.
+merges, arbitrary RRULE entry, and `this and following` remain outside Phase 2C.
 Successful outbox rows may be pruned after 30 days only with confirmed linkage
 and compact audit; unresolved work remains until explicit resolution. Phase
 2C-2 dispatches `events.insert` and deterministic-ID `events.get`
@@ -289,8 +293,13 @@ an ambiguous result. The confirmed provider base remains canonical while a
 durable desired overlay is pending. Phase 2C-4 dispatches only conditional
 single-event `events.delete`; a 404 or confirmed sync tombstone completes the
 intent, while a live changed ETag or HTTP 412 conflicts. A never-attempted
-create is cancelled wholly locally. Update, move, batch, and
-recurrence-instance mutation endpoints remain unreachable. The write path
+create is cancelled wholly locally. Phase 2C-5 adds bounded daily, weekday,
+weekly, monthly, and yearly rules; master `events.get` plus `events.instances`
+resolution by immutable original start; exact-instance `events.patch` for
+occurrence edit/cancellation; and conditional master patch/delete for series
+scope. Existing provider exceptions retain their identity. Update, move,
+batch, arbitrary RRULE, and this-and-following split operations remain
+unreachable. The write path
 has no timer or busy worker: dispatch is bounded after an explicit save, sync,
 re-consent, or app-start recovery call. Existing
 accounts remain read-only until the owner explicitly enables writing. See the

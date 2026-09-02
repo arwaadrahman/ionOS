@@ -145,7 +145,7 @@ export const CalendarSidebar = memo(function CalendarSidebar({
                     </strong>
                     <small>
                       {writeEnabled
-                        ? "Ion can create ordinary attendee-free events in eligible calendars."
+                        ? "Ion can create attendee-free events with bounded recurrence in eligible calendars."
                         : "Creating Google events requires a separate, explicit permission step."}
                     </small>
                   </span>
@@ -240,8 +240,9 @@ export const CalendarSidebar = memo(function CalendarSidebar({
       <footer className="calendar-sidebar-footer">
         <p className="context-note">
           Calendar visibility is local to Ion. Explicitly write-enabled accounts
-          can create and edit eligible ordinary events; attendees, recurring
-          events, and provider-managed events remain read-only.
+          can create and edit eligible attendee-free events, including bounded
+          recurring-event scopes. Attendees and provider-managed events remain
+          read-only.
         </p>
         <div className="calendar-sidebar-actions">
           <button

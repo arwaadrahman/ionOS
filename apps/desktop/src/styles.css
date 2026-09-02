@@ -685,7 +685,19 @@ select:focus-visible {
 }
 
 .notice--warning {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
   border-color: #c58a52;
+}
+
+/* Undo sits with the confirmation it reverses, not in a separate surface. */
+.notice--warning .quiet-button {
+  flex: none;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid #4a4356;
+  border-radius: 0.45rem;
 }
 
 .danger-button {
@@ -1736,6 +1748,10 @@ h1 {
   container-type: inline-size;
 }
 
+.calendar-timed-position.is-direct-origin {
+  opacity: 0.24;
+}
+
 .calendar-event {
   display: grid;
   align-content: start;
@@ -1759,33 +1775,110 @@ h1 {
   background: var(--event-strong-fill);
 }
 
-.calendar-event[draggable="true"] {
+.calendar-event[data-direct-manipulation="enabled"] {
   cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
 
-.calendar-event[draggable="true"]:active {
+.calendar-event[data-direct-manipulation="enabled"]:active {
   cursor: grabbing;
 }
 
+/* Selected is a restrained, distinct signal from category color, pending
+   state, or conflict/failure copy: a fixed brand-accent ring plus a
+   thicker left border (a shape change, not only a color change) so the
+   currently-open occurrence stays identifiable without relying on hue
+   alone or being mistaken for a category/state color. */
+.calendar-event[data-selected="true"] {
+  border-left-width: 3px;
+  box-shadow: 0 0 0 2px var(--ion-accent, #8b5cf6);
+}
+
+/* The button itself is the enlarged pointer/touch target (0.6rem tall);
+   the visible bar is a thinner ::after so the affordance stays restrained
+   while the hit area is substantially bigger than the bar looks. A
+   restrained non-zero baseline opacity means resizability is discoverable
+   without hovering first; hover/focus/active only intensify it. */
 .calendar-event-resize-handle {
   position: absolute;
-  right: 0.3rem;
-  bottom: 0.12rem;
-  left: 0.3rem;
+  right: 0.2rem;
+  left: 0.2rem;
   z-index: 3;
-  height: 0.34rem;
+  height: 0.6rem;
   min-height: 0;
   padding: 0;
   border: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--event-accent) 70%, transparent);
+  background: transparent;
   cursor: ns-resize;
-  opacity: 0;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.calendar-timed-position:hover .calendar-event-resize-handle,
-.calendar-event-resize-handle:focus-visible {
-  opacity: 0.9;
+.calendar-event-resize-handle::after {
+  content: "";
+  display: block;
+  width: 100%;
+  height: 0.2rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--event-accent) 65%, transparent);
+  opacity: 0.5;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease;
+}
+
+.calendar-event-resize-handle--start {
+  top: -0.08rem;
+}
+
+.calendar-event-resize-handle--end {
+  bottom: -0.08rem;
+}
+
+.calendar-timed-position:hover .calendar-event-resize-handle::after,
+.calendar-event-resize-handle:focus-visible::after,
+.calendar-event-resize-handle:active::after {
+  opacity: 0.95;
+  background: color-mix(in srgb, var(--event-accent) 85%, transparent);
+}
+
+.calendar-direct-preview {
+  position: absolute;
+  z-index: 5;
+  right: 2px;
+  left: 2px;
+  display: grid;
+  align-content: start;
+  gap: 0.12rem;
+  min-height: 1.45rem;
+  padding: 0.3rem 0.4rem;
+  overflow: hidden;
+  border: 1px solid #b49aff;
+  border-left-width: 3px;
+  border-radius: 0.35rem;
+  color: #f2edff;
+  background: rgb(91 66 153 / 88%);
+  box-shadow: 0 0.5rem 1.4rem rgb(0 0 0 / 28%);
+  pointer-events: none;
+}
+
+.calendar-direct-preview strong,
+.calendar-direct-preview span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-direct-preview strong {
+  font-size: 0.68rem;
+}
+
+.calendar-direct-preview span {
+  color: #d9ccff;
+  font-size: 0.6rem;
 }
 
 .calendar-event strong,
@@ -2585,4 +2678,110 @@ h1 {
     flex-wrap: wrap;
     justify-content: end;
   }
+}
+
+/* One shared recurrence-scope chooser for inspector saves, gestures, and
+   deletes. Restrained sheet inside the inspector rather than a full-screen
+   modal: the event stays visible while its scope is chosen. */
+/* The scope chooser interrupts a committed interaction, so it is a real modal:
+   centered over the whole window, with the surface underneath inert. */
+.calendar-modal-overlay {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgb(0 0 0 / 55%);
+  inset: 0;
+}
+
+.calendar-scope-dialog {
+  display: grid;
+  gap: 0.7rem;
+  width: min(30rem, 100%);
+  max-height: calc(100vh - 3rem);
+  padding: 1.1rem 1.2rem;
+  overflow-y: auto;
+  border: 1px solid #3d3748;
+  border-radius: 0.8rem;
+  background: rgb(18 17 23 / 99%);
+  box-shadow: 0 1.2rem 3rem rgb(0 0 0 / 55%);
+}
+
+.calendar-scope-dialog h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.calendar-scope-options {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.calendar-scope-options label {
+  display: flex;
+  gap: 0.55rem;
+  align-items: start;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #2d2934;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.calendar-scope-options label.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.calendar-scope-options label:has(input:checked) {
+  border-color: var(--ion-accent, #8b5cf6);
+  background: #211a31;
+}
+
+.calendar-scope-options span {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.calendar-scope-confirmation {
+  display: flex;
+  gap: 0.5rem;
+  align-items: start;
+  color: #d7a4a7;
+  font-size: 0.78rem;
+}
+
+/* A named condition the owner still has to settle. Rare by design: ordinary
+   provider drift is reconciled without telling anyone. */
+.calendar-recovery {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid #5d4a52;
+  border-radius: 0.6rem;
+  background: rgb(93 74 82 / 16%);
+}
+
+.calendar-conflict-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* The consequence of the selected scope, stated beside the choice itself. */
+.calendar-scope-warning {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  color: #e0b4b7;
+  font-size: 0.78rem;
+  border-left: 2px solid #7d4a4f;
+  border-radius: 0.3rem;
+  background: rgb(125 74 79 / 14%);
+}
+
+.calendar-scope-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }

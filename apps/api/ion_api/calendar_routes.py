@@ -21,6 +21,8 @@ from ion_api.calendar_contracts import (
     SyncPageInput,
 )
 from ion_api.calendar_write_contracts import (
+    ApplyIonChangesInput,
+    ApplyIonChangesOutput,
     BeginWriteAttemptInput,
     CalendarWriteFoundationOutput,
     CreateProviderEventInput,
@@ -29,6 +31,8 @@ from ion_api.calendar_write_contracts import (
     DeleteProviderEventOutput,
     EditProviderEventInput,
     EditProviderEventOutput,
+    KeepGoogleVersionInput,
+    KeepGoogleVersionOutput,
     ProviderWriteIntentSummaryOutput,
     ProviderWritePlanOutput,
     PruneResultOutput,
@@ -41,9 +45,37 @@ from ion_api.calendar_write_contracts import (
     RecordProviderWriteResultInput,
     RecoverWriteIntentsInput,
     RecoveryResultOutput,
+    ResolveProviderOccurrenceInput,
+    ReviewDifferencesInput,
+    ReviewDifferencesOutput,
     WriteIntentTransitionInput,
 )
 from ion_api.calendar_writes import CalendarWriteService
+
+SAFE_CALENDAR_WRITE_REASONS = frozenset(
+    {
+        "account_read_only",
+        "access_role_read_only",
+        "attendees_present",
+        "calendar_deleted",
+        "calendar_disabled",
+        "create_reconciliation_required",
+        "locked_confirmation_required",
+        "no_change_requested",
+        "no_conflict_to_resolve",
+        "provider_deleted",
+        "provider_locked",
+        "provider_unconfirmed",
+        "reauth_required",
+        "recurrence_identity_unresolved",
+        "recurrence_split_at_first_occurrence",
+        "recurrence_split_unsupported",
+        "recurrence_unsupported",
+        "special_event",
+        "timezone_change_unsupported",
+        "write_pending",
+    }
+)
 
 
 def _raise_safe(error: Exception) -> None:
@@ -56,9 +88,11 @@ def _raise_safe(error: Exception) -> None:
             status_code=409,
             detail={"code": "revision_conflict", "blockers": []},
         ) from error
-    raise HTTPException(
-        status_code=422, detail={"code": "validation", "blockers": []}
-    ) from error
+    reason = str(error)
+    detail: dict[str, object] = {"code": "validation", "blockers": []}
+    if reason in SAFE_CALENDAR_WRITE_REASONS:
+        detail["reason"] = reason
+    raise HTTPException(status_code=422, detail=detail) from error
 
 
 def calendar_router(service: CalendarService) -> APIRouter:
@@ -131,6 +165,58 @@ def calendar_router(service: CalendarService) -> APIRouter:
                     else "local_create_cancelled"
                 ),
             )
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/keep-google-version",
+        response_model=KeepGoogleVersionOutput,
+    )
+    def keep_google_version(
+        input: KeepGoogleVersionInput,
+    ) -> KeepGoogleVersionOutput:
+        try:
+            return KeepGoogleVersionOutput(
+                intent=writes.keep_google_version(input), status=service.status()
+            )
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/apply-ion-changes",
+        response_model=ApplyIonChangesOutput,
+    )
+    def apply_ion_changes(
+        input: ApplyIonChangesInput,
+    ) -> ApplyIonChangesOutput:
+        try:
+            return ApplyIonChangesOutput(
+                intent=writes.apply_ion_changes(input), status=service.status()
+            )
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/review-differences",
+        response_model=ReviewDifferencesOutput,
+    )
+    def review_differences(
+        input: ReviewDifferencesInput,
+    ) -> ReviewDifferencesOutput:
+        try:
+            return writes.review_differences(input.calendar_block_id)
         except (
             CalendarNotFoundError,
             CalendarConflictError,
@@ -225,6 +311,22 @@ def calendar_router(service: CalendarService) -> APIRouter:
     ) -> ProviderWriteIntentSummaryOutput:
         try:
             return writes.record_result(intent_id, input)
+        except (
+            CalendarNotFoundError,
+            CalendarConflictError,
+            CalendarValidationError,
+        ) as error:
+            _raise_safe(error)
+
+    @router.post(
+        "/internal/write-intents/{intent_id}/resolve-occurrence",
+        response_model=ProviderWritePlanOutput,
+    )
+    def resolve_write_occurrence(
+        intent_id: str, input: ResolveProviderOccurrenceInput
+    ) -> ProviderWritePlanOutput:
+        try:
+            return writes.resolve_occurrence(intent_id, input)
         except (
             CalendarNotFoundError,
             CalendarConflictError,

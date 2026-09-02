@@ -33,6 +33,8 @@ Project-local specifications and decisions override this router and the universa
 
 For Ion, read the entire Master Specification when beginning a phase, changing architecture, or making broad recommendations. Routine scoped work should use accepted derived docs/ADRs unless the route or `AGENTS.md` requires the full specification again.
 
+`docs/PRODUCT_SPEC.md` is Ion's only Master Specification, and its appended owner amendments supersede its preserved source transcription. Untracked bootstrap or transcription artifacts outside `docs/` are historical inputs, not authority.
+
 ## 2. Route table
 
 ### Product, architecture, and agents
@@ -56,6 +58,7 @@ For Ion, read the entire Master Specification when beginning a phase, changing a
 | `ROUTE-FOOTER` | Site ending, missing navigation/contact/closure | Site information architecture and existing header/nav | `FOOTER-DESIGN`, `IMPECCABLE` | Desktop/mobile footer proposal with real links/content and accessibility |
 | `ROUTE-COMPONENT` | Need a compact interaction pattern | Existing component system and exact user need | `KOKONUT`; `MOTION` if necessary | Inspect one candidate, retokenize, identify imports/license, avoid unrelated blocks |
 | `ROUTE-DESIGN-AUDIT` | Polish, critique, improve hierarchy or accessibility | Current surface and accepted design system | `IMPECCABLE`; `TASTE` only for an explicitly experimental pass | Evidence-based findings ordered by impact; preserve accepted identity |
+| `ROUTE-CALENDAR-BEHAVIOR` | Any change to Calendar interaction behavior — editing, moving, resizing, deleting, recurrence scope, confirmation, synchronization/convergence, or error UX | **`docs/CALENDAR_BEHAVIOR.md` (mandatory, read first)**, the Master Specification's Calendar authority amendment, accepted phase gate, ADR 0021 | `IMPECCABLE` only if the surface itself is being redesigned | Behavior that follows the documented convention, or an explicit recorded override; every layer's allowlist updated together. Direct human action is authorization — never add confirmation because an event is `locked`, and never surface ordinary provider drift as a user-facing conflict |
 | `ROUTE-ART-DIRECTION` | Page feels generic; explore a distinct identity | Brand goals, content, audience, non-negotiables | `TASTE`, then relevant gallery cards | Isolated directions/reference board; no standing rules or implementation without approval |
 
 ### Motion, 3D, and visualization

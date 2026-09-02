@@ -7,6 +7,12 @@ translates accepted ADR 0021 and the accepted Phase 2C gate into exact names
 for this bounded implementation. It does not authorize a Calendar write UI,
 Google event mutation, or automatic OAuth re-consent.
 
+> **Partially superseded (2026-09-01).** The owner's accepted automatic
+> convergence policy extended the write-intent state machine below. Names,
+> schema, and migration `0007` are unchanged; the two amended transitions are
+> marked inline. For current Calendar behavior read
+> [Calendar interaction behavior](../CALENDAR_BEHAVIOR.md), which governs.
+
 ## Migration and durable schema
 
 Migration `0007_calendar_write_foundation` upgrades the accepted Phase 2B
@@ -68,8 +74,12 @@ Allowed transitions are:
   ambiguous | failed`
 - `retry_wait → ready | cancelled`
 - `reauth_required → ready | cancelled`
-- `ambiguous → attempting | conflict | failed | cancelled`
-- `conflict → cancelled`
+- `ambiguous → attempting | ready | conflict | failed | cancelled`
+  *(amended 2026-09-01: `ready` is the automatic rebase, after confirmed
+  provider state has just been re-read)*
+- `conflict → ready | cancelled`
+  *(amended 2026-09-01: `ready` re-arms a row the superseded policy conflicted
+  for ordinary drift)*
 - `failed → cancelled`
 
 `completed` and `cancelled` are terminal. Starting an attempt persists
