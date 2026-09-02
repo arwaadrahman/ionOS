@@ -12,6 +12,8 @@ from fastapi.responses import JSONResponse
 
 from ion_api.calendar import CalendarService
 from ion_api.calendar_routes import calendar_router
+from ion_api.calendar_write_coordinator import CalendarWriteCoordinator
+from ion_api.calendar_write_routes import calendar_write_router
 from ion_api.db import create_database_engine
 from ion_api.home import HomeService
 from ion_api.home_routes import home_router
@@ -73,6 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     engine = create_database_engine(active_settings.database_path)
     app.include_router(calendar_router(CalendarService(engine)))
+    app.include_router(calendar_write_router(CalendarWriteCoordinator(engine)))
     app.include_router(home_router(HomeService(engine)))
     app.include_router(task_router(TaskService(engine)))
     app.include_router(organizer_router(OrganizerService(engine)))
@@ -100,6 +103,7 @@ def create_production_app(settings: Settings, session_token: str) -> FastAPI:
 
     engine = create_database_engine(settings.database_path)
     app.include_router(calendar_router(CalendarService(engine)))
+    app.include_router(calendar_write_router(CalendarWriteCoordinator(engine)))
     app.include_router(home_router(HomeService(engine)))
     app.include_router(task_router(TaskService(engine)))
     app.include_router(organizer_router(OrganizerService(engine)))

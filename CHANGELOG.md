@@ -55,6 +55,41 @@ All notable repository changes are documented here.
 
 ### Added
 
+- **Phase 2C-R0 — the direct-human write foundation.** The smallest trustworthy
+  architecture for Phase 2C v2, proving that human intent acceptance and
+  provider write execution are separate concerns. Accepting a direct human
+  action reads no provider lifecycle state at all, so it cannot be refused
+  because provider work is busy — the Phase 2C v1 `write_pending` behaviour is
+  not merely avoided, it is unrepresentable. Serialization lives in a separate
+  provider lane whose `provider_busy` flag exists so the dispatcher can
+  serialize, never so a person can be refused; a test edits the same event three
+  times while a write is in flight and every one is accepted durably. The
+  recovery taxonomy is closed — five automatic kinds, eight owner-action kinds,
+  and deliberately no generic member — and classification is total, so no
+  outcome can fall through into a "review this" decision. Ordinary provider
+  version drift classifies as automatic and re-arms for another bounded attempt;
+  exhausting the budget becomes `automatic_recovery_exhausted`, which names what
+  happened instead of borrowing the language of a disagreement about facts. The
+  `conflict` storage state survives only because migration 0007 is immutable:
+  the coordinator never produces it, and a test drives every failure class end
+  to end to prove it. **R0 dispatches nothing** — no operation is dispatchable,
+  the Rust write module reaches no Google endpoint, and accepting an intent does
+  not mutate the canonical CalendarBlock, so the Calendar is visibly unchanged.
+  No migration was required.
+- **A cross-layer seam harness, before any write capability.**
+  `contracts/calendar-write-vocabulary.json` is the single canonical source for
+  every closed vocabulary; Python, Rust, and TypeScript each assert their own
+  allowlists against it, and the Python seam suite asserts the other two layers'
+  source as well. This targets the exact defect that broke Phase 2C v1, where
+  `this and following` shipped implemented end to end in the domain with passing
+  tests while the Tauri scope allowlist still read
+  `single | occurrence | series`, so every real attempt failed as
+  `local_state_invalid`. Injecting that drift was verified to fail all three
+  suites. The seam tests drive the authenticated production app over real SQLite
+  at head 0007 with the exact bodies Rust serializes, rather than calling the
+  domain: "Python domain tests pass" is not accepted as evidence that a Calendar
+  write works.
+
 - **A stale recurrence exception no longer renders as a phantom event.** An
   explicit exception overrides exactly one generated occurrence, identified by
   its immutable original start. After a confirmed whole-series move or re-rule,

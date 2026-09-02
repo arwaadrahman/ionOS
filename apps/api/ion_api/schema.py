@@ -1,6 +1,7 @@
 """SQLAlchemy Core definitions for the Phase 1A organizer foundation."""
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     ForeignKey,
@@ -10,6 +11,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    text,
 )
 
 metadata = MetaData()
@@ -253,9 +255,22 @@ google_accounts = Table(
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
     Column("revision", Integer, nullable=False, server_default="1"),
+    # Added by immutable migration 0007. Write capability is per account and
+    # begins read_only; only deliberate re-consent moves it.
+    Column(
+        "calendar_write_scope_state",
+        String,
+        nullable=False,
+        server_default="read_only",
+    ),
     CheckConstraint(
         "auth_state IN ('connected', 'reauth_required', 'disconnected')",
         name="google_account_auth_state_valid",
+    ),
+    CheckConstraint(
+        "calendar_write_scope_state IN "
+        "('read_only', 'write_granted', 'reauth_required')",
+        name="google_account_write_scope_state_valid",
     ),
     CheckConstraint("revision >= 1", name="google_account_revision_positive"),
 )
@@ -443,7 +458,26 @@ google_event_links = Table(
     Column("original_start_date", String, nullable=True),
     Column("original_start_at", String, nullable=True),
     Column("original_start_timezone", Text, nullable=True),
-    Column("last_seen_sync_generation", String(36), nullable=False),
+    # 0007 relaxed this to allow a link that exists before provider confirmation.
+    Column("last_seen_sync_generation", String(36), nullable=True),
+    # Write-eligibility evidence added by immutable migration 0007. Safe enums
+    # and booleans only -- never attendee identity or a raw provider resource.
+    Column("link_state", String, nullable=False, server_default="confirmed"),
+    Column("provider_event_type", String, nullable=False, server_default="default"),
+    Column("provider_locked", Boolean, nullable=False, server_default=text("0")),
+    Column("has_attendees", Boolean, nullable=False, server_default=text("0")),
+    CheckConstraint(
+        "link_state IN ('confirmed', 'pending_create')",
+        name="google_event_link_state_valid",
+    ),
+    CheckConstraint(
+        "provider_event_type IN ('default', 'special', 'unknown')",
+        name="google_event_type_valid",
+    ),
+    CheckConstraint(
+        "link_state = 'pending_create' OR last_seen_sync_generation IS NOT NULL",
+        name="google_event_link_confirmation_valid",
+    ),
     CheckConstraint(
         "(original_start_kind = 'none' AND original_start_date IS NULL "
         "AND original_start_at IS NULL AND original_start_timezone IS NULL) OR "
@@ -455,5 +489,118 @@ google_event_links = Table(
     ),
     UniqueConstraint(
         "calendar_id", "provider_event_id", name="uq_google_event_calendar_event_id"
+    ),
+)
+
+
+# --- Phase 2C write foundation, created by immutable migration 0007. ---
+#
+# These mirror the migration exactly. Nothing here may be changed without an
+# additive 0008+ revision; the Phase 2C v2 coordinator narrows what it *writes*
+# rather than what the schema *permits*.
+
+calendar_provider_write_intents = Table(
+    "calendar_provider_write_intents",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("command_id", String(36), nullable=False),
+    Column(
+        "calendar_block_id",
+        String(36),
+        ForeignKey("calendar_blocks.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "account_id",
+        String(36),
+        ForeignKey("google_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column(
+        "calendar_id",
+        String(36),
+        ForeignKey("google_calendars.id", ondelete="RESTRICT"),
+        nullable=False,
+    ),
+    Column("provider_event_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    # Chains a superseding edit to the write it replaces, and a queued intent to
+    # the in-flight one it waits behind.
+    Column(
+        "predecessor_intent_id",
+        String(36),
+        ForeignKey("calendar_provider_write_intents.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("operation", String, nullable=False),
+    Column("recurrence_scope", String, nullable=False),
+    Column("changed_fields_json", Text, nullable=False),
+    Column("base_values_json", Text, nullable=True),
+    Column("desired_values_json", Text, nullable=True),
+    Column("expected_provider_etag", Text, nullable=True),
+    Column("source_block_revision", Integer, nullable=False),
+    Column("schema_version", Integer, nullable=False, server_default="1"),
+    Column("state", String, nullable=False),
+    Column("attempt_count", Integer, nullable=False, server_default="0"),
+    Column("next_attempt_at", String, nullable=True),
+    Column("last_attempt_at", String, nullable=True),
+    Column("failure_class", String, nullable=True),
+    Column("failure_reason", String, nullable=True),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("resolved_at", String, nullable=True),
+    Column("prune_after", String, nullable=True),
+    Column("provenance", String, nullable=False),
+    CheckConstraint("sequence >= 1", name="calendar_write_sequence_positive"),
+    CheckConstraint(
+        "operation IN ('create', 'patch', 'cancel_occurrence', "
+        "'delete_event', 'delete_series')",
+        name="calendar_write_operation_valid",
+    ),
+    CheckConstraint(
+        "recurrence_scope IN ('single', 'occurrence', 'series')",
+        name="calendar_write_recurrence_scope_valid",
+    ),
+    CheckConstraint(
+        "state IN ('queued', 'ready', 'attempting', 'retry_wait', "
+        "'reauth_required', 'conflict', 'ambiguous', 'failed', "
+        "'completed', 'cancelled')",
+        name="calendar_write_state_valid",
+    ),
+    CheckConstraint(
+        "attempt_count BETWEEN 0 AND 5",
+        name="calendar_write_attempt_count_bounded",
+    ),
+    CheckConstraint(
+        "provenance = 'direct_human'",
+        name="calendar_write_provenance_valid",
+    ),
+    UniqueConstraint("command_id", name="uq_calendar_write_command"),
+    UniqueConstraint(
+        "calendar_block_id", "sequence", name="uq_calendar_write_block_sequence"
+    ),
+)
+
+calendar_provider_write_audit = Table(
+    "calendar_provider_write_audit",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("intent_id", String(36), nullable=False),
+    Column("calendar_block_id", String(36), nullable=False),
+    Column("action", String, nullable=False),
+    Column("operation", String, nullable=False),
+    Column("changed_fields_json", Text, nullable=False),
+    Column("attempt_count", Integer, nullable=False),
+    Column("safe_reason_class", String, nullable=True),
+    Column("safe_reason", String, nullable=True),
+    Column("from_state", String, nullable=True),
+    Column("to_state", String, nullable=False),
+    Column("source_revision", Integer, nullable=True),
+    Column("resulting_revision", Integer, nullable=True),
+    Column("occurred_at", String, nullable=False),
+    Column("executor_provenance", String, nullable=False),
+    CheckConstraint(
+        "executor_provenance IN ('direct_human', 'recovery')",
+        name="calendar_write_audit_provenance_valid",
     ),
 )

@@ -297,6 +297,16 @@ Each capability is gated on a cross-layer test spanning renderer → Tauri/Rust 
 authenticated FastAPI → SQLite → synthetic provider, and then on real owner
 acceptance against a disposable Google event, before the next is built.
 
+**Phase 2C-R0 is implemented and dispatches nothing.** The human lane and the
+provider lane are separated at the transport boundary as well as in the domain:
+`/v1/calendar/writes/blocks/{id}/intent` accepts an authorized direct human
+action and reports no provider lifecycle state, while `/v1/calendar/writes/
+internal/*` carries provider identifiers for the Rust owner alone. Acceptance
+has no provider precondition, so provider serialization cannot become a human
+edit lock. Closed vocabularies live in
+`contracts/calendar-write-vocabulary.json`, and Python, Rust, and TypeScript
+each assert their own allowlists against it so the layers cannot drift apart.
+
 ## TBD
 
 See ADRs [0004](decisions/0004-macos-local-trust-boundary.md),

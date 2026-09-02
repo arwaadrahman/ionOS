@@ -86,22 +86,63 @@ Rejected by owner acceptance and not to be reimplemented:
 Each subphase is the smallest capability that is independently useful, and each
 passes the same two gates before the next begins.
 
-### 2C-R0 — clean writable architecture foundation
+### 2C-R0 — clean writable architecture foundation — **implemented**
 
-No user-visible write capability.
+No user-visible write capability, and no Google request path.
 
-- a minimal direct-human mutation coordinator: accept intent durably, always
-- provider serialization designed as a **separate** concern from human
-  acceptance, so a newer human action can never be refused by an older write
-- a write store whose states cannot represent "an unclassified disagreement
-  awaiting a person"
-- the closed recovery-condition set defined as a type, with no generic member
-- any new schema as `0008` or later, on top of the ported immutable `0007`
-- cross-layer seam harness stood up **before** any UI capability work
-- every layer's allowlists (renderer draft → Tauri validation → API contract →
-  domain → dispatch) enumerated in one place and asserted equal by test
+**What R0 established.**
+
+- A direct-human mutation coordinator
+  (`apps/api/ion_api/calendar_write_coordinator.py`) whose acceptance method
+  reads no provider lifecycle state at all. It cannot be refused because
+  provider work is busy, because it never learns whether any is. That is
+  structural, not a matter of care.
+- Provider serialization living entirely in a separate read lane
+  (`select_provider_work`). Its `provider_busy` flag exists so the dispatcher
+  can serialize, never so a person can be refused.
+- A closed recovery taxonomy (`calendar_write_model.py`) with five automatic
+  kinds and eight owner-action kinds and **deliberately no generic member**.
+  `classify_failure` is total over the failure classes, so no outcome can fall
+  through into a "review this" decision.
+- The `conflict` storage state declared **unused by the coordinator**. It
+  survives only because 0007 is immutable; a test drives every failure class end
+  to end and asserts the coordinator can never produce it.
+- Successive human intent accepted while earlier provider work is in flight,
+  with `predecessor_intent_id` and per-block `sequence` recording the chain. R0
+  does not implement supersession or coalescing — R1 and R2 do — but nothing in
+  the contracts or schema prohibits them.
+- Restart-safe recovery: an attempt persisted as `attempting` is repaired to
+  `ambiguous` before any future dispatch selection, never silently retried.
+- No migration. `0007` was sufficient; `schema.py` now mirrors it truthfully.
+
+**What R0 deliberately deferred to R1.**
+
+- Every provider dispatch. `dispatchable_operations` is empty, and the Rust
+  write module reaches no Google endpoint or method.
+- Optimistic projection: accepting an intent does not mutate the canonical
+  CalendarBlock, so the Calendar is visibly unchanged.
+- Undo, the self-waking retry, and the renderer affordances that will call this
+  foundation.
 
 Exit: cross-layer harness green. No real-Google gate — nothing writes yet.
+
+### The cross-layer seam contract
+
+`contracts/calendar-write-vocabulary.json` is the single canonical source for
+every closed vocabulary. Python, Rust, and TypeScript each assert their own
+allowlists equal that file, and the Python seam suite additionally asserts the
+*other two layers' source* against it.
+
+This is the specific defence against the failure that broke Phase 2C v1, where
+`this and following` was implemented end to end in the domain with passing tests
+while the Tauri scope allowlist still read `single | occurrence | series`.
+Adding a value to one layer and forgetting another now fails three independent
+test suites. That was verified by injecting exactly that drift and confirming
+all three fail.
+
+`apps/api/tests/test_calendar_write_seam.py` drives the **authenticated
+production app** over real SQLite at head `0007`, using the exact request bodies
+the Rust layer serializes — not the coordinator directly.
 
 ### 2C-R1 — one-time create and edit
 

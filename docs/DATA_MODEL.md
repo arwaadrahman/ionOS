@@ -122,6 +122,15 @@ parts of the `0007` schema the new architecture reuses, and for the two known
 forward constraints (`provenance = 'direct_human'`, and the unconstrained
 `failure_reason`) that will need additive `0008+` revisions.
 
+**Phase 2C-R0 required no migration.** `0007` proved sufficient, and `schema.py`
+now mirrors it truthfully rather than describing the pre-`0007` shape. The
+coordinator narrows what it *writes* rather than what the schema *permits*: the
+`conflict` state and the `write_conflict_detected` audit action remain in
+storage vocabulary because the migration is immutable, but the direct-human
+coordinator never produces either, and a test drives every failure class end to
+end to prove it. The closed recovery taxonomy is enforced in domain types, as
+recommended, rather than by a new CHECK.
+
 Requirements the rebuilt write schema must satisfy:
 
 - No parallel GoogleEvent owner. Existing provider fields remain the confirmed

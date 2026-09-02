@@ -134,7 +134,7 @@ pub struct GoogleCommandError {
 }
 
 impl GoogleCommandError {
-    fn new(code: &str) -> Self {
+    pub(crate) fn new(code: &str) -> Self {
         Self { code: code.into() }
     }
 }
@@ -847,7 +847,10 @@ fn account_backend_route(id: &str, suffix: &str) -> Result<String, GoogleCommand
     ))
 }
 
-fn calendar_block_backend_route(id: &str, suffix: &str) -> Result<String, GoogleCommandError> {
+pub(crate) fn calendar_block_backend_route(
+    id: &str,
+    suffix: &str,
+) -> Result<String, GoogleCommandError> {
     Ok(format!(
         "/v1/calendar/blocks/{}{suffix}",
         validated_backend_id(id)?

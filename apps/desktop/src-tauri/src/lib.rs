@@ -1,3 +1,4 @@
+mod calendar_write;
 mod desktop;
 mod google_calendar;
 mod home;
@@ -18,6 +19,7 @@ pub fn run() {
             google_calendar::set_google_calendar_enabled,
             google_calendar::set_google_calendar_hidden,
             google_calendar::set_calendar_block_category,
+            calendar_write::accept_direct_human_calendar_intent,
             google_calendar::sync_google_calendars,
             google_calendar::disconnect_google_calendar,
             home::get_home,
