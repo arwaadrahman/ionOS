@@ -112,7 +112,7 @@ def test_a_waiting_intent_is_released_when_its_predecessor_settles(tmp_path):
         BLOCK_ID, intent(command="22222222-2222-4222-8222-222222222222")
     )
 
-    assert write.record_outcome(first.intent_id, "success") is None
+    assert write.record_outcome(first.intent_id, "success").recovery is None
     work = write.select_provider_work()
     assert [plan.intent_id for plan in work.plans] == [second.intent_id]
     assert work.provider_busy is False
@@ -123,7 +123,9 @@ def test_ordinary_provider_drift_is_automatic_and_never_reaches_the_owner(tmp_pa
     receipt = write.accept_direct_human_intent(BLOCK_ID, intent())
     write.begin_attempt(receipt.intent_id)
 
-    recovery = write.record_outcome(receipt.intent_id, "stale_precondition")
+    # No confirmed snapshot supplied, so this is the plain retry path rather
+    # than an automatic rebase; the rebase case has its own R1 test.
+    recovery = write.record_outcome(receipt.intent_id, "stale_precondition").recovery
     assert recovery == "provider_version_drift"
     assert recovery in AUTOMATIC_RECOVERY
     assert recovery not in OWNER_ACTION_RECOVERY
@@ -149,7 +151,9 @@ def test_drift_that_outlasts_the_budget_is_named_not_turned_into_a_conflict(tmp_
     recovery = None
     for _ in range(5):
         write.begin_attempt(receipt.intent_id)
-        recovery = write.record_outcome(receipt.intent_id, "stale_precondition")
+        recovery = write.record_outcome(
+            receipt.intent_id, "stale_precondition"
+        ).recovery
         write.recover()
     # Exhaustion is not a disagreement about facts, so it does not borrow the
     # language of one. It names what actually happened.
@@ -169,7 +173,7 @@ def test_the_coordinator_can_never_produce_a_generic_review_state(tmp_path):
         write, engine = coordinator(tmp_path / f"case{index}")
         receipt = write.accept_direct_human_intent(BLOCK_ID, intent())
         write.begin_attempt(receipt.intent_id)
-        produced_recovery.add(write.record_outcome(receipt.intent_id, failure))
+        produced_recovery.add(write.record_outcome(receipt.intent_id, failure).recovery)
         with engine.begin() as connection:
             produced_states.update(
                 row.state
@@ -202,20 +206,62 @@ def test_a_restart_repairs_an_in_flight_attempt_to_ambiguous(tmp_path):
     assert write.select_provider_work().plans == []
 
 
-def test_r0_dispatches_nothing(tmp_path):
+def test_only_the_bounded_edit_is_dispatchable(tmp_path):
+    """R1 enables exactly one provider operation and no more."""
+
     write, _ = coordinator(tmp_path)
     write.accept_direct_human_intent(BLOCK_ID, intent())
     plans = write.select_provider_work().plans
     assert len(plans) == 1
-    # The plan exists and is serialized correctly; nothing may leave for Google
-    # until R1 adds a dispatch path behind its own real-Google acceptance gate.
-    assert plans[0].dispatchable is False
+    assert plans[0].operation == "patch"
+    assert plans[0].dispatchable is True
+    # Create, delete, and every recurrence operation remain unreachable.
+    from ion_api.calendar_write_model import (
+        ACCEPTED_OPERATIONS,
+        DISPATCHABLE_OPERATIONS,
+    )
+
+    assert DISPATCHABLE_OPERATIONS == {"patch"}
+    assert ACCEPTED_OPERATIONS == {"patch"}
+
+
+def test_a_missing_write_capability_does_not_refuse_the_edit(tmp_path):
+    """Permission acquisition is not approval of the Calendar action.
+
+    The owner's edit is authorized and becomes durable immediately. What is
+    missing is a one-time account capability, so refusing here would force them
+    to retype an edit they already made.
+    """
+
+    write, engine = coordinator(tmp_path, write_granted=False)
+    receipt = write.accept_direct_human_intent(BLOCK_ID, intent())
+    assert receipt.accepted is True
+    assert receipt.requires_write_consent == "write_consent_required"
+    assert receipt.state == "reauth_required"
+
+    with engine.begin() as connection:
+        stored = connection.execute(select(calendar_provider_write_intents)).one()
+    assert stored.desired_values_json is not None
+
+    # It is not dispatched while the capability is missing.
+    assert write.select_provider_work().plans == []
+
+    # The one-time grant resumes the already-durable edit automatically.
+    granted = write.grant_write_capability(stored.account_id)
+    assert granted.resumed_intent_ids == [receipt.intent_id]
+    plans = write.select_provider_work().plans
+    assert [plan.intent_id for plan in plans] == [receipt.intent_id]
+
+    # And a second edit afterwards asks for nothing further.
+    again = write.accept_direct_human_intent(
+        BLOCK_ID, intent(command="44444444-4444-4444-8444-444444444444")
+    )
+    assert again.requires_write_consent is None
 
 
 @pytest.mark.parametrize(
     "seed",
     [
-        {"write_granted": False},
         {"access_role": "reader"},
         {"has_attendees": True},
         {"provider_locked": True},

@@ -5,6 +5,7 @@ import {
   formatOccurrenceTime,
   localCivilDate,
 } from "./calendarProjection";
+import { CalendarEditForm, type CalendarEditDraft } from "./CalendarEditForm";
 import {
   CalendarCategory,
   calendarCategories,
@@ -54,13 +55,17 @@ export function CalendarInspector({
   occurrence,
   localTimeZone,
   categoryPending,
+  editable,
   onCategory,
+  onEdit,
   onClose,
 }: {
   occurrence: CalendarOccurrence;
   localTimeZone: string;
   categoryPending: boolean;
+  editable: boolean;
   onCategory(category: CalendarCategory | null, subtype: string | null): void;
+  onEdit(draft: CalendarEditDraft): void;
   onClose(): void;
 }) {
   const sourceTimeZone = occurrence.block.start_timezone;
@@ -87,7 +92,7 @@ export function CalendarInspector({
   return (
     <aside className="calendar-inspector" aria-label="Event details">
       <div className="calendar-inspector-heading">
-        <p className="eyebrow">Read-only event</p>
+        <p className="eyebrow">{editable ? "Event" : "Read-only event"}</p>
         <button
           className="quiet-button"
           type="button"
@@ -99,6 +104,13 @@ export function CalendarInspector({
         </button>
       </div>
       <h2>{occurrence.block.title}</h2>
+      {editable ? (
+        <CalendarEditForm
+          occurrence={occurrence}
+          localTimeZone={localTimeZone}
+          onSubmit={onEdit}
+        />
+      ) : null}
       <label className="calendar-category-editor">
         <span>Ion category</span>
         <select

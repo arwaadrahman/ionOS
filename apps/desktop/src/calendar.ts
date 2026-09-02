@@ -1,4 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import type {
+  CalendarWriteRecovery,
+  DirectHumanIntentDraft,
+  DirectHumanIntentReceipt,
+} from "./calendarWriteContract";
 
 export const calendarCategories = [
   "academic",
@@ -223,6 +228,12 @@ export type CalendarStatus = {
   accounts: GoogleAccount[];
   calendars: GoogleCalendar[];
   blocks: CalendarBlock[];
+  /**
+   * Named conditions the owner must actually settle. Empty in healthy
+   * operation, and deliberately top-level: provider lifecycle state is not an
+   * event property and must never render on an ordinary Calendar event.
+   */
+  write_recovery?: CalendarWriteRecovery[];
 };
 
 export type GoogleCommandError = { code: string };
@@ -273,6 +284,25 @@ export const googleCalendarClient = {
       categorySubtype,
       expectedRevision: block.ion_metadata_revision,
     }),
+  /**
+   * Accept a direct human edit. The action is the authorization, so there is no
+   * approval parameter and nothing to confirm afterwards. Provider dispatch is
+   * a consequence of this call, not a further step the user takes.
+   */
+  acceptEdit: (
+    block: CalendarBlock,
+    intent: DirectHumanIntentDraft,
+  ): Promise<DirectHumanIntentReceipt> =>
+    invoke<DirectHumanIntentReceipt>("accept_direct_human_calendar_intent", {
+      blockId: block.id,
+      intent,
+    }),
+  /** A one-time account capability grant, never approval of an edit. */
+  enableWrites: (accountId: string) =>
+    invoke<{ account_id: string; resumed_intent_ids: string[] }>(
+      "enable_google_calendar_writes",
+      { accountId },
+    ),
   sync: () => invoke<CalendarStatus>("sync_google_calendars"),
   disconnect: (account: GoogleAccount) =>
     invoke<CalendarStatus>("disconnect_google_calendar", {

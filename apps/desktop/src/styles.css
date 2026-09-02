@@ -2448,3 +2448,47 @@ h1 {
     justify-content: end;
   }
 }
+
+/* R1 ordinary event edit. Deliberately plain: the Calendar itself is the
+   confirmation, so this form carries no provider-lifecycle affordance. */
+.calendar-edit-form {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border: 1px solid #3a3246;
+  border-radius: 0.6rem;
+  background: #15131b;
+}
+
+.calendar-edit-form label {
+  display: grid;
+  gap: 0.3rem;
+  color: #aaa3b2;
+  font-size: 0.7rem;
+}
+
+.calendar-edit-form input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.calendar-edit-times {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+/* A named condition the owner must settle. Rare by design: ordinary provider
+   drift is reconciled without telling anyone, and never renders here. */
+.calendar-write-recovery {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.45rem 0.2rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #5d4a52;
+  border-radius: 0.6rem;
+  background: rgb(93 74 82 / 16%);
+  color: #e0b4b7;
+  font-size: 0.78rem;
+}

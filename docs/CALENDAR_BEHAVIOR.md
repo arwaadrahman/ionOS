@@ -290,6 +290,35 @@ an internal event.
 A direct-human change commits locally, dispatches automatically, and settles
 automatically. Nothing is required after the action itself.
 
+### Optimistic projection (accepted 2026-09-01)
+
+> Once a direct-human intent is durably accepted, visible Calendar state is
+> **confirmed provider base + the newest durable human changed fields.**
+
+Ion does not wait for Google to confirm before showing the owner their own edit.
+The Calendar itself is the primary confirmation, so the new title or time is
+visible the moment the intent is durable, the Inspector reopens on those same
+values, and the event stays immediately editable.
+
+Confirmed provider values are preserved separately as the base a settlement
+rebases against — the overlay never overwrites them. Settlement therefore never
+snaps the display back through a stale confirmed value, and an older
+confirmation never displaces a newer human intent.
+
+### Write re-consent is a capability transition, not an approval
+
+> Granting Ion permission to edit Google Calendar happens **once per account**.
+> It is permission acquisition, never approval of an individual Calendar action.
+
+If an account has never granted write access, the first supported edit explains
+that Ion needs Google Calendar edit permission and offers one explicit action.
+The owner's edit is already durable at that point: after consent it resumes
+automatically, and they never retype it.
+
+Once `write_granted` exists, ordinary edits ask for nothing further — no
+permission prompt, no confirmation, and no persistent sidebar nagging about
+provider capability.
+
 ### Google → Ion
 
 Ion runs the existing bounded incremental sync while the Calendar is on screen —

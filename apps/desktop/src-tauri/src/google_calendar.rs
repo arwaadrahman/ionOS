@@ -25,10 +25,13 @@ use crate::service::{product_request, ProductError, ProductErrorCode, ServiceSta
 
 const CALENDAR_LIST_SCOPE: &str = "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
 const EVENTS_READ_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events.readonly";
+/// The one accepted write scope. Broad `calendar`, Gmail, Tasks, ACL/sharing,
+/// calendar management, conferencing, and reminder authority remain forbidden.
+pub(crate) const EVENTS_WRITE_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events";
 const AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 const REVOKE_ENDPOINT: &str = "https://oauth2.googleapis.com/revoke";
-const CALENDAR_API: &str = "https://www.googleapis.com/calendar/v3/";
+pub(crate) const CALENDAR_API: &str = "https://www.googleapis.com/calendar/v3/";
 const CALLBACK_PATH: &str = "/oauth2/callback";
 const CONFIG_FILENAME: &str = "google-oauth.json";
 const KEYCHAIN_SERVICE: &str = "com.ionos.desktop.google-calendar";
@@ -40,10 +43,10 @@ const MAX_PROVIDER_ATTEMPTS: u32 = 3;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OAuthConfig {
-    client_id: String,
+pub(crate) struct OAuthConfig {
+    pub(crate) client_id: String,
     #[serde(default)]
-    client_secret: Option<String>,
+    pub(crate) client_secret: Option<String>,
 }
 
 impl OAuthConfig {
@@ -98,7 +101,7 @@ impl GoogleState {
         Ok(SyncGuard(&self.sync_active))
     }
 
-    fn cached_token(&self, account_id: &str) -> Option<String> {
+    pub(crate) fn cached_token(&self, account_id: &str) -> Option<String> {
         self.access_tokens
             .lock()
             .expect("Google access token lock poisoned")
@@ -107,7 +110,7 @@ impl GoogleState {
             .map(|token| token.value.clone())
     }
 
-    fn store_access_token(&self, account_id: &str, value: String, expires_in: u64) {
+    pub(crate) fn store_access_token(&self, account_id: &str, value: String, expires_in: u64) {
         self.access_tokens
             .lock()
             .expect("Google access token lock poisoned")
@@ -166,10 +169,10 @@ pub struct GoogleAccount {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct InternalGoogleAccount {
+pub(crate) struct InternalGoogleAccount {
     #[serde(flatten)]
-    account: GoogleAccount,
-    keychain_locator: String,
+    pub(crate) account: GoogleAccount,
+    pub(crate) keychain_locator: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -198,10 +201,10 @@ pub struct GoogleCalendar {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct InternalGoogleCalendar {
+pub(crate) struct InternalGoogleCalendar {
     #[serde(flatten)]
-    calendar: GoogleCalendar,
-    next_sync_token: Option<String>,
+    pub(crate) calendar: GoogleCalendar,
+    pub(crate) next_sync_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -251,9 +254,9 @@ pub struct CalendarStatus {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct InternalCalendarState {
-    accounts: Vec<InternalGoogleAccount>,
-    calendars: Vec<InternalGoogleCalendar>,
+pub(crate) struct InternalCalendarState {
+    pub(crate) accounts: Vec<InternalGoogleAccount>,
+    pub(crate) calendars: Vec<InternalGoogleCalendar>,
 }
 
 #[derive(Serialize)]
@@ -304,20 +307,20 @@ struct SyncFailureInput<'a> {
 }
 
 #[derive(Deserialize)]
-struct TokenResponse {
-    access_token: String,
+pub(crate) struct TokenResponse {
+    pub(crate) access_token: String,
     #[serde(default)]
-    refresh_token: Option<String>,
-    expires_in: u64,
-    scope: String,
-    token_type: String,
+    pub(crate) refresh_token: Option<String>,
+    pub(crate) expires_in: u64,
+    pub(crate) scope: String,
+    pub(crate) token_type: String,
 }
 
 #[derive(Deserialize)]
-struct RefreshResponse {
-    access_token: String,
-    expires_in: u64,
-    token_type: String,
+pub(crate) struct RefreshResponse {
+    pub(crate) access_token: String,
+    pub(crate) expires_in: u64,
+    pub(crate) token_type: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -484,7 +487,7 @@ struct ProviderEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProviderFailure {
+pub(crate) enum ProviderFailure {
     Gone,
     Reauth,
     RateLimited,
@@ -494,7 +497,7 @@ enum ProviderFailure {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ProviderRejection {
+pub(crate) enum ProviderRejection {
     BadRequest,
     Forbidden,
     NotFound,
@@ -507,13 +510,13 @@ fn should_reset_to_full(mode: &str, failure: &ProviderFailure) -> bool {
     mode == "incremental" && matches!(failure, ProviderFailure::Gone)
 }
 
-trait RefreshTokenStore {
+pub(crate) trait RefreshTokenStore {
     fn set(&self, locator: &str, value: &str) -> Result<(), GoogleCommandError>;
     fn get(&self, locator: &str) -> Result<String, GoogleCommandError>;
     fn delete(&self, locator: &str) -> Result<(), GoogleCommandError>;
 }
 
-struct SystemKeychain;
+pub(crate) struct SystemKeychain;
 
 #[cfg(target_os = "macos")]
 impl RefreshTokenStore for SystemKeychain {
@@ -553,14 +556,16 @@ impl RefreshTokenStore for SystemKeychain {
     }
 }
 
-fn oauth_config_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, GoogleCommandError> {
+pub(crate) fn oauth_config_path<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<PathBuf, GoogleCommandError> {
     app.path()
         .app_data_dir()
         .map(|directory| directory.join(CONFIG_FILENAME))
         .map_err(|_| GoogleCommandError::new("configuration_unavailable"))
 }
 
-fn load_oauth_config(path: &Path) -> Result<OAuthConfig, GoogleCommandError> {
+pub(crate) fn load_oauth_config(path: &Path) -> Result<OAuthConfig, GoogleCommandError> {
     let metadata = fs::metadata(path).map_err(|_| GoogleCommandError::new("not_configured"))?;
     if metadata.len() > MAX_CONFIG_BYTES || !metadata.is_file() {
         return Err(GoogleCommandError::new("configuration_invalid"));
@@ -571,13 +576,13 @@ fn load_oauth_config(path: &Path) -> Result<OAuthConfig, GoogleCommandError> {
         .validate()
 }
 
-fn random_bytes<const N: usize>() -> Result<[u8; N], GoogleCommandError> {
+pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N], GoogleCommandError> {
     let mut bytes = [0_u8; N];
     fill(&mut bytes).map_err(|_| GoogleCommandError::new("secure_random_unavailable"))?;
     Ok(bytes)
 }
 
-fn new_uuid() -> Result<String, GoogleCommandError> {
+pub(crate) fn new_uuid() -> Result<String, GoogleCommandError> {
     let mut bytes = random_bytes::<16>()?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -602,7 +607,7 @@ fn new_uuid() -> Result<String, GoogleCommandError> {
     ))
 }
 
-fn pkce_pair() -> Result<(String, String), GoogleCommandError> {
+pub(crate) fn pkce_pair() -> Result<(String, String), GoogleCommandError> {
     let verifier = URL_SAFE_NO_PAD.encode(random_bytes::<64>()?);
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     Ok((verifier, challenge))
@@ -614,6 +619,19 @@ fn authorization_url(
     state: &str,
     challenge: &str,
 ) -> Result<Url, GoogleCommandError> {
+    authorization_url_for(config, redirect_uri, state, challenge, false)
+}
+
+/// `write` requests the accepted write scope set instead of the read-only one.
+/// It is used once per account, for a capability transition the owner grants
+/// deliberately -- never as part of an individual Calendar action.
+pub(crate) fn authorization_url_for(
+    config: &OAuthConfig,
+    redirect_uri: &str,
+    state: &str,
+    challenge: &str,
+    write: bool,
+) -> Result<Url, GoogleCommandError> {
     let mut url = Url::parse(AUTH_ENDPOINT).map_err(|_| GoogleCommandError::new("oauth_failed"))?;
     url.query_pairs_mut()
         .append_pair("client_id", &config.client_id)
@@ -621,7 +639,11 @@ fn authorization_url(
         .append_pair("response_type", "code")
         .append_pair(
             "scope",
-            &format!("{CALENDAR_LIST_SCOPE} {EVENTS_READ_SCOPE}"),
+            &if write {
+                format!("{CALENDAR_LIST_SCOPE} {EVENTS_WRITE_SCOPE}")
+            } else {
+                format!("{CALENDAR_LIST_SCOPE} {EVENTS_READ_SCOPE}")
+            },
         )
         .append_pair("code_challenge", challenge)
         .append_pair("code_challenge_method", "S256")
@@ -629,6 +651,10 @@ fn authorization_url(
         .append_pair("access_type", "offline")
         .append_pair("prompt", "consent");
     Ok(url)
+}
+
+pub(crate) fn open_system_browser_public(url: &Url) -> Result<(), GoogleCommandError> {
+    open_system_browser(url)
 }
 
 #[cfg(target_os = "macos")]
@@ -684,7 +710,10 @@ fn callback_response(stream: &mut TcpStream, success: bool) {
     let _ = stream.write_all(response.as_bytes());
 }
 
-fn await_callback(listener: TcpListener, state: String) -> Result<String, GoogleCommandError> {
+pub(crate) fn await_callback(
+    listener: TcpListener,
+    state: String,
+) -> Result<String, GoogleCommandError> {
     listener
         .set_nonblocking(true)
         .map_err(|_| GoogleCommandError::new("oauth_callback_unavailable"))?;
@@ -731,7 +760,7 @@ fn await_callback(listener: TcpListener, state: String) -> Result<String, Google
     result
 }
 
-fn google_client() -> Result<Client, GoogleCommandError> {
+pub(crate) fn google_client() -> Result<Client, GoogleCommandError> {
     Client::builder()
         .timeout(PROVIDER_TIMEOUT)
         .user_agent("Ion-OS/0.0.0")
@@ -739,7 +768,7 @@ fn google_client() -> Result<Client, GoogleCommandError> {
         .map_err(|_| GoogleCommandError::new("provider_unavailable"))
 }
 
-async fn exchange_code(
+pub(crate) async fn exchange_code(
     client: &Client,
     config: &OAuthConfig,
     code: &str,
@@ -857,7 +886,9 @@ pub(crate) fn calendar_block_backend_route(
     ))
 }
 
-async fn internal_state(state: &ServiceState) -> Result<InternalCalendarState, GoogleCommandError> {
+pub(crate) async fn internal_state(
+    state: &ServiceState,
+) -> Result<InternalCalendarState, GoogleCommandError> {
     product_request(
         state,
         reqwest::Method::POST,
@@ -1085,7 +1116,7 @@ pub async fn set_calendar_block_category(
     .map_err(Into::into)
 }
 
-async fn refresh_access_token(
+pub(crate) async fn refresh_access_token(
     client: &Client,
     config: &OAuthConfig,
     refresh_token: &str,

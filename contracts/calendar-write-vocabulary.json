@@ -1,6 +1,6 @@
 {
   "$comment": "Canonical closed vocabularies for Phase 2C v2 direct-human Calendar writes. Python, Rust, and TypeScript each assert their own allowlists equal this file. A value added to one layer and missed in another is a test failure, not a runtime 'local_state_invalid' the owner discovers. See docs/phases/PHASE_2C.md and docs/CALENDAR_BEHAVIOR.md.",
-  "phase": "2C-R0",
+  "phase": "2C-R1",
   "storage": {
     "$comment": "Exactly the CHECK-constrained vocabularies of immutable migration 0007. These may not be changed without an additive 0008+ revision.",
     "operations": [
@@ -59,7 +59,7 @@
     "$comment": "R0 product vocabularies. Narrower than storage on purpose.",
     "accepted_operations": ["patch"],
     "accepted_recurrence_scopes": ["single"],
-    "dispatchable_operations": [],
+    "dispatchable_operations": ["patch"],
     "changed_fields": ["title", "start", "end"]
   },
   "recovery": {
@@ -72,6 +72,7 @@
       "reconcilable_ambiguity"
     ],
     "owner_action": [
+      "write_consent_required",
       "reauthentication_required",
       "write_permission_lost",
       "provider_target_deleted",
@@ -88,5 +89,11 @@
       "keep_google",
       "review_differences"
     ]
+  },
+  "provider": {
+    "$comment": "The only Google methods R1 may reach. Widened only with an owner decision recorded in docs/SECURITY.md.",
+    "methods": ["events.patch", "events.get"],
+    "conditional_header": "If-Match",
+    "wildcard_if_match_forbidden": true
   }
 }

@@ -88,9 +88,18 @@ class DirectHumanIntentReceipt(BaseModel):
     intent_id: str
     block_id: str
     sequence: int
-    state: Literal["queued", "ready"]
+    state: Literal["queued", "ready", "reauth_required"]
     accepted: Literal[True] = True
     awaiting_predecessor: bool
+    #: The earlier unsent write this edit replaced, if any. Superseding costs no
+    #: provider round-trip; a write already in flight is never cancelled.
+    superseded_intent_id: str | None = None
+    #: Set only when the account has never granted -- or has lost -- Calendar
+    #: write permission. The edit is accepted and durable either way; this asks
+    #: for a one-time capability grant, never approval of the edit itself.
+    requires_write_consent: (
+        Literal["write_consent_required", "reauthentication_required"] | None
+    ) = None
 
 
 class ProviderWritePlan(BaseModel):
@@ -130,12 +139,62 @@ class ProviderAttemptInput(BaseModel):
     intent_id: str
 
 
+class ConfirmedProviderEvent(BaseModel):
+    """A sanitized snapshot of confirmed provider state, from Rust only.
+
+    Carries the fields Ion may own plus the exact new ETag. Never a raw provider
+    resource, attendee identity, or credential material.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_etag: str
+    title: str | None = Field(default=None, max_length=1024)
+    start: ProviderDateTime | None = None
+    end: ProviderDateTime | None = None
+    #: Structural evidence a rebase re-checks before re-aiming.
+    recurring: bool = False
+    has_attendees: bool = False
+    provider_locked: bool = False
+    event_type: str = "default"
+    deleted: bool = False
+
+
 class ProviderOutcomeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intent_id: str
     failure_class: str
     safe_reason: str | None = Field(default=None, max_length=128)
+    #: Present when Rust re-read confirmed provider state, either because the
+    #: write succeeded or because it met a stale precondition and needs a
+    #: rebase target.
+    confirmed: ConfirmedProviderEvent | None = None
+
+
+class ProviderOutcomeResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    recovery: str | None
+    state: str
+    #: True when an automatic rebase re-aimed this intent at fresh provider
+    #: authority. Ordinary drift resolves here and never reaches the owner.
+    rebased: bool = False
+
+
+class WriteConsentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str
+
+
+class WriteConsentOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_id: str
+    #: Intents that were waiting on the capability and are now dispatchable, so
+    #: the owner never retypes an edit they already made.
+    resumed_intent_ids: list[str]
 
 
 class RecoveryEntry(BaseModel):

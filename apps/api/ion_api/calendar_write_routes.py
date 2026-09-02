@@ -22,8 +22,11 @@ from ion_api.calendar_write_contracts import (
     DirectHumanIntentReceipt,
     ProviderAttemptInput,
     ProviderOutcomeInput,
+    ProviderOutcomeResult,
     ProviderWorkOutput,
     RecoveryOutput,
+    WriteConsentInput,
+    WriteConsentOutput,
 )
 from ion_api.calendar_write_coordinator import (
     CalendarWriteCoordinator,
@@ -86,15 +89,31 @@ def calendar_write_router(coordinator: CalendarWriteCoordinator) -> APIRouter:
             _raise_safe(error)
         return {"status": "attempting"}
 
-    @router.post("/internal/outcome", response_model=dict[str, str | None])
-    def record_outcome(input: ProviderOutcomeInput) -> dict[str, str | None]:
+    @router.post("/internal/outcome", response_model=ProviderOutcomeResult)
+    def record_outcome(input: ProviderOutcomeInput) -> ProviderOutcomeResult:
         try:
-            recovery = coordinator.record_outcome(
-                input.intent_id, input.failure_class, input.safe_reason
+            return coordinator.record_outcome(
+                input.intent_id,
+                input.failure_class,
+                input.safe_reason,
+                input.confirmed,
             )
         except (CalendarWriteError, CalendarWriteVocabularyError) as error:
             _raise_safe(error)
-        return {"recovery": recovery}
+
+    @router.post("/internal/consent", response_model=WriteConsentOutput)
+    def grant_consent(input: WriteConsentInput) -> WriteConsentOutput:
+        """Record the one-time Google write capability grant.
+
+        Called by Rust after a successful re-consent flow. It records a
+        *capability*, never approval of any individual Calendar action, and
+        resumes edits the owner already made so they never retype one.
+        """
+
+        try:
+            return coordinator.grant_write_capability(input.account_id)
+        except (CalendarWriteError, CalendarWriteVocabularyError) as error:
+            _raise_safe(error)
 
     @router.post("/internal/recover", response_model=RecoveryOutput)
     def recover() -> RecoveryOutput:

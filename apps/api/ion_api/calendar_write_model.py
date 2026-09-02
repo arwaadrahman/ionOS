@@ -83,10 +83,10 @@ COORDINATOR_UNUSED_AUDIT_ACTIONS: Final[frozenset[str]] = frozenset(
 ACCEPTED_OPERATIONS: Final[frozenset[str]] = frozenset({"patch"})
 ACCEPTED_RECURRENCE_SCOPES: Final[frozenset[str]] = frozenset({"single"})
 
-#: R0 dispatches nothing. Provider execution is modelled and tested, but no
-#: operation may leave for Google until R1 adds a dispatch path under its own
-#: real-Google acceptance gate.
-DISPATCHABLE_OPERATIONS: Final[frozenset[str]] = frozenset()
+#: R1 dispatches the bounded ordinary edit and nothing else. Create, delete, and
+#: every recurrence operation stay undispatchable until their own subphase and
+#: their own real-Google acceptance gate.
+DISPATCHABLE_OPERATIONS: Final[frozenset[str]] = frozenset({"patch"})
 
 ChangedField = Literal["title", "start", "end"]
 CHANGED_FIELDS: Final[frozenset[str]] = frozenset(get_args(ChangedField))
@@ -107,6 +107,10 @@ AutomaticRecovery = Literal[
     "reconcilable_ambiguity",
 ]
 OwnerActionRecovery = Literal[
+    # Permission has never been granted for this account. This is a capability
+    # transition the owner completes once, not approval of a Calendar action:
+    # the edit that surfaced it is already durable and resumes afterwards.
+    "write_consent_required",
     "reauthentication_required",
     "write_permission_lost",
     "provider_target_deleted",
@@ -145,6 +149,29 @@ _FAILURE_RECOVERY: Final[dict[str, str]] = {
 
 class CalendarWriteVocabularyError(ValueError):
     """A value outside a closed Calendar-write vocabulary."""
+
+
+#: Recovery kinds that are not provider failures at all. They describe a
+#: capability the account is missing, so they are reached before dispatch rather
+#: than classified from a provider result.
+CAPABILITY_RECOVERY: Final[frozenset[str]] = frozenset(
+    {"write_consent_required", "reauthentication_required"}
+)
+
+
+def classify_capability(scope_state: str) -> str | None:
+    """Recovery kind for an account that cannot currently be written to.
+
+    Distinguishes *never granted* from *granted then lost*, because the owner
+    sees different, truthful copy for each and only the first is a first-time
+    capability transition.
+    """
+
+    if scope_state == "write_granted":
+        return None
+    if scope_state == "reauth_required":
+        return "reauthentication_required"
+    return "write_consent_required"
 
 
 def classify_failure(failure_class: str, attempt_count: int) -> str | None:

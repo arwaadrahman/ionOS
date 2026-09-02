@@ -28,6 +28,9 @@ from ion_api.calendar_contracts import (
     SyncFailureInput,
     SyncPageInput,
 )
+from ion_api.calendar_write_coordinator import (
+    pending_human_overlay,
+)
 from ion_api.schema import (
     audit_events,
     calendar_block_ion_metadata,
@@ -358,10 +361,16 @@ class CalendarService:
                 )
                 .limit(10_000)
             ).all()
+            overlay, recovery = pending_human_overlay(connection)
         return CalendarStatusOutput(
             accounts=[_account_output(row) for row in account_rows],
             calendars=[_calendar_output(row) for row in calendar_rows],
-            blocks=[self._block_output(row) for row in block_rows],
+            # The Calendar itself is the primary confirmation: a durably
+            # accepted human edit is visible immediately, over the confirmed
+            # provider base, without waiting for Google. The base is preserved
+            # in the write record, so settlement never snaps back through it.
+            blocks=[self._block_output(row, overlay.get(row.id)) for row in block_rows],
+            write_recovery=recovery,
         )
 
     def internal_state(self) -> InternalCalendarStateOutput:
@@ -378,22 +387,45 @@ class CalendarService:
         )
 
     @staticmethod
-    def _block_output(row) -> CalendarBlockOutput:
+    def _block_output(row, overlay: dict | None = None) -> CalendarBlockOutput:
+        overlay = overlay or {}
+        temporal_kind = row.temporal_kind
+        start_date, end_date = row.start_date, row.end_date
+        start_at, end_at = row.start_at, row.end_at
+        start_timezone, end_timezone = row.start_timezone, row.end_timezone
+        for edge in ("start", "end"):
+            value = overlay.get(edge)
+            if value is None:
+                continue
+            if "date" in value:
+                temporal_kind = "all_day"
+                if edge == "start":
+                    start_date, start_at = value["date"], None
+                else:
+                    end_date, end_at = value["date"], None
+            else:
+                temporal_kind = "timed"
+                if edge == "start":
+                    start_at, start_date = value["date_time"], None
+                    start_timezone = value.get("time_zone") or start_timezone
+                else:
+                    end_at, end_date = value["date_time"], None
+                    end_timezone = value.get("time_zone") or end_timezone
         return CalendarBlockOutput(
             id=row.id,
             calendar_id=row.calendar_id,
             provider_event_id=row.provider_event_id,
             ical_uid=row.ical_uid,
-            title=row.title,
+            title=overlay.get("title", row.title),
             description=row.description,
             location=row.location,
-            temporal_kind=row.temporal_kind,
-            start_date=row.start_date,
-            end_date=row.end_date,
-            start_at=row.start_at,
-            end_at=row.end_at,
-            start_timezone=row.start_timezone,
-            end_timezone=row.end_timezone,
+            temporal_kind=temporal_kind,
+            start_date=start_date,
+            end_date=end_date,
+            start_at=start_at,
+            end_at=end_at,
+            start_timezone=start_timezone,
+            end_timezone=end_timezone,
             status=row.status,
             transparency=row.transparency,
             recurrence_kind=row.recurrence_kind,

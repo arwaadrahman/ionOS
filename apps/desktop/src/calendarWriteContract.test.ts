@@ -6,6 +6,7 @@ import {
   ACCEPTED_RECURRENCE_SCOPES,
   AUTOMATIC_RECOVERY,
   CHANGED_FIELDS,
+  DISPATCHABLE_OPERATIONS,
   OWNER_ACTION_RECOVERY,
   draftMatchesChangedFields,
   isAutomaticRecovery,
@@ -53,8 +54,11 @@ describe("cross-layer vocabulary parity", () => {
     expect(requiresOwnerAction("automatic_recovery_exhausted")).toBe(true);
   });
 
-  test("R0 dispatches nothing", () => {
-    expect(manifest.coordinator.dispatchable_operations).toEqual([]);
+  test("R1 dispatches exactly the bounded edit", () => {
+    expect(manifest.coordinator.dispatchable_operations).toEqual(["patch"]);
+    expect([...DISPATCHABLE_OPERATIONS]).toEqual(
+      manifest.coordinator.dispatchable_operations,
+    );
   });
 });
 

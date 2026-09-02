@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CalendarEditDraft } from "./CalendarEditForm";
 import { CalendarFilterDrawer } from "./CalendarFilterDrawer";
 import { CalendarInspector } from "./CalendarInspector";
 import { CalendarMonthGrid } from "./CalendarMonthGrid";
@@ -72,6 +73,52 @@ const errorCopy: Record<string, string> = {
     "That event changed before the category was saved. Reopen it and try again.",
   local_state_not_found: "That saved event is no longer available.",
   connect_required: "Connect Google Calendar before syncing.",
+};
+
+/**
+ * The smallest safe R1 event class: an existing Google-backed, ordinary,
+ * non-recurring event on a writable calendar. Everything else stays read-only
+ * and says so, rather than offering an action Ion cannot perform safely.
+ */
+function isEditable(occurrence: CalendarOccurrence, status: CalendarStatus) {
+  const block = occurrence.block;
+  if (block.recurrence_kind !== "single") return false;
+  if (block.provider_deleted_at || block.status === "cancelled") return false;
+  const calendar = status.calendars.find(
+    (item) => item.id === block.calendar_id,
+  );
+  if (!calendar || !["writer", "owner"].includes(calendar.access_role)) {
+    return false;
+  }
+  const account = status.accounts.find(
+    (item) => item.id === calendar.account_id,
+  );
+  return Boolean(account) && account!.auth_state !== "disconnected";
+}
+
+/**
+ * Copy for the closed recovery taxonomy. Each names the actual situation and
+ * offers only actions that are truthful for it. Ordinary provider version drift
+ * never appears here -- Ion resolves it and says nothing.
+ */
+const writeRecoveryCopy: Record<string, string> = {
+  write_consent_required:
+    "Ion needs permission to edit this Google Calendar. Your change is saved in Ion and will finish once you allow it.",
+  reauthentication_required: "Reconnect Google Calendar to finish saving.",
+  write_permission_lost:
+    "Ion can no longer edit this Google calendar. Your change is still saved in Ion.",
+  provider_target_deleted:
+    "This event was deleted in Google while Ion was saving your change.",
+  recurrence_identity_lost:
+    "This event became a repeating event in Google, so Ion could not finish saving your change.",
+  unsupported_provider_transformation:
+    "This event changed in Google into something Ion cannot edit safely.",
+  deterministic_id_collision:
+    "Google already has a different event with this identity.",
+  provider_rejected_terminally: "Google refused this change.",
+  automatic_recovery_exhausted:
+    "We couldn't finish saving this event automatically. Try again.",
+  fallback: "We couldn't finish saving this event automatically. Try again.",
 };
 
 export function CalendarWorkspace({
@@ -214,6 +261,59 @@ export function CalendarWorkspace({
     [onStatus, pending],
   );
 
+  // Deliberately NOT routed through `run`. That helper drops an action while
+  // any command is outstanding, which is exactly the renderer-level guard that
+  // discarded the owner's newest gesture in Phase 2C v1. A direct human edit is
+  // always accepted; only duplicate submission of one click is prevented, and
+  // that guard lives in the form itself.
+  const saveEdit = useCallback(
+    async (occurrence: CalendarOccurrence, draft: CalendarEditDraft) => {
+      setFeedback("Saving…");
+      try {
+        const receipt = await googleCalendarClient.acceptEdit(
+          occurrence.block,
+          {
+            command_id: crypto.randomUUID(),
+            operation: "patch",
+            recurrence_scope: "single",
+            expected_revision: occurrence.block.revision,
+            changed_fields: draft.changedFields,
+            draft: draft.draft,
+          },
+        );
+        // A missing capability is a one-time grant, not approval of this edit:
+        // the edit is already durable and resumes once permission exists.
+        setFeedback(
+          receipt.requires_write_consent
+            ? "Saved in Ion · Google Calendar editing permission needed"
+            : "Saved",
+        );
+        onStatus(await googleCalendarClient.status());
+      } catch (reason) {
+        const error = asGoogleError(reason);
+        setFeedback(errorCopy[error.code] ?? errorCopy.unavailable);
+      }
+    },
+    [onStatus],
+  );
+
+  // A one-time account capability grant. It resumes the edit the owner already
+  // made, so they never retype it, and it is never asked for again afterwards.
+  const allowEditing = useCallback(
+    async (accountId: string) => {
+      setFeedback("Waiting for Google…");
+      try {
+        await googleCalendarClient.enableWrites(accountId);
+        setFeedback("Saved");
+        onStatus(await googleCalendarClient.status());
+      } catch (reason) {
+        const error = asGoogleError(reason);
+        setFeedback(errorCopy[error.code] ?? errorCopy.unavailable);
+      }
+    },
+    [onStatus],
+  );
+
   const connect = useCallback(async () => {
     if (pending) return;
     setPending("connect");
@@ -298,6 +398,28 @@ export function CalendarWorkspace({
           </span>
         </div>
       ) : null}
+      {(status.write_recovery ?? []).map((entry) => (
+        <div
+          className="calendar-write-recovery"
+          role="alert"
+          key={`${entry.block_id}:${entry.kind}`}
+        >
+          <span>
+            {writeRecoveryCopy[entry.kind] ?? writeRecoveryCopy.fallback}
+          </span>
+          {entry.kind === "write_consent_required" ||
+          entry.kind === "reauthentication_required" ? (
+            <button
+              type="button"
+              onClick={() => allowEditing(entry.account_id)}
+            >
+              {entry.kind === "write_consent_required"
+                ? "Allow Ion to edit Google Calendar"
+                : "Reconnect Google Calendar"}
+            </button>
+          ) : null}
+        </div>
+      ))}
       {feedback ? (
         <p className="notice notice--warning" role="alert">
           {feedback}
@@ -487,6 +609,8 @@ export function CalendarWorkspace({
                     ),
                   )
                 }
+                editable={isEditable(selected, status)}
+                onEdit={(draft) => saveEdit(selected, draft)}
                 onClose={() => setSelected(null)}
               />
             ) : null}

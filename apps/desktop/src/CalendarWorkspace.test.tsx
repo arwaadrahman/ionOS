@@ -1317,3 +1317,81 @@ test("marks the open occurrence as selected without any write state", () => {
   expect(opened).toHaveAttribute("aria-current", "true");
   expect(screen.queryByText(/Not saved yet/)).not.toBeInTheDocument();
 });
+
+test("an edit is accepted again while the previous command is still outstanding", async () => {
+  // The Phase 2C v1 renderer defect: a global `pending` guard discarded the
+  // owner's newest action while a Tauri invoke was outstanding, so the most
+  // recent edit was the likeliest to be silently lost. Under artificial
+  // latency, Save must stay available and every submission must be sent.
+  const item = block("33333333-3333-4333-8333-333333333350", "Rename me");
+  const sent: string[] = [];
+  let releaseFirst: null | (() => void) = null;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "accept_direct_human_calendar_intent") {
+      const draft = (args as { intent: { draft: { title?: string } } }).intent;
+      sent.push(draft.draft.title ?? "");
+      if (sent.length === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve as () => void;
+        });
+      }
+      return {
+        intent_id: "i",
+        block_id: item.id,
+        sequence: sent.length,
+        state: "ready",
+        accepted: true,
+        awaiting_predecessor: false,
+      };
+    }
+    return { ...connected, blocks: [item] };
+  });
+
+  render(
+    <CalendarWorkspace
+      status={{ ...connected, blocks: [item] }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Rename me/ }));
+
+  const titleField = screen.getByLabelText("Title");
+  fireEvent.change(titleField, { target: { value: "B" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(sent).toEqual(["B"]));
+
+  // The first command has NOT returned. Save must still be there and usable.
+  const save = screen.getByRole("button", { name: "Save" });
+  expect(save).not.toBeDisabled();
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "C" } });
+  fireEvent.click(save);
+  await waitFor(() => expect(sent).toEqual(["B", "C"]));
+
+  (releaseFirst as null | (() => void))?.();
+  // No provider-lifecycle state leaked onto the event tile.
+  expect(screen.queryByText(/Not saved yet/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Needs review/i)).not.toBeInTheDocument();
+});
+
+test("a read-only calendar offers no edit affordance at all", () => {
+  const readOnly = {
+    ...connected,
+    calendars: [{ ...calendar, access_role: "reader" as const }],
+    blocks: [block("33333333-3333-4333-8333-333333333351", "Read only event")],
+  };
+  render(
+    <CalendarWorkspace
+      status={readOnly}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Read only event/ }));
+  expect(
+    screen.queryByRole("button", { name: "Save" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByText("Read-only event")).toBeInTheDocument();
+});

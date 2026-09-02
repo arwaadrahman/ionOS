@@ -286,11 +286,26 @@ class CalendarBlockOutput(CalendarModel):
     revision: int
 
 
+class CalendarWriteRecoveryOutput(CalendarModel):
+    """One named condition the owner must actually settle.
+
+    Kept top-level rather than on a block, because provider lifecycle state is
+    not an event property and must never render on an ordinary Calendar event.
+    Empty in healthy operation, and each `kind` is a member of the closed
+    recovery taxonomy -- there is deliberately no generic member.
+    """
+
+    block_id: str
+    account_id: str
+    kind: str
+
+
 class CalendarStatusOutput(CalendarModel):
     configured: bool = True
     accounts: list[GoogleAccountOutput]
     calendars: list[GoogleCalendarOutput]
     blocks: list[CalendarBlockOutput]
+    write_recovery: list[CalendarWriteRecoveryOutput] = []
 
 
 class InternalCalendarStateOutput(CalendarModel):

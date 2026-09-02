@@ -55,6 +55,50 @@ All notable repository changes are documented here.
 
 ### Added
 
+- **Phase 2C-R1 — ordinary event edit.** One existing Google-backed, ordinary,
+  non-recurring, attendee-free event can be edited (title, start, end) and
+  settles with Google automatically, with **no** Needs Review, Review
+  differences, Keep Google's version, Apply my Ion changes, Sync Now,
+  confirmation checkbox, or second approval anywhere in the healthy path.
+  A durably accepted edit is visible in the Calendar immediately -- visible
+  state is confirmed provider base plus the newest durable human changed fields
+  -- while the confirmed base is preserved separately, so settlement never snaps
+  back through a stale value and an older confirmation never displaces a newer
+  intent.
+  The owner may edit the same event again straight away. A newer edit supersedes
+  an earlier write that has not left yet, and waits durably behind one genuinely
+  in flight, which is never cancelled or raced; the successor is then re-aimed at
+  the ETag that attempt confirmed. Three rapid edits produce one provider write.
+  Ordinary provider version drift is resolved automatically: Ion re-reads
+  confirmed state, keeps the fields the human changed, adopts Google's values for
+  the fields they did not, and retries within the bounded budget. Structural
+  identity -- same target, still ordinary, still writable -- is what may
+  legitimately fail; a version difference is not.
+  Google write permission is a **one-time capability transition**, never approval
+  of an edit: the edit is durable first, the owner grants permission once, and
+  the edit resumes automatically without being retyped.
+  Provider execution sends only `events.patch` with an exact non-wildcard
+  `If-Match` and a body containing only allowlisted changed fields, plus
+  `events.get` to obtain rebase authority. Rust keeps sole ownership of OAuth,
+  tokens, and Google HTTPS; Python owns durable intent, eligibility, work
+  selection, rebase decisions, and settlement. No migration was required.
+- **The renderer can no longer drop a newer human action.** Phase 2C v1 had a
+  global pending guard that discarded a new gesture while a Tauri invoke was
+  outstanding, so the owner's most recent edit was the likeliest to be lost
+  silently. Saving an edit deliberately bypasses that helper: only duplicate
+  submission of one synchronous click is prevented, and Save is never disabled
+  by provider work. Covered by a test that holds the first command open and
+  asserts the second edit is still accepted -- verified to fail if the old guard
+  is reintroduced.
+- **A production Tauri edit crosses every layer in one test.** R0 proved contract
+  parity but never invoked a real edit end to end. The renderer payload is now
+  deserialized into the production command's argument type, then driven through
+  the production dispatch loop against a real FastAPI over loopback, real SQLite
+  at head 0007, and a synthetic Google that records exactly what Ion sent --
+  asserting the exact `If-Match`, the changed-fields-only body, the optimistic
+  projection before Google responds, and the collapsed projection after
+  settlement, with zero recovery entries.
+
 - **Phase 2C-R0 — the direct-human write foundation.** The smallest trustworthy
   architecture for Phase 2C v2, proving that human intent acceptance and
   provider write execution are separate concerns. Accepting a direct human

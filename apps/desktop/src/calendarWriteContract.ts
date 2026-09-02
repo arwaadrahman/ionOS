@@ -21,6 +21,9 @@ export const ACCEPTED_OPERATIONS = ["patch"] as const;
 export const ACCEPTED_RECURRENCE_SCOPES = ["single"] as const;
 export const CHANGED_FIELDS = ["title", "start", "end"] as const;
 
+/** Operations that may actually leave for Google in R1. */
+export const DISPATCHABLE_OPERATIONS = ["patch"] as const;
+
 /**
  * The closed recovery taxonomy, with deliberately no generic member. Ordinary
  * provider version drift is `automatic` and never reaches the owner.
@@ -34,6 +37,10 @@ export const AUTOMATIC_RECOVERY = [
 ] as const;
 
 export const OWNER_ACTION_RECOVERY = [
+  // Permission has never been granted for this account. A one-time capability
+  // transition the owner completes, not approval of the edit -- which is
+  // already durable and resumes automatically afterwards.
+  "write_consent_required",
   "reauthentication_required",
   "write_permission_lost",
   "provider_target_deleted",
@@ -74,9 +81,24 @@ export type DirectHumanIntentReceipt = {
   intent_id: string;
   block_id: string;
   sequence: number;
-  state: "queued" | "ready";
+  state: "queued" | "ready" | "reauth_required";
   accepted: true;
   awaiting_predecessor: boolean;
+  superseded_intent_id?: string | null;
+  /**
+   * Set only when this account has never granted -- or has lost -- Calendar
+   * write permission. The edit is accepted and durable either way; this asks
+   * for a one-time capability grant, never approval of the edit itself.
+   */
+  requires_write_consent?:
+    "write_consent_required" | "reauthentication_required" | null;
+};
+
+/** One named condition the owner must actually settle. Empty when healthy. */
+export type CalendarWriteRecovery = {
+  block_id: string;
+  account_id: string;
+  kind: RecoveryKind;
 };
 
 export function isAutomaticRecovery(kind: RecoveryKind): boolean {

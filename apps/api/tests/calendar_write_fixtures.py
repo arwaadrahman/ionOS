@@ -8,6 +8,7 @@ from __future__ import annotations
 from sqlalchemy import Engine, insert
 
 from ion_api.schema import (
+    calendar_block_ion_metadata,
     calendar_blocks,
     google_accounts,
     google_calendars,
@@ -80,6 +81,18 @@ def seed_writable_event(
                 status="confirmed",
                 transparency="opaque",
                 recurrence_kind="single",
+                created_at=NOW,
+                updated_at=NOW,
+                revision=1,
+            )
+        )
+        # The status projection inner-joins Ion metadata, so a block without it
+        # is invisible to the Calendar -- exactly the gap that made an earlier
+        # projection assertion pass trivially.
+        connection.execute(
+            insert(calendar_block_ion_metadata).values(
+                calendar_block_id=block_id,
+                flexibility="locked",
                 created_at=NOW,
                 updated_at=NOW,
                 revision=1,

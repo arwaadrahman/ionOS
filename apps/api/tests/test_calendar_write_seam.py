@@ -318,19 +318,32 @@ def test_the_renderer_lane_never_reports_provider_lifecycle_state(tmp_path):
             assert forbidden not in body
 
 
-def test_r0_exposes_no_google_write_capability(tmp_path):
+def test_r1_enables_exactly_one_bounded_provider_operation(tmp_path):
     settings, client = stack(tmp_path)
     with client:
         client.post(INTENT_ROUTE, headers=HEADERS, json=intent_payload())
         work = client.post("/v1/calendar/writes/internal/work", headers=HEADERS).json()
     assert len(work["plans"]) == 1
-    assert work["plans"][0]["dispatchable"] is False
-    assert MANIFEST["coordinator"]["dispatchable_operations"] == []
-    # The R0 Rust write module reaches no Google endpoint or method. It talks
-    # only to the authenticated loopback API through `product_request`.
-    for forbidden in ("googleapis.com", "events.insert", "events.patch"):
+    assert work["plans"][0]["operation"] == "patch"
+    assert work["plans"][0]["dispatchable"] is True
+    assert MANIFEST["coordinator"]["dispatchable_operations"] == ["patch"]
+    # Only the two accepted Google methods are reachable, and the conditional
+    # header is always an exact value.
+    assert MANIFEST["provider"]["methods"] == ["events.patch", "events.get"]
+    assert MANIFEST["provider"]["wildcard_if_match_forbidden"] is True
+    for forbidden in (
+        "events.insert",
+        "events.delete",
+        "events.move",
+        "events.update",
+        "events.instances",
+        'header("If-Match", "*")',
+    ):
         assert forbidden not in RUST_SOURCE
+    # Rust reaches Google only through the pinned Calendar API constant, and the
+    # local API only through the authenticated product request helper.
     assert "product_request(" in RUST_SOURCE
+    assert "googleapis.com" not in RUST_SOURCE
 
 
 def test_tauri_and_python_vocabulary_cannot_silently_drift_apart():

@@ -144,11 +144,27 @@ all three fail.
 production app** over real SQLite at head `0007`, using the exact request bodies
 the Rust layer serializes — not the coordinator directly.
 
-### 2C-R1 — one-time create and edit
+### 2C-R1 — ordinary event edit
 
-- create an ordinary event; edit an ordinary event
+Edit only. Create moves to a later subphase; R1 is the smallest capability that
+proves the architecture end to end.
+
+- edit an ordinary existing Google-backed event: title, start, end
+- non-recurring, attendee-free, ordinary/default event type, on a writer/owner
+  calendar; no reminder, attachment, conferencing, or cross-calendar move
 - automatic Ion → Google; automatic Google → Ion
-- Undo where it is truthful
+- **the same event editable twice in succession**, both settling automatically
+
+**Dispatch ownership (accepted 2026-09-01).** The existing trust boundary is
+preserved exactly:
+
+| Owner | Responsibility |
+| --- | --- |
+| Python / FastAPI | durable human intent, eligibility, changed fields, provider-work selection, automatic rebase and recovery, settlement |
+| Rust | OAuth and access-token memory, actual Google HTTPS execution, provider request allowlists, bounded dispatch and wake triggers |
+
+Google credentials and provider execution do not move into Python, and Python
+never holds a token or calls Google.
 
 **Then real Google acceptance. Do not proceed if it fails.**
 
