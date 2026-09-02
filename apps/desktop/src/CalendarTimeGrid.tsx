@@ -28,6 +28,7 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
   today,
   now = new Date(),
   density,
+  selectedKey = null,
   onSelect,
 }: {
   range: CalendarRange;
@@ -36,6 +37,7 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
   today: string;
   now?: Date;
   density: CalendarDensity;
+  selectedKey?: string | null;
   onSelect(occurrence: CalendarOccurrence): void;
 }) {
   const hourHeight = calendarDensityHeights[density];
@@ -92,6 +94,7 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
                     occurrence={occurrence}
                     localTimeZone={localTimeZone}
                     detail="title"
+                    selected={occurrence.key === selectedKey}
                     onSelect={onSelect}
                   />
                 ))}
@@ -158,6 +161,7 @@ export const CalendarTimeGrid = memo(function CalendarTimeGrid({
                         occurrence={segment.occurrence}
                         localTimeZone={localTimeZone}
                         detail={detail}
+                        selected={segment.occurrence.key === selectedKey}
                         onSelect={onSelect}
                       />
                     </div>
@@ -176,11 +180,13 @@ export const EventButton = memo(function EventButton({
   occurrence,
   localTimeZone,
   detail,
+  selected = false,
   onSelect,
 }: {
   occurrence: CalendarOccurrence;
   localTimeZone: string;
   detail: "title" | "title-two-line" | "time" | "full";
+  selected?: boolean;
   onSelect(occurrence: CalendarOccurrence): void;
 }) {
   const color = categoryColor(
@@ -200,8 +206,10 @@ export const EventButton = memo(function EventButton({
           "--event-text": color.text,
         } as React.CSSProperties
       }
-      aria-label={`${occurrence.block.title}, ${time}`}
+      aria-label={`${occurrence.block.title}, ${time}${selected ? ", selected" : ""}`}
       title={`${occurrence.block.title} · ${time}`}
+      aria-current={selected ? "true" : undefined}
+      data-selected={selected ? "true" : undefined}
       onClick={() => onSelect(occurrence)}
     >
       <strong>{occurrence.block.title}</strong>

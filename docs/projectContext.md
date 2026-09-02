@@ -10,7 +10,7 @@ actions as authoritative.
 ## Current development state
 
 - **Phase:** Phase 2 — Calendar
-- **Milestone:** Phase 2B accepted; documentation checkpoint before Phase 2C
+- **Milestone:** Phase 2C v2 rebuild prepared; no v2 write implementation begun
 - **In scope:** a primary read-only Calendar over cached canonical
   CalendarBlocks; Day, consecutive 3 Day, Monday-first Week, rolling Next 7
   Days, and Monday-first Month views; bounded recurrence/exception projection;
@@ -22,6 +22,23 @@ actions as authoritative.
   truthful CalendarBlock occupancy/free gaps in Today.
 - **Checkpoint scope:** durable Developer Agent Bridge, external-agent/Deep Ask
   separation, performance/resource policy, and deferred UI-polish direction.
+- **Rebuild state:** the first Phase 2C write implementation failed real owner
+  acceptance and was withdrawn. It is preserved on `main` and
+  `archive/phase-2c-v1` as reference material, not accepted product code. This
+  branch restarts from the accepted Phase 2B baseline `72ea3ba` while carrying
+  forward the **current** product contract — the Master Specification's Calendar
+  authority amendment and [Calendar interaction behavior](CALENDAR_BEHAVIOR.md)
+  — not Phase 2B-era product assumptions. Google events are read-only here.
+- **Binding Calendar rules:** a direct human action is itself authorization; an
+  AI- or scheduler-proposed change is authorized once, when the owner accepts
+  it; provider synchronization is never a second approval step; `locked`
+  constrains Ion's automation, not the owner; recurrence scope is target
+  selection; Undo is preferred over confirmation for anything reversible;
+  convergence is automatic in both directions; and there is no version chooser.
+- **Next:** Phase 2C-R0 — the clean writable architecture foundation, gated on a
+  cross-layer test spanning renderer → Tauri/Rust → authenticated FastAPI →
+  SQLite → synthetic provider. See the
+  [Phase 2C rebuild plan](phases/PHASE_2C.md).
 - **Out of scope:** Google event writes/deletes, Google Tasks, Gmail,
   push/webhooks, Phase 2C provider mutation/conflict resolution, Task
   auto-scheduling, AI, provider free/busy planning,
@@ -101,8 +118,11 @@ performance-conscious.
 - [Approved Ion reference snapshot](references/approvedReferences.md)
 - [Decision index](decisions/README.md)
 - [Performance and resource policy](PERFORMANCE.md)
-- [External Developer Agent Bridge decision](decisions/0020-external-developer-agent-bridge.md)
-- [Active phase](phases/PHASE_2B.md)
+- [External Developer Agent Bridge
+  decision](decisions/0020-external-developer-agent-bridge.md)
+- [Calendar interaction behavior](CALENDAR_BEHAVIOR.md)
+- [Active phase — Phase 2C rebuild](phases/PHASE_2C.md)
+- [Accepted Phase 2B](phases/PHASE_2B.md)
 
 The approved-reference snapshot derives from `projectReference.md` version
 **1.1.0** (updated 2026-08-27). Project-local decisions override it.

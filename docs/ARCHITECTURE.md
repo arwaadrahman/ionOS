@@ -9,14 +9,19 @@ separately labels proposed implementation choices.
 
 - Ion is local-first. Its authoritative data lives on the user's Mac; cloud
   services are integrations, not the primary datastore.
-- macOS is the active local-only platform. Mobile support is TBD and requires a
-  dedicated mobile/security architecture review plus explicit owner approval.
+- macOS is the active local-only platform. Mobile, cross-device sync, and
+  remote access are post-v1 platform expansion and require dedicated
+  architecture/security review plus explicit owner approval.
 - One canonical record may appear in multiple contextual views. Derived search,
   indexing, and cache structures must be rebuildable.
 - Structured records, Markdown knowledge, and original sources have distinct
   owners. An LLM is not a memory system.
 - The repository contains only synthetic data and configuration examples; real
   user data remains local and outside the repository.
+
+Future Aspirations/readiness/Skills relationships, Voice & Ambient Core, and
+multi-calendar mirroring are product direction only; their record model and
+runtime boundaries remain deferred in the [product / roadmap amendment](PRODUCT_SPEC.md#owner-approved-product--roadmap-amendment--2026-08-31).
 
 ## Proposed implementation baseline — subject to prototyping
 
@@ -247,6 +252,50 @@ open gaps only from opaque timed blocks. All-day and transparent blocks remain
 visible but do not fabricate timed occupancy. Today Tasks keep their existing
 planning semantics and are never converted to, or implied to be,
 CalendarBlocks. Cached Calendar content stays visible when Google is offline.
+
+## Phase 2C two-way write boundary — rebuild in preparation
+
+**Google events are read-only at the current baseline.** The Phase 2C write
+implementation described by earlier revisions of this document was withdrawn
+after real owner acceptance; it is preserved on `main` and
+`archive/phase-2c-v1` and is not accepted product code. See
+[ADR 0022](decisions/0022-phase-2c-controlled-rebuild.md) and the
+[Phase 2C rebuild plan](phases/PHASE_2C.md).
+
+The boundary the rebuild must implement is unchanged from the accepted safety
+architecture, and only the human-interaction layer above it is new:
+
+- A direct-human Calendar mutation commits canonical intent and a durable
+  Python/SQLite write record in one transaction. Only then may Rust use its
+  existing token and Google HTTPS ownership to dispatch an allowlisted event
+  request and return a sanitized outcome for Python reconciliation. React never
+  receives provider request authority, and Python never receives a token or
+  calls Google.
+- Google remains authoritative for last-confirmed provider fields. While a
+  direct-human intent is unsettled it owns only the fields the owner actually
+  changed; freshly fetched provider state owns the rest; Ion-only metadata stays
+  Ion-owned. Once the intent confirms, that ownership ends.
+- An ETag mismatch on an ordinary mutation re-reads confirmed provider state and
+  rebases onto it automatically, bounded by the attempt budget. Drift that
+  outlasts the budget, and contradictions that cannot be merged truthfully, stop
+  as one of a closed set of specifically named recovery conditions. There is no
+  generic conflict decision and no version chooser.
+- **Human acceptance and provider serialization are separate concerns.** A newer
+  direct-human mutation is always accepted durably; the provider still receives
+  one serialized write per target. An earlier write that has not left may be
+  superseded; one genuinely in flight is never cancelled and never raced. The
+  owner is never refused because an earlier write has not finished.
+- Creates use a stable deterministic provider event ID and ambiguous results
+  reconcile before retry. Recurring instances resolve through the master plus
+  the immutable original start, with structural identity separated from ordinary
+  version drift. Generated occurrences remain derived and are never persisted.
+- The write path has no timer and no busy worker: dispatch is bounded after an
+  explicit human action, a sync, or app-start recovery, plus a single bounded
+  self-wake for a due retry.
+
+Each capability is gated on a cross-layer test spanning renderer → Tauri/Rust →
+authenticated FastAPI → SQLite → synthetic provider, and then on real owner
+acceptance against a disposable Google event, before the next is built.
 
 ## TBD
 

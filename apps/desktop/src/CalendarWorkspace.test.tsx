@@ -1293,3 +1293,27 @@ test("sets a compact minimum desktop window that preserves a usable Day view", (
   expect(mainWindow?.minWidth).toBe(540);
   expect(mainWindow?.minHeight).toBe(560);
 });
+
+test("marks the open occurrence as selected without any write state", () => {
+  const item = block(
+    "33333333-3333-4333-8333-333333333340",
+    "Selected occurrence",
+  );
+  render(
+    <CalendarWorkspace
+      status={{ ...connected, blocks: [item] }}
+      onStatus={() => undefined}
+      now={now}
+      localTimeZone="UTC"
+    />,
+  );
+  const event = screen.getByRole("button", { name: /Selected occurrence/ });
+  expect(event).not.toHaveAttribute("data-selected");
+  fireEvent.click(event);
+  const opened = screen.getByRole("button", {
+    name: /Selected occurrence.*selected/,
+  });
+  expect(opened).toHaveAttribute("data-selected", "true");
+  expect(opened).toHaveAttribute("aria-current", "true");
+  expect(screen.queryByText(/Not saved yet/)).not.toBeInTheDocument();
+});

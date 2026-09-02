@@ -39,6 +39,10 @@ remain proposed until intentionally accepted.
 - [0018 Google Calendar read-sync foundation](0018-google-calendar-read-sync-foundation.md)
 - [0019 Calendar presentation metadata](0019-calendar-presentation-metadata.md)
 - [0020 External Developer Agent Bridge](0020-external-developer-agent-bridge.md)
+- [0021 Google Calendar write outbox and conflict
+  boundary](0021-google-calendar-write-outbox-and-conflicts.md)
+- [0022 Controlled Phase 2C rebuild from the accepted Phase 2B
+  baseline](0022-phase-2c-controlled-rebuild.md)
 
 ## Decision Backlog
 

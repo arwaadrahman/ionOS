@@ -2,7 +2,9 @@
 
 ## Status
 
-**Accepted invariants with Phase 2A Google credential implementation.**
+**Accepted invariants with Phase 2A Google credential implementation. The
+Phase 2C write gate below is a binding requirement for the rebuild; no provider
+write is implemented on this branch.**
 
 - Ion is local-first. The public repository contains no real personal Ion data.
 - Tests, demos, screenshots, and fixtures use clearly synthetic records only.
@@ -63,6 +65,61 @@ data and prevents a second desktop process from starting another sidecar.
 - Repository tests and examples use synthetic identifiers and fake token-store
   behavior. Real account data and configuration remain in Application Support,
   Keychain, and the runtime database outside Git.
+
+## Phase 2C write gate — rebuild in preparation
+
+**Google events are read-only at the current baseline.** The Phase 2C write
+implementation this section previously described was withdrawn after real owner
+acceptance; it is preserved on `main` and `archive/phase-2c-v1`. These
+invariants are binding requirements for the rebuild
+([ADR 0022](decisions/0022-phase-2c-controlled-rebuild.md),
+[Phase 2C rebuild plan](phases/PHASE_2C.md)).
+
+- **Authorization and provider-write safety are separate layers.** The first
+  decides whether Ion may act: a direct human action authorizes itself, and an
+  automation- or AI-originated change is authorized by the owner accepting it.
+  The second decides how Ion acts safely once it may: Ion IDs only, fixed typed
+  contracts, exact non-wildcard `If-Match`, the narrow body allowlist, and
+  durable intent before dispatch. **Relaxing a confirmation is a change to the
+  first layer and never weakens the second; the second never adds an approval
+  step of its own.** The simpler UX the rebuild delivers is entirely a change to
+  the first layer.
+- The accepted OAuth set is exactly CalendarList read-only plus Calendar Events
+  read/write, replacing Events read-only after deliberate account re-consent.
+  Broad Calendar, Gmail, Tasks, ACL/sharing, calendar management,
+  Meet/conference, and reminder authority remain forbidden. The ordinary connect
+  flow still requests only the read-only set.
+- Provider writes require `writer` or `owner`, ordinary/default event type, no
+  provider lock, no attendees, and the accepted account scope. Attendee/invite
+  events and `writerWithoutPrivateAccess` remain read-only.
+- React write commands use Ion IDs and fixed typed contracts; they cannot supply
+  provider IDs, ETags, arbitrary bodies, URLs, methods, headers, or recurrence
+  text as request authority. Rust constructs the allowlisted Google request and
+  re-validates it before dispatch.
+- Python commits canonical intent durably before any provider request. That
+  record contains no token, credential, attendee address, raw provider resource,
+  or audit payload snapshot.
+- Every conditional write uses the last confirmed non-wildcard ETag. Wildcard
+  `If-Match: *`, silent last-write-wins, timestamp authority, and whole-event
+  merging remain forbidden. A rebase re-sends only the fields the owner changed,
+  against freshly confirmed authority.
+- Create and patch bodies exclude attendees, reminders, Meet/conference,
+  attachments, extended properties, and event colors. Recurrence is admitted
+  only as an allowlisted preset, optionally carrying a terminator generated
+  inside the trusted domain from the persisted preset and the block's own
+  timezone/all-day semantics. `events.update`, `events.move`, batch operations,
+  arbitrary RRULE, and calendar management remain unreachable.
+- Provider errors and audit retain only allowlisted status/reason, operation,
+  recurrence scope, internal IDs, revisions, and timestamps. Event content,
+  account email, attendee identity, authorization material, and raw response
+  bodies are excluded.
+- Unresolved and failed intents remain until explicit resolution. Successfully
+  completed rows may be pruned after 30 days by bounded, deterministic,
+  restart-safe cleanup while compact audit remains durable.
+
+See accepted ADR
+[0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md) for the
+retained safety architecture.
 
 ## Phase 0B local development details
 

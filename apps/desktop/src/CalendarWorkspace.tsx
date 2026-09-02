@@ -449,6 +449,7 @@ export function CalendarWorkspace({
                     occurrences={visibleOccurrences}
                     localTimeZone={localTimeZone}
                     today={today}
+                    selectedKey={selected?.key ?? null}
                     onSelect={setSelected}
                   />
                 ) : (
@@ -459,6 +460,7 @@ export function CalendarWorkspace({
                     today={today}
                     now={now}
                     density={density}
+                    selectedKey={selected?.key ?? null}
                     onSelect={setSelected}
                   />
                 )}

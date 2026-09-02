@@ -1,13 +1,14 @@
 # Integration Boundaries
 
-## Status: Google Calendar Phase 2B read-only interface active; other integrations deferred
+## Status: Google Calendar read-only; Phase 2C writes in controlled rebuild
 
 Integrations are adapters around Ion's local authority; they do not become its
 primary storage. Google Calendar is the first active adapter under ADR 0018.
 
 | Integration                                    | Target phase/status                 |
 | ---------------------------------------------- | ----------------------------------- |
-| Google Calendar                                | Phase 2B read-only interface        |
+| Google Calendar                                | Read-only; 2C writes rebuilding     |
+| Google Tasks                                   | Optional future bridge; owner-deferred, not desktop v1 |
 | Canvas                                         | Phase 3, deferred                   |
 | Local AI                                       | Phase 4, deferred                   |
 | Gmail                                          | Phase 5, deferred                   |
@@ -15,10 +16,15 @@ primary storage. Google Calendar is the first active adapter under ADR 0018.
 | GitHub                                         | Phase 8, deferred                   |
 | External developer-agent bridge                | Narrow precursor allowed; deferred |
 | Cloud AI / Deep Ask                            | Phase 12, deferred                  |
-| Mobile companion                               | TBD; security-gated by ADR 0004     |
+| Mobile companion / cross-device sync           | Post-v1 platform expansion; security-gated |
 
 Any other integration requires a scoped route, privacy review, and owner
 approval before implementation.
+
+Google Tasks is not Ion's primary task system: canonical Ion Tasks remain
+primary. The owner-approved [product / roadmap amendment](PRODUCT_SPEC.md#owner-approved-product--roadmap-amendment--2026-08-31)
+keeps a future bridge optional and deferred, along with the future
+multi-calendar mirroring direction; neither is active Phase 2 work.
 
 ## External development-agent direction
 
@@ -61,7 +67,7 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   bounded retry, and safe 410 full resync.
 - Identity: provider event ID reconciles within one calendar. iCalUID is a
   separate non-unique correlation value. ETag/provider revision metadata is
-  retained for later explicit conflict handling.
+  retained for conditional writes and automatic rebase.
 - Failure: cached canonical blocks remain readable. Retry/reauth/failure is
   explicit; unavailable provider data is never invented. Provider rejection
   diagnostics retain only allowlisted status/reason classes and never the
@@ -75,6 +81,54 @@ with Ion-owned Keychain credentials, privacy filtering, and cost controls.
   Revisioned category/subtype and hide/restore commands update only Ion-local SQLite
   fields. Google selection, subscription, visibility, and event content remain
   untouched.
+
+## Phase 2C write contract — rebuild in preparation
+
+**No provider write is implemented on this branch.** The contract below is
+binding on the rebuild ([ADR 0022](decisions/0022-phase-2c-controlled-rebuild.md),
+[Phase 2C rebuild plan](phases/PHASE_2C.md)); the withdrawn implementation is
+preserved on `main` and `archive/phase-2c-v1`.
+
+- **Scopes:** keep `calendar.calendarlist.readonly` and replace
+  `calendar.events.readonly` with `calendar.events` only after deliberate
+  re-consent. `calendar.events.owned` is not used, because legitimate shared
+  calendars with writer authority are in scope. Broad `calendar` and unrelated
+  scopes remain forbidden.
+- **Eligibility:** `writer` or `owner`, ordinary/default event type, no provider
+  lock, no attendees, and the accepted account scope. Attendee/invite events
+  remain entirely read-only.
+- **Dispatch:** Python/SQLite persists canonical direct-human intent durably
+  before Rust sends an allowlisted Google request. Rust remains the only
+  Google/OAuth/token owner; React and Python gain no provider authority.
+- **Concurrency:** ordinary ETag drift converges automatically — re-read
+  confirmed provider state, rebase the changed-field mask onto it, bounded by
+  the automatic attempt budget. There is **no** version chooser: drift that
+  outlasts the budget and genuinely unmergeable contradictions stop as one of a
+  closed set of specifically named recovery conditions. No whole-event merge,
+  silent last-write-wins, or timestamp authority.
+- **Human acceptance is not provider serialization.** A newer direct-human
+  mutation is always accepted; the provider still receives one serialized write
+  per target. The owner is never refused because an earlier write is unfinished.
+- **Idempotency and recovery:** stable deterministic provider IDs for
+  Ion-created events; ambiguous requests reconcile before retry; retries are
+  bounded and restart-safe.
+- **Recurrence:** This event, All events, and This and following. Daily,
+  weekdays, weekly, monthly, and yearly are the writable rules. Occurrences
+  resolve by canonical master plus immutable original start, with structural
+  identity separated from version drift. `This and following` is a real series
+  split — conditional trim, then a deterministic new master — and is withheld
+  with a plain explanation where Ion cannot faithfully continue the pattern.
+  Arbitrary RRULE entry remains unavailable.
+- **Provider surface:** `events.insert`, changed-field-only `events.patch`,
+  conditional `events.delete`, and bounded `events.get` / `events.instances` for
+  reconciliation and occurrence resolution. `events.update`, `events.move`,
+  batch, attendee, reminder, conferencing, attachment, and special-event writes
+  are not reachable from any command or the renderer.
+- **Retention:** unresolved and failed intents remain until explicit resolution.
+  Completed intents may be pruned after 30 days while compact audit remains.
+
+See [ADR 0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md) for
+the retained safety architecture.
 
 Authoritative provider references:
 

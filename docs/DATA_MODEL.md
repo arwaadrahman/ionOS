@@ -101,5 +101,47 @@ plus extensible subtype; existing rows migrate to visible and uncategorized.
   Either path preserves Ion-only metadata and appends an integration/automated
   audit event without payload snapshots.
 
+## Phase 2C write schema — rebuild in preparation
+
+The schema head on this branch is `0006_calendar_presentation_metadata`. There
+is no provider-write outbox: **Google events are read-only at the current
+baseline.**
+
+`0007_calendar_write_foundation` belongs to the withdrawn Phase 2C
+implementation. It stays committed on `main` and `archive/phase-2c-v1`, is not
+deleted, and is not revived. Phase 2C v2 introduces its own revision chained to
+`0006`. A developer database already upgraded to `0007_calendar_write_foundation`
+cannot be read by this branch's migration runner; use a separate `ION_DATA_DIR`
+for rebuild work rather than downgrading or deleting a real database.
+
+Requirements the rebuilt write schema must satisfy:
+
+- No parallel GoogleEvent owner. Existing provider fields remain the confirmed
+  Google base; durable local rows carry pending human intent and its evidence.
+- Write state is a **projection** over confirmed linkage and unresolved intent,
+  not a provider status mixed into CalendarBlock lifecycle — and it is not
+  something ordinary Calendar surfaces render.
+- The state space must not be able to represent an unclassified disagreement
+  awaiting a person. Conditions that need a person are a closed, named set.
+- Durable human intent and durable provider serialization are **separate**, so a
+  newer human mutation is always accepted while the provider still receives one
+  serialized write per target.
+- Ion-created events receive a persisted deterministic opaque provider ID before
+  dispatch. Provider capability evidence stores only safe booleans or enums, not
+  attendee addresses or raw provider resources.
+- Persisted in-flight state repairs to an explicit ambiguous state after restart
+  before any future dispatch selection; retry timing and the attempt ceiling are
+  durable.
+- Recurring occurrences are identified by canonical master plus immutable
+  original start. Generated occurrences stay derived. Reconciliation updates
+  only the exact provider exception row and never replaces an existing exception
+  identity.
+- Compact audit evidence carries no payload snapshots, credentials, or attendee
+  identity.
+
+See the [Phase 2C rebuild plan](phases/PHASE_2C.md) and
+[ADR 0022](decisions/0022-phase-2c-controlled-rebuild.md).
+
 See [Architecture](ARCHITECTURE.md) and ADR
-[0001](decisions/0001-local-first-data-ownership.md).
+[0001](decisions/0001-local-first-data-ownership.md), plus accepted ADR
+[0021](decisions/0021-google-calendar-write-outbox-and-conflicts.md).

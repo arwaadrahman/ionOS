@@ -1701,6 +1701,14 @@ h1 {
   background: var(--event-strong-fill);
 }
 
+/* Selected is a restrained signal distinct from category color: a fixed
+   brand-accent ring plus a thicker left border, so it is a shape change and
+   not only a hue change, and the open occurrence stays identifiable. */
+.calendar-event[data-selected="true"] {
+  border-left-width: 3px;
+  box-shadow: 0 0 0 2px var(--ion-accent, #8b5cf6);
+}
+
 .calendar-event strong,
 .calendar-event span,
 .calendar-event small {

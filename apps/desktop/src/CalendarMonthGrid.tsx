@@ -18,6 +18,7 @@ export const CalendarMonthGrid = memo(function CalendarMonthGrid({
   occurrences,
   localTimeZone,
   today,
+  selectedKey = null,
   onSelect,
 }: {
   range: CalendarRange;
@@ -25,6 +26,7 @@ export const CalendarMonthGrid = memo(function CalendarMonthGrid({
   occurrences: CalendarOccurrence[];
   localTimeZone: string;
   today: string;
+  selectedKey?: string | null;
   onSelect(occurrence: CalendarOccurrence): void;
 }) {
   const days = useMemo(
@@ -63,6 +65,7 @@ export const CalendarMonthGrid = memo(function CalendarMonthGrid({
                     occurrence={occurrence}
                     localTimeZone={localTimeZone}
                     detail="title"
+                    selected={occurrence.key === selectedKey}
                     onSelect={onSelect}
                   />
                 ))}

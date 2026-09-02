@@ -7,7 +7,7 @@ macOS; mobile support is TBD pending a dedicated security architecture review.
 ## Status
 
 Current phase: **Phase 2 — Calendar**
-Current milestone: **Phase 2B — Calendar Interface**
+Current milestone: **Phase 2C v2 rebuild — preparation complete**
 
 Phase 0 established the secure local runtime. Phase 1A added the canonical
 organizer schema and Task vertical slice. Phase 1B makes Areas, Goals, Projects,
@@ -36,11 +36,20 @@ bounded recurrence/exception rendering, Ion-local categories and hide/restore,
 adaptive density, and truthful CalendarBlock occupancy and free gaps in Today
 without scheduling Tasks or writing Google data.
 
+The first Phase 2C write implementation failed real owner acceptance and was
+withdrawn; it is preserved on `main` and `archive/phase-2c-v1` as reference
+material. Google events are read-only on the rebuild branch while Phase 2C is
+rebuilt from the accepted Phase 2B baseline against the current product
+contract. See the [Phase 2C rebuild plan](docs/phases/PHASE_2C.md) and
+[Calendar interaction behavior](docs/CALENDAR_BEHAVIOR.md).
+
 ## Start here
 
 - [Agent guide](AGENTS.md)
 - [Project context](docs/projectContext.md)
 - [Master Specification](docs/PRODUCT_SPEC.md)
+- [Calendar interaction behavior](docs/CALENDAR_BEHAVIOR.md)
+- [Phase 2C rebuild plan](docs/phases/PHASE_2C.md)
 - [Phase 2B](docs/phases/PHASE_2B.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decision index](docs/decisions/README.md)

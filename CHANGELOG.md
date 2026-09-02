@@ -4,6 +4,54 @@ All notable repository changes are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Phase 2C is being rebuilt from the accepted Phase 2B baseline.** The first
+  Phase 2C write implementation failed real owner acceptance: ordinary Calendar
+  events displayed "Not saved yet", global surfaces exposed provider and write
+  state as product, and ordinary human actions kept arriving at review/conflict
+  machinery. Each individual route repaired was followed by another, because the
+  architecture allowed any unclassified provider disagreement to fall through
+  into a generic "review this" decision and treated provider synchronization as
+  a second authorization step — an ordinary edit reaching a review task was the
+  design working as specified, so repairing sites could not terminate. That
+  implementation is preserved on `main` and `archive/phase-2c-v1` as reference
+  material and is not accepted product code. This branch starts at the accepted
+  Phase 2B baseline `72ea3ba` and carries forward the current product contract
+  rather than Phase 2B-era product assumptions. Google events are read-only
+  here; no Phase 2C v2 write code has been written.
+  See [ADR 0022](docs/decisions/0022-phase-2c-controlled-rebuild.md).
+- **The Calendar interaction contract is now authoritative and portable.**
+  `docs/CALENDAR_BEHAVIOR.md`, the Master Specification's Calendar authority
+  amendment, the Google-Calendar behavioral default, and the
+  `ROUTE-CALENDAR-BEHAVIOR` routing rule are carried onto the rebuild branch:
+  direct human action is authorization, an AI proposal is authorized once when
+  the owner accepts it, provider synchronization is never a second approval
+  step, `locked` constrains Ion's automation rather than the owner, recurrence
+  scope is target selection, Undo is preferred over confirmation for reversible
+  actions, and convergence is automatic in both directions.
+- **The version chooser is withdrawn, not narrowed.** _Keep Google's version_,
+  _Review differences_, and _Apply my Ion changes_ are not to be reimplemented
+  in any form. Conditions that genuinely need a person are a closed set of
+  specifically named recovery states with deliberately no generic member. ADR
+  0021 is retained for its provider-write **safety** layer — the authority
+  split, durable intent before dispatch, exact non-wildcard `If-Match`,
+  deterministic identity, bounded restart-safe retry — and superseded for its
+  human conflict-resolution policy.
+
+### Added
+
+- The open Calendar occurrence now carries a restrained selection ring —
+  `data-selected` plus `aria-current` and a "selected" suffix in its accessible
+  name — a shape change as well as a color change, so it is never confused with
+  a category color. This is the one presentation improvement from the withdrawn
+  Phase 2C work that is independent of write orchestration.
+- `docs/phases/PHASE_2C.md` is replaced by the v2 rebuild plan: subphases 2C-R0
+  through 2C-R6, each gated first on a cross-layer test spanning renderer →
+  Tauri/Rust → authenticated FastAPI → SQLite → synthetic provider, and then on
+  real owner acceptance against a disposable Google event. "Python domain tests
+  pass" is explicitly not acceptable evidence that a Calendar write works.
+
 ### Fixed
 
 - Phase 2B startup now completes the exact interrupted unreleased `0006`

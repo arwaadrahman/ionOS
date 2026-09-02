@@ -101,6 +101,16 @@ not each accumulate independent uncoordinated timers. Prefer event-driven
 updates where practical and use centralized scheduling with sensible refresh
 intervals where polling is necessary.
 
+**Phase 2C rebuild requirement.** Calendar writes add no polling timer and no
+background worker. Dispatch is bounded and event-driven: each explicit save,
+gesture, sync, or startup recovery trigger drains at most a small fixed number
+of ready write plans after a bounded recovery pass. A write left waiting on a
+retry backoff schedules exactly one self-wake for the moment it is actually due
+and emits the settled projection when it advances — a bounded self-wake, never
+a poll, so a healthy Calendar schedules nothing. Retry timestamps stay durable
+across restart. Bounded provider lookups used to reconcile ambiguity or resolve
+a recurrence occurrence are counted against the same per-trigger budget.
+
 ### Child processes
 
 External applications own their own lifecycle. Ion may later expose narrow,
