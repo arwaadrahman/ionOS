@@ -104,11 +104,24 @@ invariants are binding requirements for the rebuild
   merging remain forbidden. A rebase re-sends only the fields the owner changed,
   against freshly confirmed authority.
 - Create and patch bodies exclude attendees, reminders, Meet/conference,
-  attachments, extended properties, and event colors. Recurrence is admitted
-  only as an allowlisted preset, optionally carrying a terminator generated
-  inside the trusted domain from the persisted preset and the block's own
-  timezone/all-day semantics. `events.update`, `events.move`, batch operations,
-  arbitrary RRULE, and calendar management remain unreachable.
+  attachments, extended properties, and event colors. `events.update`,
+  `events.move`, batch operations, arbitrary RRULE, and calendar management
+  remain unreachable.
+- **Recurrence body contract (owner decision, 2026-09-01).** Recurrence is
+  admitted only as one of the five allowlisted presets. The single permitted
+  terminator is an `UNTIL` generated **inside the trusted domain** to trim the
+  old master during a 2C-R5 `this and following` split, derived only from the
+  persisted preset, the selected occurrence's immutable original start, and the
+  block's own timezone/all-day semantics: `YYYYMMDD` for an all-day series, or
+  basic UTC `YYYYMMDDTHHMMSSZ` for a timed one. Rust re-validates the full
+  constructed rule against the allowlist before dispatch. The renderer submits a
+  closed scope action plus trusted Ion identifiers and can never supply
+  recurrence text, a `FREQ`, a `BY*` clause, a terminator value, or a raw RRULE.
+  **`COUNT` is excluded**, as is any user-configurable recurrence end date or
+  *Never / On date / After N* control; those remain a later bounded capability
+  requiring their own owner decision. A split introduces no new provider method
+  and no new OAuth scope — it is an `events.patch` trim followed by an
+  `events.insert`.
 - Provider errors and audit retain only allowlisted status/reason, operation,
   recurrence scope, internal IDs, revisions, and timestamps. Event content,
   account email, attendee identity, authorization material, and raw response

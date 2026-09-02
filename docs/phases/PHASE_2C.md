@@ -96,7 +96,7 @@ No user-visible write capability.
 - a write store whose states cannot represent "an unclassified disagreement
   awaiting a person"
 - the closed recovery-condition set defined as a type, with no generic member
-- its own migration on top of `0006_calendar_presentation_metadata`
+- any new schema as `0008` or later, on top of the ported immutable `0007`
 - cross-layer seam harness stood up **before** any UI capability work
 - every layer's allowlists (renderer draft → Tauri validation → API contract →
   domain → dispatch) enumerated in one place and asserted equal by test
@@ -142,6 +142,10 @@ Exit: cross-layer harness green. No real-Google gate — nothing writes yet.
 ### 2C-R5 — this and following
 
 - real series split: conditional trim, then a deterministic new master
+- the trim's `UNTIL` is **domain-generated only**, bounded, and re-validated in
+  Rust; the renderer can never supply recurrence text or a terminator value
+- **`COUNT`, user-configurable end dates, and *Never / On date / After N* are
+  excluded from R5** and remain a later bounded capability
 - only after the simpler recurrence operations are stable and accepted
 - withheld with a plain explanation where Ion cannot faithfully continue the
   pattern
@@ -195,17 +199,62 @@ After each subphase:
 If real Google fails, that subphase stops. Later write features are not built on
 an unaccepted one.
 
-## Database
+## Database (owner decision, 2026-09-01)
 
-The rebuild branch's migration head is `0006_calendar_presentation_metadata`.
-`0007_calendar_write_foundation` belongs to the withdrawn implementation, stays
-committed on `main` and `archive/phase-2c-v1`, and is neither deleted nor
-revived. 2C-R0 introduces its own revision chained to `0006`.
+**Migration history is immutable. Nothing is deleted, replaced, or renumbered.**
 
-A developer database already upgraded to `0007_calendar_write_foundation` cannot
-be read by this branch's migration runner. Use a separate `ION_DATA_DIR` for
-rebuild work. **No downgrade, deletion, or mutation of the owner's production
-database is performed.**
+The rebuild branch's migration head is `0007_calendar_write_foundation`, ported
+**byte-for-byte** from `989a0c4` / `main` / `archive/phase-2c-v1`. Porting the
+migration is not porting Phase 2C v1 behavior: it carries schema only, and none
+of the withdrawn write orchestration came with it.
+
+This is deliberate, and the reason is concrete: the owner's existing databases
+are already at `0007`. A rebuild that started from `0006` would require them to
+downgrade, and downgrading a real database to accommodate a branch is not an
+acceptable design.
+
+- **Every new schema change for 2C v2 is `0008` or later.** No competing `0007`
+  is ever created.
+- Reuse only the parts of the `0007` schema that fit the new architecture. The
+  rest may sit unused until superseded by an additive `0008+` revision.
+- No `0007` table, column, or constraint is dropped to make the rebuild fit.
+
+### What of `0007` the new architecture can use
+
+| Schema | Verdict |
+| --- | --- |
+| `google_accounts.calendar_write_scope_state` | **Use.** Write re-consent state. Only its old sidebar surfacing was rejected, not the mechanism. |
+| `google_event_links.link_state` / `provider_event_type` / `provider_locked` / `has_attendees` | **Use.** Write-eligibility evidence, no behavior attached. |
+| `calendar_provider_write_intents` states, `attempt_count` ceiling, `next_attempt_at` | **Use.** `queued` / `ready` / `retry_wait` versus `attempting` / `ambiguous` is exactly the distinction the supersede rule needs. |
+| `predecessor_intent_id` + `uq_calendar_write_block_sequence` | **Use.** Already models "supersede an unsent write, queue behind an in-flight one." |
+| `failure_class` CHECK (10 named values, no generic member) | **Use.** Already a closed set. |
+| `calendar_provider_write_audit` | **Use.** Compact, payload-free audit. |
+
+### Two known forward constraints, neither blocking R0–R6
+
+1. `provenance = 'direct_human'` is a CHECK constraint. Every 2C v2 subphase is
+   direct-human, so it blocks nothing now — but owner-approved **AI-originated**
+   Calendar writes will need an additive `0008+` widening. Recorded here so it is
+   found before it is hit, not after.
+2. `failure_reason` is a free string with no CHECK, so a generic reason is
+   representable at the storage layer even though `failure_class` is closed.
+   R0 must enforce the closed recovery set in the **domain type**, and should
+   consider an additive CHECK in `0008`.
+
+`recurrence_scope IN ('single', 'occurrence', 'series')` is **not** a blocker for
+R5: a `this and following` split is correctly stored as its two component
+operations — a `series`-scope trim plus a `create` — not as a fourth scope value.
+
+### Rebuild data directory
+
+All rebuild development, testing, and runtime use a dedicated directory:
+
+```sh
+export ION_DATA_DIR="$HOME/Library/Application Support/Ion OS Rebuild"
+```
+
+Never point `phase-2c-rebuild` at the owner's normal `Ion OS` data directory.
+**No downgrade, deletion, or mutation of the owner's database is performed.**
 
 ## References
 

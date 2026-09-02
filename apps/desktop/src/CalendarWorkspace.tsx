@@ -106,8 +106,8 @@ export function CalendarWorkspace({
   const paneWidthClassRef = useRef<CalendarPaneWidthClass | null>(null);
   const range = useMemo(() => calendarRange(view, anchor), [anchor, view]);
   const projectionIndex = useMemo(
-    () => buildCalendarProjectionIndex(status),
-    [status],
+    () => buildCalendarProjectionIndex(status, localTimeZone),
+    [localTimeZone, status],
   );
   const projection = useMemo(
     () => projectCalendarIndex(projectionIndex, range, localTimeZone),

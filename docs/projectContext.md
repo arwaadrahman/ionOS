@@ -35,6 +35,11 @@ actions as authoritative.
   constrains Ion's automation, not the owner; recurrence scope is target
   selection; Undo is preferred over confirmation for anything reversible;
   convergence is automatic in both directions; and there is no version chooser.
+- **Migrations are immutable.** `0007_calendar_write_foundation` is ported
+  byte-for-byte because the owner's databases are already at `0007`; every new
+  2C v2 schema change is `0008` or later. Rebuild development uses a dedicated
+  `ION_DATA_DIR` of `$HOME/Library/Application Support/Ion OS Rebuild`, never the
+  owner's normal `Ion OS` directory.
 - **Next:** Phase 2C-R0 — the clean writable architecture foundation, gated on a
   cross-layer test spanning renderer → Tauri/Rust → authenticated FastAPI →
   SQLite → synthetic provider. See the

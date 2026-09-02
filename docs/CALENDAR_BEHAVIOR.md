@@ -481,29 +481,54 @@ It follows from that honestly:
 **Scope.** This is Calendar-specific and deliberately narrow. It is not a
 general application undo stack, and it does not introduce event sourcing.
 
-## Recurrence ending options — not implemented
+## Recurrence termination (owner decision, 2026-09-01)
 
 Google offers *Never* / *On date* / *After N occurrences* when editing how an
-event repeats. Ion currently offers the five preset families with no
-terminator, so a series created in Ion never ends.
+event repeats. Ion offers the five preset families with no user-facing
+terminator, so a series a person creates in Ion does not end.
 
-This is a **withheld capability, not an accepted override.** Implementing it
-needs a narrow, owner-approved contract extension, because Ion's recurrence
+Termination is split deliberately into a mechanism Ion needs internally and a
+capability the owner has not yet asked for.
+
+### In scope for 2C-R5: a domain-generated `UNTIL`, and nothing else
+
+A `this and following` split trims the old master to end immediately before the
+target occurrence. That trim **is** a terminator, so R5 must generate one. It is
+admitted under exactly these bounds:
+
+- **Trusted and domain-generated.** Derived only from the persisted preset, the
+  selected occurrence's immutable original start, and the block's own
+  timezone/all-day semantics — `YYYYMMDD` for an all-day series, basic UTC
+  `YYYYMMDDTHHMMSSZ` for a timed one.
+- **Never renderer authority.** The renderer submits a closed scope action plus
+  trusted Ion identifiers. It cannot supply recurrence text, a `FREQ`, a `BY*`
+  clause, a terminator value, or a raw RRULE.
+- **Re-validated before dispatch.** Rust checks the full constructed rule
+  against the preset allowlist independently of the domain.
+- **No new provider method and no new OAuth scope.** A split is an
+  `events.patch` trim followed by an `events.insert`.
+
+### Explicitly out of scope for 2C-R5
+
+- a user-configurable recurrence end date
+- a *Never* / *On date* / *After N occurrences* control of any kind
+- **`COUNT`** — excluded entirely, in the contract and in the validator
+- arbitrary or custom RRULE editing
+- broader recurrence normalization
+
+User-facing recurrence-ending options are a **later bounded Calendar
+capability**, considered only after Phase 2C v2 is stable. Implementing them
+will still need the narrow contract extension below, because Ion's recurrence
 classifier matches preset rules by exact equality: a rule carrying `UNTIL` or
-`COUNT` is classified `custom` and therefore becomes non-writable. Supporting
-an ending option requires:
+`COUNT` classifies as `custom` and therefore becomes non-writable. That future
+work would need to recognise *preset + terminator* as a supported family in the
+classifier, accept a bounded domain-generated terminator on the write contract
+with the renderer still choosing only from fixed options, and render the
+terminator in the recurrence summary so a series that ends looks different from
+one that does not.
 
-1. recognising *preset + terminator* as a supported family in the recurrence
-   classifier, rather than only a bare preset;
-2. accepting a bounded, domain-generated terminator on the write contract — a
-   civil `UNTIL` date or a bounded `COUNT` — with the renderer still choosing
-   only from fixed options and never supplying raw RRULE;
-3. rendering the terminator in the recurrence summary so a series that ends is
-   visibly different from one that does not.
-
-The domain can already generate a valid `UNTIL` terminator (series splits use
-one), so the missing piece is classification and contract, not rule
-construction.
+Because R5's split already constructs a valid `UNTIL`, the missing piece for
+that future capability is classification and contract, not rule construction.
 
 ## Ion overrides
 

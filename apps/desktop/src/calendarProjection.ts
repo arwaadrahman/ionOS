@@ -61,6 +61,12 @@ export type CalendarProjectionIndex = {
   accounts: Map<string, GoogleAccount>;
   blocks: CalendarBlock[];
   suppressed: Set<string>;
+  /**
+   * Exception block ids whose immutable original start is no longer produced by
+   * their master's confirmed recurrence rule. They are stale local overrides
+   * awaiting read-sync reconciliation, not renderable occurrences.
+   */
+  unanchoredExceptions: Set<string>;
   cache: Map<string, CalendarProjection>;
 };
 
@@ -760,6 +766,62 @@ function occurrenceKey(masterId: string, date: string, instant: Date | null) {
     : `${masterId}|date:${date}`;
 }
 
+/**
+ * An explicit exception overrides exactly one generated occurrence, identified
+ * by its immutable original start. After a confirmed whole-series change moves
+ * or re-rules the master, an older exception can be left anchored to a slot the
+ * confirmed rule no longer produces -- Google resets instance exceptions in that
+ * case. Such a row is a stale local override, not a legitimate provider
+ * exception: it must neither suppress a generated occurrence nor render itself
+ * as a phantom event at the old time, until read sync reconciles it.
+ *
+ * Anchoring is only denied when it can be positively determined. Anything
+ * uncertain (missing master, unparseable rule, absent original start) keeps the
+ * previous behaviour, so genuine data is never hidden.
+ */
+function exceptionIsAnchored(
+  master: CalendarBlock,
+  exception: CalendarBlock,
+  localTimeZone: string,
+): boolean {
+  const rule = parseRule(master.recurrence_rules);
+  if (!rule || master.status === "cancelled" || master.provider_deleted_at) {
+    return true;
+  }
+  const allDay = master.temporal_kind === "all_day";
+  if (allDay) {
+    if (!master.start_date || exception.original_start_kind !== "date") {
+      return true;
+    }
+    const originalDate = exception.original_start_date;
+    if (!originalDate) return true;
+    return (
+      matchesRule(originalDate, master.start_date, rule) &&
+      untilAllows(originalDate, null, rule.until, localTimeZone)
+    );
+  }
+  if (!master.start_at || exception.original_start_kind !== "instant") {
+    return true;
+  }
+  const originalAt = exception.original_start_at;
+  if (!originalAt) return true;
+  const zone = master.start_timezone ?? localTimeZone;
+  const masterParts = zonedParts(new Date(master.start_at), zone);
+  const originalInstant = new Date(originalAt);
+  const originalParts = zonedParts(originalInstant, zone);
+  // The slot must exist in the confirmed rule *and* carry the series' current
+  // time of day: a moved series leaves old exceptions on the previous clock
+  // time, which is exactly the stale-override case.
+  if (!matchesRule(originalParts.date, masterParts.date, rule)) return false;
+  if (!untilAllows(originalParts.date, originalInstant, rule.until, zone)) {
+    return false;
+  }
+  return (
+    zonedInstant(originalParts.date, masterParts, zone).valueOf() ===
+    originalInstant.valueOf()
+  );
+}
+
 function directOccurrence(
   block: CalendarBlock,
   calendar: GoogleCalendar,
@@ -989,6 +1051,7 @@ function projectMaster(
 
 export function buildCalendarProjectionIndex(
   status: CalendarStatus,
+  localTimeZone: string = "UTC",
 ): CalendarProjectionIndex {
   const calendars = new Map(
     status.calendars
@@ -1023,14 +1086,29 @@ export function buildCalendarProjectionIndex(
           ) ?? null)
         : null;
   const suppressed = new Set<string>();
+  const unanchoredExceptions = new Set<string>();
   for (const exception of blocks) {
     if (exception.recurrence_kind !== "exception") continue;
     const master = masterFor(exception);
     if (!master) continue;
+    if (!exceptionIsAnchored(master, exception, localTimeZone)) {
+      // A confirmed whole-series change re-anchored the rule; this override no
+      // longer belongs to any occurrence, so it must not suppress the freshly
+      // confirmed generated occurrence or render at its own stale time.
+      unanchoredExceptions.add(exception.id);
+      continue;
+    }
     const key = originalKey(master.id, exception);
     if (key) suppressed.add(key);
   }
-  return { calendars, accounts, blocks, suppressed, cache: new Map() };
+  return {
+    calendars,
+    accounts,
+    blocks,
+    suppressed,
+    unanchoredExceptions,
+    cache: new Map(),
+  };
 }
 
 export function projectCalendarIndex(
@@ -1064,6 +1142,12 @@ export function projectCalendarIndex(
       limited ||= projection.limited;
       continue;
     }
+    if (index.unanchoredExceptions.has(block.id)) {
+      // Stale override from a confirmed whole-series change: rendering it would
+      // show the pre-change state next to the newly confirmed occurrences and
+      // hand the Inspector a base that no longer matches anything visible.
+      continue;
+    }
     const occurrence = directOccurrence(block, calendar, account);
     if (occurrence && occurrenceIntersects(occurrence, range, bounds)) {
       occurrences.push(occurrence);
@@ -1095,7 +1179,7 @@ export function projectCalendar(
   localTimeZone: string,
 ): CalendarProjection {
   return projectCalendarIndex(
-    buildCalendarProjectionIndex(status),
+    buildCalendarProjectionIndex(status, localTimeZone),
     range,
     localTimeZone,
   );

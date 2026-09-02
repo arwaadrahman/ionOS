@@ -103,16 +103,24 @@ plus extensible subtype; existing rows migrate to visible and uncategorized.
 
 ## Phase 2C write schema — rebuild in preparation
 
-The schema head on this branch is `0006_calendar_presentation_metadata`. There
-is no provider-write outbox: **Google events are read-only at the current
-baseline.**
+The schema head on this branch is `0007_calendar_write_foundation`, ported
+byte-for-byte from the commit that introduced it. **Migration history is
+immutable: nothing is deleted, replaced, or renumbered, and every new 2C v2
+schema change is `0008` or later.**
 
-`0007_calendar_write_foundation` belongs to the withdrawn Phase 2C
-implementation. It stays committed on `main` and `archive/phase-2c-v1`, is not
-deleted, and is not revived. Phase 2C v2 introduces its own revision chained to
-`0006`. A developer database already upgraded to `0007_calendar_write_foundation`
-cannot be read by this branch's migration runner; use a separate `ION_DATA_DIR`
-for rebuild work rather than downgrading or deleting a real database.
+Porting the migration is not porting Phase 2C v1 behavior. The schema is
+present; the withdrawn write orchestration is not. **Google events are read-only
+on this branch** — the `calendar_provider_write_intents` and
+`calendar_provider_write_audit` tables exist and are unused until 2C-R0.
+
+The reason is concrete: the owner's existing databases are already at `0007`, so
+a rebuild starting from `0006` would demand a downgrade of real data. Rebuild
+development uses a dedicated `ION_DATA_DIR`
+(`$HOME/Library/Application Support/Ion OS Rebuild`) rather than the owner's
+normal directory. See the [Phase 2C rebuild plan](phases/PHASE_2C.md) for which
+parts of the `0007` schema the new architecture reuses, and for the two known
+forward constraints (`provenance = 'direct_human'`, and the unconstrained
+`failure_reason`) that will need additive `0008+` revisions.
 
 Requirements the rebuilt write schema must satisfy:
 

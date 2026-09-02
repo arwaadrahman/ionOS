@@ -23,7 +23,7 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
             )
         }
 
-    assert version == ("0006_calendar_presentation_metadata",)
+    assert version == ("0007_calendar_write_foundation",)
     assert {
         "areas",
         "goals",
@@ -38,6 +38,8 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
         "calendar_blocks",
         "calendar_block_ion_metadata",
         "google_event_links",
+        "calendar_provider_write_intents",
+        "calendar_provider_write_audit",
     } <= tables
 
     with sqlite3.connect(database_path) as connection:
@@ -62,7 +64,21 @@ def test_alembic_upgrades_a_fresh_user_local_database(tmp_path, monkeypatch):
                 "PRAGMA table_info(calendar_block_ion_metadata)"
             )
         }
+        account_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(google_accounts)")
+        }
+        link_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(google_event_links)")
+        }
 
     assert "hidden_in_ion" in calendar_columns
     assert "category" in metadata_columns
     assert "category_subtype" in metadata_columns
+    assert "calendar_write_scope_state" in account_columns
+    assert {
+        "link_state",
+        "provider_event_type",
+        "provider_locked",
+        "has_attendees",
+    } <= link_columns

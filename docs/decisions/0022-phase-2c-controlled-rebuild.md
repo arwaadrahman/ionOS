@@ -46,8 +46,11 @@ on the branch `phase-2c-rebuild`, under the following constraints.
 
 The complete Phase 2C v1 implementation — five commits plus the entire dirty
 worktree at the time of the decision — is preserved on `main` and on
-`archive/phase-2c-v1`. It is historical reference material, not accepted
-product code. No history is rewritten and nothing is force-pushed.
+`archive/phase-2c-v1`, both pushed to `origin`. It is historical reference
+material, not accepted product code. No history is rewritten and nothing is
+force-pushed. `phase-2c-rebuild` is intended to become the accepted Phase 2C
+implementation and to integrate back into `main` by ordinary merge; `main` is
+never reset to Phase 2B.
 
 ### 2. The current product contract carries forward; the Phase 2B-era rules do not
 
@@ -114,10 +117,13 @@ that a Calendar write feature works.
 - The rebuild branch is read-only for Google events at its baseline, exactly as
   accepted Phase 2B was. That is preferable to shipping writable-state UX the
   owner has rejected.
-- Migration `0007_calendar_write_foundation` does not exist on the rebuild
-  branch. It remains committed on `main` and `archive/phase-2c-v1` and is not
-  deleted. The rebuild's schema head is `0006_calendar_presentation_metadata`,
-  and Phase 2C v2 introduces its own revision rather than reviving `0007`.
+- **Migration history is immutable** (owner decision, 2026-09-01). Migration
+  `0007_calendar_write_foundation` is ported byte-for-byte onto the rebuild
+  branch, because the owner's existing databases are already at `0007` and a
+  rebuild must never require real data to be downgraded. Porting the migration
+  carries schema only, not the withdrawn write behavior. Every new 2C v2 schema
+  change is `0008` or later; no competing `0007` is created and nothing is
+  deleted or renumbered.
 - The Phase 2C v1 provider-safety mechanisms — the request allowlist, ETag
   helpers, deterministic identities, bounded recurrence rules, the shared
   Google gate — are available for deliberate reuse, read from the archive and

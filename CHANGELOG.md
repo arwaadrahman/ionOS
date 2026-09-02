@@ -21,6 +21,20 @@ All notable repository changes are documented here.
   rather than Phase 2B-era product assumptions. Google events are read-only
   here; no Phase 2C v2 write code has been written.
   See [ADR 0022](docs/decisions/0022-phase-2c-controlled-rebuild.md).
+- **Migration history is immutable.** `0007_calendar_write_foundation` is ported
+  onto the rebuild branch byte-for-byte, because existing Ion databases are
+  already at `0007` and no rebuild may require real data to be downgraded.
+  Porting the migration carries schema only, not the withdrawn write behavior:
+  the outbox and audit tables exist and are unused until 2C-R0. Every new
+  Phase 2C v2 schema change is `0008` or later; nothing is deleted, replaced, or
+  renumbered. Rebuild development uses a dedicated `ION_DATA_DIR`.
+- **Recurrence termination is bounded to what a series split needs.** 2C-R5 may
+  generate an `UNTIL` inside the trusted domain to trim the old master, derived
+  only from the persisted preset and the occurrence's immutable original start,
+  and re-validated in Rust; the renderer can never supply recurrence text or a
+  terminator value. `COUNT`, user-configurable end dates, and
+  _Never / On date / After N_ are excluded, and remain a later bounded
+  capability with its own owner decision.
 - **The Calendar interaction contract is now authoritative and portable.**
   `docs/CALENDAR_BEHAVIOR.md`, the Master Specification's Calendar authority
   amendment, the Google-Calendar behavioral default, and the
@@ -41,6 +55,20 @@ All notable repository changes are documented here.
 
 ### Added
 
+- **A stale recurrence exception no longer renders as a phantom event.** An
+  explicit exception overrides exactly one generated occurrence, identified by
+  its immutable original start. After a confirmed whole-series move or re-rule,
+  an older exception can be left anchored to a slot the confirmed rule no longer
+  produces — Google resets instance exceptions in that case. Ion was still
+  drawing such a row at its old time, beside the newly confirmed occurrence, and
+  opening it handed the Inspector a base that matched nothing visible. The
+  projection now treats it as a stale local override awaiting read-sync
+  reconciliation: it neither suppresses a generated occurrence nor renders
+  itself. Anchoring is denied only when it can be positively determined, so a
+  missing master, an unparseable rule, or an absent original start keeps the
+  previous behavior and genuine data is never hidden. This is a read-model
+  correctness fix, independent of the withdrawn write architecture, and it is
+  ported with its two focused regression tests and nothing else.
 - The open Calendar occurrence now carries a restrained selection ring —
   `data-selected` plus `aria-current` and a "selected" suffix in its accessible
   name — a shape change as well as a color change, so it is never confused with

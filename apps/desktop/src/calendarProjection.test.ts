@@ -269,6 +269,91 @@ describe("bounded recurrence and exception projection", () => {
     expect(projection.occurrences[1].recurrenceContext).toBe("exception");
   });
 
+  test("a confirmed whole-series move retires exceptions anchored to the old slot", () => {
+    // Owner-observed defect: after an "All events" time change that Google
+    // confirmed, the first visible instance still rendered the pre-change
+    // state. The old exception stayed anchored to the previous clock time, so
+    // it suppressed nothing and drew itself as a phantom event *before* the
+    // newly confirmed occurrence -- and opening it handed the Inspector the
+    // stale block, so re-entering the displayed value reported "no change".
+    const master = block("master", {
+      provider_event_id: "series",
+      recurrence_kind: "master",
+      recurrence_rules: ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+      // Confirmed new series time: 09:00 -> 11:00 America/Los_Angeles.
+      start_at: "2030-01-07T19:00:00Z",
+      end_at: "2030-01-07T20:00:00Z",
+      start_timezone: "America/Los_Angeles",
+      end_timezone: "America/Los_Angeles",
+    });
+    const staleException = block("stale", {
+      title: "Pre-change occurrence",
+      recurrence_kind: "exception",
+      recurrence_master_block_id: master.id,
+      recurring_event_id: "series",
+      original_start_kind: "instant",
+      original_start_at: "2030-01-07T17:00:00Z",
+      original_start_timezone: "America/Los_Angeles",
+      start_at: "2030-01-07T17:00:00Z",
+      end_at: "2030-01-07T18:00:00Z",
+    });
+    const projection = projectCalendar(
+      status([master, staleException]),
+      calendarRange("week", "2030-01-07"),
+      "America/Los_Angeles",
+    );
+    // Only the freshly confirmed series occurrence renders -- no phantom.
+    expect(projection.occurrences.map((item) => item.key)).toEqual([
+      `${master.id}|instant:2030-01-07T19:00:00.000Z`,
+    ]);
+    // The rendered occurrence carries the master's confirmed values, which is
+    // also exactly what the Inspector edits against.
+    expect(projection.occurrences[0].block.id).toBe(master.id);
+    expect(projection.occurrences[0].start?.toISOString()).toBe(
+      "2030-01-07T19:00:00.000Z",
+    );
+    expect(
+      projection.occurrences.some(
+        (item) => item.block.id === staleException.id,
+      ),
+    ).toBe(false);
+  });
+
+  test("keeps a genuine exception that is still anchored to a confirmed slot", () => {
+    // The retirement rule must not swallow legitimate exceptions: a moved
+    // occurrence keeps its immutable original start, which the confirmed rule
+    // still produces, so it continues to override its slot.
+    const master = block("master", {
+      provider_event_id: "series",
+      recurrence_kind: "master",
+      recurrence_rules: ["RRULE:FREQ=WEEKLY;BYDAY=MO"],
+      start_at: "2030-01-07T17:00:00Z",
+      end_at: "2030-01-07T18:00:00Z",
+      start_timezone: "America/Los_Angeles",
+      end_timezone: "America/Los_Angeles",
+    });
+    const moved = block("moved", {
+      title: "Legitimately moved occurrence",
+      recurrence_kind: "exception",
+      recurrence_master_block_id: master.id,
+      recurring_event_id: "series",
+      original_start_kind: "instant",
+      original_start_at: "2030-01-14T17:00:00Z",
+      original_start_timezone: "America/Los_Angeles",
+      start_at: "2030-01-15T21:00:00Z",
+      end_at: "2030-01-15T22:00:00Z",
+    });
+    const projection = projectCalendar(
+      status([master, moved]),
+      calendarRange("week", "2030-01-14"),
+      "America/Los_Angeles",
+    );
+    const keys = projection.occurrences.map((item) => item.key);
+    expect(keys).toContain(moved.id);
+    // Its original slot stays suppressed rather than double-rendering.
+    expect(keys).not.toContain(`${master.id}|instant:2030-01-14T17:00:00.000Z`);
+  });
+
   test("retains a cancelled exception only as suppression metadata", () => {
     const master = block("master", {
       provider_event_id: "series",
