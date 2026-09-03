@@ -156,8 +156,14 @@ The listed tools are guidance/future owners, not installed dependencies.
 
 ## Deferred holistic polish requirements
 
-These notes are accepted future polish direction, not Phase 2B implementation
-work and not a new numbered roadmap phase.
+These notes are accepted future polish direction, not implementation work for
+the phase that owns the surface today. Their numbered home is **Phase 14 —
+Final UI/UX Overhaul & Visual Cohesion**; see the
+[roadmap amendment](PRODUCT_SPEC.md#owner-approved-roadmap-amendment--2026-09-02).
+
+Earlier phases still owe functional, usable, accessible, responsive,
+design-system-conformant surfaces, and fix anything that materially harms
+usability rather than deferring it.
 
 - Calendar navigation arrows are functionally accepted. A later polish pass
   should improve their symmetry, geometry, stroke/weight, hit area, spacing,

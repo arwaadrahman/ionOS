@@ -3330,3 +3330,68 @@ modal, confirmation, Undo, automatic convergence, and error treatment. This
 specification states the product philosophy and authority model; that document
 states the mechanics. Where this specification's preserved transcription and
 that contract disagree about Calendar interaction detail, the contract governs.
+
+## Owner-approved roadmap amendment — 2026-09-02
+
+This amendment is canonical product direction. It preserves the source
+transcription above, and supersedes the Phase 14 designation made by the
+2026-08-31 amendment. It authorizes no implementation, schema, dependency, or
+integration change by itself.
+
+It supersedes:
+
+- the 2026-08-31 amendment's **Phase 14 — Voice & Ambient Core** designation;
+- and, for the avoidance of doubt, the preserved transcription's
+  **Phase 14 — Mobile Companion**, which the 2026-08-31 amendment had already
+  displaced. Both remain in this document as history and are not rewritten.
+
+### Active numbered roadmap
+
+| Phase | Name |
+| --- | --- |
+| 13 | Ion Core Visualization (unchanged) |
+| 14 | **Final UI/UX Overhaul & Visual Cohesion** |
+
+**Mobile Companion is post-v1.** It is outside the active numbered v1
+implementation roadmap, requires its own architecture and security
+authorization, and must not begin automatically as Phase 14.
+
+**Voice & Ambient Core** is displaced from Phase 14. Its accepted build
+direction in the 2026-08-31 amendment stands unchanged as product direction; its
+position in the numbered roadmap is an open owner decision and it is not
+scheduled by this amendment.
+
+### The deferral principle
+
+During Phases 2 through 13, every surface must still be functional, usable,
+accessible, responsive, and conformant to the established design system. What is
+deferred is **holistic cross-product visual redesign and accumulated cosmetic
+polish** — unless an issue materially harms usability, in which case it is fixed
+in the phase that owns the surface.
+
+This exists so that earlier phases are not repeatedly reopened for cosmetic
+reasons, and so that cohesion work happens once, across the whole product, with
+the real surfaces in front of the owner.
+
+### Phase 14 scope
+
+Final desktop-wide visual cohesion:
+
+- navigation and information hierarchy
+- typography and spacing
+- control and component geometry and consistency
+- visual density
+- cross-surface cohesion
+- responsive and window-size polish
+- motion and transitions where appropriate
+- design-token and component cleanup
+- accumulated holistic polish deliberately deferred from earlier phases
+
+**Phase 14 does not invent missing functionality.** Earlier functional phases
+remain responsible for the capabilities they own; Phase 14 makes what exists
+cohere. Where it finds a genuine functional gap, that gap belongs to its owning
+phase, not to Phase 14.
+
+The design authority for this work remains
+[Design system](DESIGN_SYSTEM.md), and for Calendar surfaces
+[Calendar interaction behavior](CALENDAR_BEHAVIOR.md).

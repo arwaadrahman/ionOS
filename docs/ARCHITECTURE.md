@@ -14,6 +14,12 @@ separately labels proposed implementation choices.
   architecture/security review plus explicit owner approval.
 - One canonical record may appear in multiple contextual views. Derived search,
   indexing, and cache structures must be rebuildable.
+- **A confirmed canonical mutation is settled.** Once the canonical service has
+  confirmed a mutation, failure to refresh a derived projection, summary, or
+  workspace view cannot relabel that mutation as failed, and must never cause it
+  to be retried or applied again. Preserve the confirmed mutation, retain the
+  last known projection where one is available, mark or report the derived view
+  as stale, and treat refresh recovery as a separate outcome.
 - Structured records, Markdown knowledge, and original sources have distinct
   owners. An LLM is not a memory system.
 - The repository contains only synthetic data and configuration examples; real

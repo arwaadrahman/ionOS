@@ -1,5 +1,13 @@
 # Task Router
 
+> **Status: historical reference, superseded in this repository.** This is a
+> cross-project router. `AGENTS.md` is Ion's authority and `CLAUDE.md` owns
+> Claude-specific context loading; where this file disagrees with either, they
+> govern. In particular §0's instruction to read `docs/agent/executionPolicy.md`
+> and §6's `AGENTS.md` bootstrap template are **obsolete** — the execution
+> policy is now a pointer index and the `read_scope` declaration ritual it
+> describes is no longer required. Nothing here is mandatory per-task context.
+
 **Version:** 1.1.1
 **Updated:** 2026-08-28
 **Purpose:** Load the minimum correct context for a project task

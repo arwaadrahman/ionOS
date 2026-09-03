@@ -30,6 +30,13 @@ every endpoint with constant-time comparison, and binds its retained socket to
 `127.0.0.1:0`. The renderer receives neither secret nor port, and production
 does not enable CORS. No persistent credential store is introduced.
 
+**The session credential is never persisted, logged, placed in command-line
+arguments or environment variables, or returned to the renderer.** Argument
+vectors and environment blocks are readable by other local processes, so the
+bounded stdin bootstrap above is the only channel by which the sidecar receives
+it. The same prohibition applies to Google refresh and access tokens, which stay
+in the macOS Keychain and in Rust memory respectively.
+
 Phase 1G preserves that boundary while adding a Rust-owned native tray and a
 fixed quick-capture WebView. The capture surface can invoke only existing Tauri
 product commands and bounded local events; it receives no sidecar address,

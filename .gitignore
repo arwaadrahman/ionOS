@@ -21,6 +21,14 @@ Thumbs.db
 # Bootstrap-only local inputs
 .bootstrap-sources/
 
+# Ephemeral machine-local agent notes. Never authoritative: accepted phase,
+# product requirements, architecture decisions, owner acceptance, and durable
+# blockers belong in tracked docs.
+CLAUDE.local.md
+
+# Disposable isolated worktrees used for autonomous implementation runs.
+.claude/worktrees/
+
 # Environment files and credentials
 .env
 .env.*
